@@ -1,0 +1,15 @@
+encoder_model: "gpt2"
+decoder_model: "gpt2"
+train_samples: 100
+eval_samples: 20
+epochs: 1
+batch_size: 2
+max_source_length: 128
+max_target_length: 32
+warmup_steps: 10
+tied_embeddings: true
+cross_attn_init: "from_self_attention"
+dataset: "nam194/vietnews"
+text_column: "article"
+summary_column: "abstract"
+prefix: "vietnews: "

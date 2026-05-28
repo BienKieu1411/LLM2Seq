@@ -1,0 +1,16 @@
+encoder_model: "Qwen/Qwen2.5-0.5B"
+decoder_model: "Qwen/Qwen2.5-0.5B"
+tied_embeddings: true
+cross_attn_init: "from_self_attention"
+dataset: "nam194/vietnews"
+text_column: "article"
+summary_column: "abstract"
+prefix: "vietnews: "
+warmup_steps: 0
+max_source_length: 2048
+max_target_length: 512
+train_samples: 5000
+eval_samples: 500
+epochs: 3
+batch_size: 2
+lr: 3e-5
