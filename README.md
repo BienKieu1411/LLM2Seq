@@ -1,73 +1,29 @@
-# Encoder-Decoder LLM for Vietnamese Text Summarization
+# Encoder-Decoder LLM Research
 
-This project implements a hybrid model architecture (Encoder-Decoder) by adapting from Large Language Models (LLMs) with a Decoder-Only architecture, specialized for long text summarization tasks in Vietnamese.
+Nghiên cứu các kiến trúc Encoder-Decoder dựa trên LLM cho các bài toán sequence-to-sequence.
 
-## Features
+## Cấu trúc Repository
 
-- **Architecture Adaptation:** Convert Decoder-Only LLMs (Gemma, Qwen, Llama) to Encoder-Decoder.
-- **Smart Initialization:** Support initializing `cross-attention` from `self-attention` and Cross-Attention Warmup.
-- **Optimization (Tied Embeddings):** Share embedding matrix weights, saving 10.5% of parameters.
-- **Unbalanced Architecture:** Support Encoder and Decoder with different sizes (e.g., 9B-2B).
-- **Vietnamese Dataset:** Integrate the `VietNews` dataset (143k articles).
-- **Demo Interface:** Streamlit application displaying the summarization process and real-time performance analysis.
+### [`v1_encdec_adaptation/`](v1_encdec_adaptation/)
 
-## Installation
+**Phiên bản 1**: Adaptation từ Decoder-Only LLM sang Encoder-Decoder.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -r requirements.txt
-```
+- Chuyển đổi kiến trúc Decoder-Only (Qwen, GPT-2, ...) sang Encoder-Decoder bằng cách thêm Cross-Attention.
+- Hỗ trợ Tied Embeddings, Cross-Attention Warmup, Unbalanced Architecture.
+- Vietnamese Text Summarization trên VietNews dataset.
 
-## Usage Guide
+### [`llm2seq/`](llm2seq/)
 
-### 1. Initialize the adapted model
+**Phiên bản 2 (LLM2Seq)**: LLM2Vec Encoder + Lightweight Decoder.
 
-The project uses YAML configuration files in the `configs/` directory.
+- Dùng LLM đã chuyển sang encoder (LLM2Vec) để hiểu input ở mức token-level.
+- Lightweight Transformer Decoder tự thiết kế với Cross-Attention vào encoder memory.
+- Hỗ trợ Multi-Token Prediction (MTP) — Parallel và Cascaded.
+- Hỗ trợ Knowledge Distillation — Sequence KD, Logits KL, Top-k KL.
+- 4 cấu hình ablation: Baseline, KD-only, MTP-only, KD+MTP.
 
-Run smoke test (GPT-2):
-```bash
-python scripts/build_adapted_model.py \
-  --config configs/smoke_test.yaml \
-  --output_dir outputs/smoke-ed
-```
+## Tài liệu nghiên cứu
 
-Run with an actual model (Qwen 0.5B):
-```bash
-python scripts/build_adapted_model.py \
-  --config configs/vietnews_qwen.yaml \
-  --output_dir outputs/qwen-ed
-```
-
-### 2. Train the model (Summarization)
-
-```bash
-python scripts/train_summarization.py \
-  --config configs/smoke_test.yaml \
-  --model_dir outputs/smoke-ed \
-  --output_dir outputs/smoke-ed-cnn
-```
-
-### 3. Evaluation (ROUGE & BERTScore)
-
-```bash
-python scripts/eval_summarization.py \
-  --config configs/smoke_test.yaml \
-  --model_dir outputs/smoke-ed-cnn
-```
-
-### 4. Launch Demo App
-
-```bash
-streamlit run scripts/demo_streamlit.py
-```
-
-## System Architecture
-
-```mermaid
-graph LR
-A[Tokenizer] --> B(Encoder)
-B -->|Cross Attention| C(Decoder)
-C -->|Beam Search| D[Summarized Text]
-```
+- [`RESEARCH.md`](RESEARCH.md) — Tổng hợp nghiên cứu.
+- [`Gemini_Research.md`](Gemini_Research.md) — Phân tích chi tiết.
+- [`LLM2Seq_Implementation_Plan.md`](LLM2Seq_Implementation_Plan.md) — Kế hoạch triển khai LLM2Seq.

@@ -28,7 +28,8 @@ class FreezeNonCrossAttentionCallback(TrainerCallback):
             
         # Unfreeze cross-attention specifically
         for name, param in model.named_parameters():
-            if "crossattention" in name.lower() or "encoder_attn" in name.lower():
+            lname = name.lower()
+            if "crossattention" in lname or "encoder_attn" in lname or "bridge" in lname:
                 param.requires_grad = True
                 
     def _unfreeze_all(self, model):

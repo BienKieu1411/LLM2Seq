@@ -1,14 +1,24 @@
 from dataclasses import dataclass
+import inspect
 from typing import Optional
 
 import torch
 from transformers import (
-    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     EncoderDecoderConfig,
     EncoderDecoderModel,
 )
+
+try:
+    from src.qwen_adapter import patch_qwen_for_cross_attention
+except ImportError:
+    try:
+        from qwen_adapter import patch_qwen_for_cross_attention
+    except ImportError:
+        # Notebook fallback: qwen patch function may already be defined in global scope.
+        patch_qwen_for_cross_attention = globals().get("patch_qwen_for_cross_attention", None)
+
 
 
 @dataclass
@@ -44,7 +54,7 @@ def initialize_cross_attention_from_self_attention(model: EncoderDecoderModel) -
     with torch.no_grad():
         for layer in layers:
             self_attn = getattr(layer, "self_attn", None)
-            cross_attn = getattr(layer, "encoder_attn", None)
+            cross_attn = getattr(layer, "encoder_attn", None) or getattr(layer, "cross_attn", None)
             if self_attn is None or cross_attn is None:
                 continue
             try:
@@ -55,10 +65,27 @@ def initialize_cross_attention_from_self_attention(model: EncoderDecoderModel) -
     return initialized
 
 
+def sanitize_tied_weight_keys(model: EncoderDecoderModel) -> None:
+    """
+    Newer transformers expect `_tied_weights_keys` to be dict-like on modules.
+    Some monkey patches or custom tying code can leave it as list/tuple.
+    """
+    for _, submodule in model.named_modules():
+        tied = getattr(submodule, "_tied_weights_keys", None)
+        if isinstance(tied, list) or isinstance(tied, tuple):
+            submodule._tied_weights_keys = {k: k for k in tied}
+
+
 def build_encoder_decoder_from_causal_lm(cfg: AdaptationConfig) -> EncoderDecoderModel:
     tokenizer = AutoTokenizer.from_pretrained(cfg.encoder_model, use_fast=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
+
+    if "qwen" in cfg.encoder_model.lower() or "qwen" in cfg.decoder_model.lower():
+        if patch_qwen_for_cross_attention is not None:
+            print("Detected Qwen model. Applying Monkey Patch for Cross-Attention support...")
+            patch_qwen_for_cross_attention()
+
 
     enc_causal_lm = AutoModelForCausalLM.from_pretrained(cfg.encoder_model)
     if cfg.encoder_model == cfg.decoder_model:
@@ -74,7 +101,7 @@ def build_encoder_decoder_from_causal_lm(cfg: AdaptationConfig) -> EncoderDecode
     enc_dec_config.encoder.add_cross_attention = False
     enc_dec_config.decoder.is_decoder = True
     enc_dec_config.decoder.add_cross_attention = True
-    enc_dec_config.tie_encoder_decoder = cfg.tied_embeddings
+    enc_dec_config.tie_encoder_decoder = False # Do NOT tie entire architecture
     
     # Enable tie_word_embeddings for the overall model
     enc_dec_config.tie_word_embeddings = cfg.tied_embeddings
@@ -86,9 +113,28 @@ def build_encoder_decoder_from_causal_lm(cfg: AdaptationConfig) -> EncoderDecode
     )
     enc_dec_config.pad_token_id = tokenizer.pad_token_id
     enc_dec_config.eos_token_id = tokenizer.eos_token_id
-    enc_dec_config.max_length = cfg.max_length
+
+    # Ensure decoder supports encoder_hidden_states before constructing EncoderDecoderModel.
+    dec_sig = inspect.signature(dec_causal_lm.forward)
+    if "encoder_hidden_states" not in dec_sig.parameters and patch_qwen_for_cross_attention is not None:
+        if "qwen" in cfg.decoder_model.lower():
+            print("Decoder forward missing encoder_hidden_states. Re-applying Qwen patch and retrying...")
+            patch_qwen_for_cross_attention()
+            dec_sig = inspect.signature(dec_causal_lm.forward)
+
+    if "encoder_hidden_states" not in dec_sig.parameters:
+        raise ValueError(
+            f"Decoder '{cfg.decoder_model}' does not expose encoder_hidden_states in forward(). "
+            "Choose a supported model or apply a compatible patch."
+        )
 
     model = EncoderDecoderModel(config=enc_dec_config)
+    
+    # Configure generation parameters to avoid ValueError during save_pretrained
+    model.generation_config.max_length = cfg.max_length
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
+    model.generation_config.eos_token_id = tokenizer.eos_token_id
+    model.generation_config.decoder_start_token_id = enc_dec_config.decoder_start_token_id
 
     with torch.no_grad():
         model.encoder.load_state_dict(enc_causal_lm.model.state_dict(), strict=False)
@@ -109,6 +155,8 @@ def build_encoder_decoder_from_causal_lm(cfg: AdaptationConfig) -> EncoderDecode
         print("Tying encoder and decoder embeddings.")
         model.encoder.set_input_embeddings(model.decoder.get_input_embeddings())
         model.tie_weights()
+        
+        sanitize_tied_weight_keys(model)
 
     model.config.vocab_size = model.config.decoder.vocab_size
     return model, tokenizer
@@ -116,5 +164,6 @@ def build_encoder_decoder_from_causal_lm(cfg: AdaptationConfig) -> EncoderDecode
 
 def save_adapted_model(cfg: AdaptationConfig) -> None:
     model, tokenizer = build_encoder_decoder_from_causal_lm(cfg)
+    sanitize_tied_weight_keys(model)
     model.save_pretrained(cfg.output_dir)
     tokenizer.save_pretrained(cfg.output_dir)
