@@ -27,7 +27,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 import yaml
 
@@ -183,7 +183,7 @@ def train(
     # Mixed precision
     use_fp16 = training_cfg.get("fp16", True) and device.type == "cuda"
     use_bf16 = training_cfg.get("bf16", False) and device.type == "cuda"
-    scaler = GradScaler(enabled=use_fp16)
+    scaler = GradScaler("cuda", enabled=use_fp16)
     amp_dtype = torch.float16 if use_fp16 else (torch.bfloat16 if use_bf16 else torch.float32)
 
     # Training params
@@ -303,6 +303,7 @@ def train(
                         save_checkpoint(
                             model, optimizer, global_step, best_eval_loss,
                             os.path.join(output_dir, "best.pt"),
+                            include_optimizer=False,
                         )
                         logger.info(f"New best eval loss: {best_eval_loss:.4f}")
 
@@ -311,12 +312,15 @@ def train(
                     save_checkpoint(
                         model, optimizer, global_step, best_eval_loss,
                         os.path.join(output_dir, f"checkpoint_{global_step}.pt"),
+                        include_optimizer=True,
                     )
+                    cleanup_periodic_checkpoints(output_dir, keep_last=1)
 
     # Final save
     save_checkpoint(
         model, optimizer, global_step, best_eval_loss,
         os.path.join(output_dir, "final.pt"),
+        include_optimizer=False,
     )
     logger.info(f"Training complete. Best eval loss: {best_eval_loss:.4f}")
 
@@ -358,18 +362,52 @@ def save_checkpoint(
     global_step: int,
     best_eval_loss: float,
     path: str,
+    include_optimizer: bool = False,
 ) -> None:
     """Save training checkpoint."""
-    torch.save(
-        {
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "global_step": global_step,
-            "best_eval_loss": best_eval_loss,
-        },
-        path,
-    )
+    checkpoint = {
+        "model_state_dict": get_compact_state_dict(model),
+        "global_step": global_step,
+        "best_eval_loss": best_eval_loss,
+        "compact_checkpoint": True,
+    }
+    if include_optimizer:
+        checkpoint["optimizer_state_dict"] = optimizer.state_dict()
+    torch.save(checkpoint, path)
     logger.info(f"Saved checkpoint to {path}")
+
+
+def get_compact_state_dict(model: nn.Module) -> Dict[str, torch.Tensor]:
+    """
+    Save only trainable/generator weights.
+
+    The LLM2Vec encoder is frozen and can be reloaded from Hugging Face, so
+    storing it in every checkpoint wastes several GB on Kaggle.
+    """
+    trainable_names = {name for name, param in model.named_parameters() if param.requires_grad}
+    compact = {}
+    for name, tensor in model.state_dict().items():
+        if not name.startswith("encoder.") or name in trainable_names:
+            compact[name] = tensor.detach().cpu()
+    return compact
+
+
+def cleanup_periodic_checkpoints(output_dir: str, keep_last: int = 1) -> None:
+    """Keep only the newest periodic checkpoint_N.pt files."""
+    paths = []
+    for path in Path(output_dir).glob("checkpoint_*.pt"):
+        try:
+            step = int(path.stem.split("_")[-1])
+        except ValueError:
+            continue
+        paths.append((step, path))
+    paths.sort()
+    for _, path in paths[:-keep_last]:
+        try:
+            path.unlink()
+            logger.info(f"Deleted old checkpoint: {path}")
+        except OSError as exc:
+            logger.warning(f"Could not delete old checkpoint {path}: {exc}")
 
 
 def main():

@@ -58,7 +58,7 @@ class LayerFusion(nn.Module):
         for idx in layer_indices:
             # Support negative indexing
             actual_idx = idx if idx >= 0 else num_total + idx
-            selected.append(hidden_states[actual_idx])
+            selected.append(hidden_states[actual_idx].to(dtype=self.layer_weights.dtype))
 
         # Stack: [num_layers, batch_size, seq_len, d_enc]
         stacked = torch.stack(selected, dim=0)
@@ -249,6 +249,7 @@ class Adaptor(nn.Module):
             h = encoder_output["last_hidden_state"]
 
         # Project d_enc → d_dec
+        h = h.to(dtype=self.mlp.linear1.weight.dtype)
         h = self.mlp(h)
 
         # Optional refinement

@@ -51,10 +51,14 @@ class EncoderWrapper(nn.Module):
 
         # Load the base model
         self.config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+        load_kwargs = {}
+        if torch.cuda.is_available():
+            load_kwargs["torch_dtype"] = torch.float16
         self.model = AutoModel.from_pretrained(
             model_name,
             config=self.config,
             trust_remote_code=True,
+            **load_kwargs,
         )
 
         # Determine hidden size from config
