@@ -78,3 +78,70 @@ def compute_mtp_loss(
         total_loss = total_loss / total_weight
 
     return total_loss
+
+
+def compute_mtp_self_distillation_loss(
+    mtp_logits: List[torch.Tensor],
+    main_logits: torch.Tensor,
+    labels: torch.Tensor,
+    top_k: int = 10000,
+    head_weights: Optional[List[float]] = None,
+    temperature: float = 1.0,
+    ignore_index: int = -100,
+) -> torch.Tensor:
+    """
+    Gradient-detached, TopK-selected forward-KL self-distillation for MTP-D.
+
+    The main head is the teacher. Its logits are detached, top-k vocabulary
+    indices are selected per future position, and each MTP head is trained to
+    match the main-head distribution on those selected indices.
+    """
+    num_heads = len(mtp_logits)
+    if num_heads == 0:
+        return torch.tensor(0.0, device=labels.device)
+
+    if head_weights is None:
+        head_weights = [1.0] * num_heads
+    elif len(head_weights) < num_heads:
+        head_weights = head_weights + [head_weights[-1]] * (num_heads - len(head_weights))
+
+    seq_len = labels.size(1)
+    vocab_size = main_logits.size(-1)
+    top_k = min(int(top_k), vocab_size)
+    temperature = max(float(temperature), 1e-6)
+
+    total_loss = torch.tensor(0.0, device=labels.device, dtype=torch.float32)
+    total_weight = 0.0
+
+    for k, logits in enumerate(mtp_logits):
+        shift = k + 1
+        if shift >= seq_len:
+            continue
+
+        student_logits = logits[:, : seq_len - shift, :].contiguous()
+        teacher_logits = main_logits[:, shift:, :].detach().contiguous()
+        shifted_labels = labels[:, shift:].contiguous()
+        valid_mask = shifted_labels.ne(ignore_index)
+
+        if not valid_mask.any():
+            continue
+
+        teacher_selected, top_indices = torch.topk(teacher_logits.float(), k=top_k, dim=-1)
+        student_selected = torch.gather(student_logits.float(), dim=-1, index=top_indices)
+
+        teacher_probs = F.softmax(teacher_selected / temperature, dim=-1)
+        student_log_probs = F.log_softmax(student_selected / temperature, dim=-1)
+        kl_per_token = F.kl_div(
+            student_log_probs,
+            teacher_probs,
+            reduction="none",
+        ).sum(dim=-1)
+        kl = kl_per_token.masked_select(valid_mask).mean() * (temperature ** 2)
+
+        total_loss = total_loss + head_weights[k] * kl
+        total_weight += head_weights[k]
+
+    if total_weight > 0:
+        total_loss = total_loss / total_weight
+
+    return total_loss

@@ -53,21 +53,26 @@ class Seq2SeqDataset(Dataset):
         self.source_field = source_field
         self.target_field = target_field
 
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(
+                f"Dataset file not found: {data_path}. "
+                "Run the preprocessing script or fix the data.*_file path in the config."
+            )
+
         # Load data
         self.examples: List[Dict[str, Any]] = []
-        if os.path.exists(data_path):
-            with open(data_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        self.examples.append(json.loads(line))
+        with open(data_path, "r", encoding="utf-8") as f:
+            for line_no, line in enumerate(f, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    self.examples.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Invalid JSONL at {data_path}:{line_no}: {exc}") from exc
 
         if not self.examples:
-            # Create a minimal dummy example so the pipeline doesn't crash
-            # during smoke testing without real data
-            self.examples = [
-                {"source": "This is a test input.", "target": "Test output."}
-            ]
+            raise ValueError(f"Dataset file is empty: {data_path}")
 
     def __len__(self) -> int:
         return len(self.examples)
@@ -97,6 +102,12 @@ class Seq2SeqDataset(Dataset):
         # labels = target_ids
         # decoder_input_ids = [bos/pad] + target_ids[:-1]
         target_ids = target_encoding["input_ids"].squeeze(0)  # [T]
+        eos_token_id = self.tokenizer.eos_token_id
+        if eos_token_id is not None and (target_ids.numel() == 0 or target_ids[-1].item() != eos_token_id):
+            if target_ids.numel() >= self.max_target_length:
+                target_ids = target_ids[: self.max_target_length - 1]
+            eos = torch.tensor([eos_token_id], dtype=target_ids.dtype)
+            target_ids = torch.cat([target_ids, eos])
         labels = target_ids.clone()
 
         # Shift right: prepend BOS/PAD token

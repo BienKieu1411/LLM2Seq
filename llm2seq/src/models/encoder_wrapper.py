@@ -40,9 +40,11 @@ class EncoderWrapper(nn.Module):
         model_name: str,
         trainable: bool = False,
         use_lora: bool = False,
+        torch_dtype: str = "auto",
         lora_r: int = 16,
         lora_alpha: int = 32,
         lora_dropout: float = 0.05,
+        lora_target_modules: Optional[List[str]] = None,
     ):
         super().__init__()
         self.model_name = model_name
@@ -51,9 +53,7 @@ class EncoderWrapper(nn.Module):
 
         # Load the base model
         self.config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
-        load_kwargs = {}
-        if torch.cuda.is_available():
-            load_kwargs["torch_dtype"] = torch.float16
+        load_kwargs = self._build_load_kwargs(torch_dtype)
         self.model = AutoModel.from_pretrained(
             model_name,
             config=self.config,
@@ -75,7 +75,21 @@ class EncoderWrapper(nn.Module):
 
         # Apply LoRA if requested
         if use_lora and trainable:
-            self._apply_lora(lora_r, lora_alpha, lora_dropout)
+            self._apply_lora(lora_r, lora_alpha, lora_dropout, lora_target_modules)
+
+    def _build_load_kwargs(self, torch_dtype: str) -> Dict[str, torch.dtype]:
+        """Build dtype kwargs for HuggingFace loading."""
+        if torch_dtype in (None, "auto"):
+            if torch.cuda.is_available():
+                return {"torch_dtype": torch.float16}
+            return {}
+        if torch_dtype == "float16":
+            return {"torch_dtype": torch.float16}
+        if torch_dtype == "bfloat16":
+            return {"torch_dtype": torch.bfloat16}
+        if torch_dtype == "float32":
+            return {"torch_dtype": torch.float32}
+        raise ValueError(f"Unknown encoder torch_dtype: {torch_dtype}")
 
     def _freeze_all(self) -> None:
         """Freeze all encoder parameters."""
@@ -87,7 +101,13 @@ class EncoderWrapper(nn.Module):
         for param in self.model.parameters():
             param.requires_grad = True
 
-    def _apply_lora(self, r: int, alpha: int, dropout: float) -> None:
+    def _apply_lora(
+        self,
+        r: int,
+        alpha: int,
+        dropout: float,
+        target_modules: Optional[List[str]] = None,
+    ) -> None:
         """Apply LoRA adapters to the encoder using peft."""
         try:
             from peft import LoraConfig, get_peft_model, TaskType
@@ -102,7 +122,7 @@ class EncoderWrapper(nn.Module):
             r=r,
             lora_alpha=alpha,
             lora_dropout=dropout,
-            target_modules=["q_proj", "v_proj"],
+            target_modules=target_modules or ["q_proj", "k_proj", "v_proj", "o_proj"],
         )
         self.model = get_peft_model(self.model, lora_config)
 

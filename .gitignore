@@ -3,6 +3,7 @@ __pycache__/
 *$py.class
 .venv/
 .env
+llm2seq_h200/.env
 *.egg-info/
 dist/
 build/
@@ -31,3 +32,5 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+llm2seq_h200/

@@ -23,9 +23,13 @@ def autoregressive_generate(
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,
     max_new_tokens: int = 256,
+    min_new_tokens: int = 0,
+    do_sample: bool = False,
     temperature: float = 1.0,
     top_k: int = 0,
     top_p: float = 1.0,
+    repetition_penalty: float = 1.0,
+    no_repeat_ngram_size: int = 0,
     eos_token_id: Optional[int] = None,
     pad_token_id: Optional[int] = None,
     bos_token_id: Optional[int] = None,
@@ -39,9 +43,13 @@ def autoregressive_generate(
         input_ids: [B, S_src] — source token IDs.
         attention_mask: [B, S_src] — source attention mask.
         max_new_tokens: Maximum number of tokens to generate.
+        min_new_tokens: Minimum number of tokens before EOS is allowed.
+        do_sample: If True, sample from the filtered distribution. If False, use greedy decoding.
         temperature: Sampling temperature (1.0 = no scaling).
         top_k: Top-k filtering (0 = disabled).
         top_p: Top-p nucleus filtering (1.0 = disabled).
+        repetition_penalty: Penalty for tokens already generated (1.0 = disabled).
+        no_repeat_ngram_size: Block repeated n-grams of this size (0 = disabled).
         eos_token_id: End of sequence token ID.
         pad_token_id: Padding token ID.
         bos_token_id: Beginning of sequence token ID.
@@ -55,7 +63,9 @@ def autoregressive_generate(
     bsz = input_ids.size(0)
 
     # Encode source once
-    h_mem = model.encode(input_ids, attention_mask)
+    h_mem, memory_attention_mask = model.encode(
+        input_ids, attention_mask, return_attention_mask=True
+    )
 
     # Initialize decoder input with BOS token
     if bos_token_id is None:
@@ -77,7 +87,7 @@ def autoregressive_generate(
         decoder_states, past_key_values_out = model.decoder(
             input_ids=decoder_input,
             encoder_hidden_states=h_mem,
-            encoder_attention_mask=attention_mask,
+            encoder_attention_mask=memory_attention_mask,
             past_key_values=past_key_values if use_cache else None,
             use_cache=use_cache,
         )
@@ -88,17 +98,44 @@ def autoregressive_generate(
         # Get logits for last position
         logits = model.lm_head(decoder_states[:, -1, :])  # [B, V]
 
-        # Apply temperature
-        if temperature != 1.0:
+        if eos_token_id is not None and step + 1 < min_new_tokens:
+            logits[:, eos_token_id] = float("-inf")
+
+        # Penalize repeated tokens.
+        if repetition_penalty and repetition_penalty != 1.0:
+            for batch_idx in range(bsz):
+                previous_tokens = set(generated[batch_idx].tolist())
+                for token_id in previous_tokens:
+                    if logits[batch_idx, token_id] < 0:
+                        logits[batch_idx, token_id] *= repetition_penalty
+                    else:
+                        logits[batch_idx, token_id] /= repetition_penalty
+
+        # Block tokens that would create a repeated n-gram.
+        if no_repeat_ngram_size and generated.size(1) >= no_repeat_ngram_size:
+            for batch_idx in range(bsz):
+                prefix = generated[batch_idx].tolist()
+                ngram_prefix = tuple(prefix[-(no_repeat_ngram_size - 1):])
+                blocked_tokens = []
+                for i in range(len(prefix) - no_repeat_ngram_size + 1):
+                    ngram = tuple(prefix[i: i + no_repeat_ngram_size])
+                    if ngram[:-1] == ngram_prefix:
+                        blocked_tokens.append(ngram[-1])
+                if blocked_tokens:
+                    logits[batch_idx, blocked_tokens] = float("-inf")
+
+        if temperature is None or temperature <= 0:
+            do_sample = False
+        elif temperature != 1.0:
             logits = logits / temperature
 
         # Apply top-k filtering
-        if top_k > 0:
+        if do_sample and top_k > 0:
             indices_to_remove = logits < torch.topk(logits, top_k, dim=-1).values[:, -1:]
             logits[indices_to_remove] = float("-inf")
 
         # Apply top-p (nucleus) filtering
-        if top_p < 1.0:
+        if do_sample and top_p < 1.0:
             sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
             cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
             sorted_indices_to_remove = cumulative_probs > top_p
@@ -110,7 +147,7 @@ def autoregressive_generate(
             logits[indices_to_remove] = float("-inf")
 
         # Sample or greedy
-        if temperature > 0 and (top_k > 0 or top_p < 1.0):
+        if do_sample:
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
         else:

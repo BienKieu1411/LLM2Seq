@@ -13,7 +13,7 @@ import torch
 import torch.nn.functional as F
 
 from .kd_loss import compute_kd_loss
-from .mtp_loss import compute_mtp_loss
+from .mtp_loss import compute_mtp_loss, compute_mtp_self_distillation_loss
 
 
 def compute_total_loss(
@@ -70,17 +70,39 @@ def compute_total_loss(
 
     # 3. MTP loss (if enabled)
     loss_mtp = torch.tensor(0.0, device=labels.device)
+    loss_mtp_ce = torch.tensor(0.0, device=labels.device)
+    loss_mtp_kl = torch.tensor(0.0, device=labels.device)
     if cfg is not None and getattr(cfg, "use_mtp", False) and mtp_logits is not None:
-        loss_mtp = compute_mtp_loss(
+        loss_mtp_ce = compute_mtp_loss(
             mtp_logits=mtp_logits,
             labels=labels,
             head_weights=getattr(cfg, "mtp_head_weights", None),
             ignore_index=ignore_index,
         )
         mtp_weight = getattr(cfg, "mtp_loss_weight", 0.3)
-        total_loss = total_loss + mtp_weight * loss_mtp
+        loss_mtp = loss_mtp_ce
+
+        if getattr(cfg, "mtp_self_distillation", False):
+            loss_mtp_kl = compute_mtp_self_distillation_loss(
+                mtp_logits=mtp_logits,
+                main_logits=main_logits,
+                labels=labels,
+                top_k=getattr(cfg, "mtp_self_distill_top_k", 10000),
+                head_weights=getattr(cfg, "mtp_self_distill_head_weights", None),
+                temperature=getattr(cfg, "mtp_self_distill_temperature", 1.0),
+                ignore_index=ignore_index,
+            )
+
+        mtp_kl_weight = getattr(cfg, "mtp_self_distill_loss_weight", 0.5)
+        mtp_total = mtp_weight * loss_mtp_ce + mtp_kl_weight * loss_mtp_kl
+        if getattr(cfg, "mtp_train_only", False):
+            total_loss = mtp_total
+        else:
+            total_loss = total_loss + mtp_total
 
     result["loss_mtp"] = loss_mtp
+    result["loss_mtp_ce"] = loss_mtp_ce
+    result["loss_mtp_kl"] = loss_mtp_kl
     result["loss"] = total_loss
 
     return result

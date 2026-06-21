@@ -40,14 +40,25 @@ class LLM2SeqConfig:
         self.use_lora_for_encoder: bool = model_cfg.get("use_lora_for_encoder", False)
         self.d_enc: int = model_cfg.get("d_enc", 4096)
         self.d_dec: int = model_cfg.get("d_dec", 768)
+        self.encoder_torch_dtype: str = model_cfg.get("encoder_torch_dtype", "auto")
+        self.lora_r: int = model_cfg.get("lora_r", 16)
+        self.lora_alpha: int = model_cfg.get("lora_alpha", 32)
+        self.lora_dropout: float = model_cfg.get("lora_dropout", 0.05)
+        self.lora_target_modules: List[str] = model_cfg.get(
+            "lora_target_modules", ["q_proj", "k_proj", "v_proj", "o_proj"]
+        )
 
         # Adaptor
         adaptor_cfg = cfg.get("adaptor", {})
         self.adaptor_type: str = adaptor_cfg.get("type", "mlp")
         self.use_layer_fusion: bool = adaptor_cfg.get("use_layer_fusion", True)
+        self.fusion_type: str = adaptor_cfg.get("fusion_type", "scalar")
         self.fuse_layers: List[int] = adaptor_cfg.get("fuse_layers", [-1, -4, -8, -12])
         self.use_encstack: bool = adaptor_cfg.get("use_encstack", False)
         self.encstack_layers: int = adaptor_cfg.get("encstack_layers", 2)
+        self.use_global_memory_tokens: bool = adaptor_cfg.get("use_global_memory_tokens", False)
+        self.num_global_memory_tokens: int = adaptor_cfg.get("num_global_memory_tokens", 0)
+        self.use_salience_gate: bool = adaptor_cfg.get("use_salience_gate", False)
 
         # Small decoder
         dec_cfg = cfg.get("small_decoder", {})
@@ -70,6 +81,14 @@ class LLM2SeqConfig:
         self.mtp_num_heads: int = mtp_cfg.get("num_heads", 4)
         self.mtp_loss_weight: float = mtp_cfg.get("loss_weight", 0.3)
         self.mtp_head_weights: List[float] = mtp_cfg.get("head_weights", [1.0, 0.8, 0.6, 0.4])
+        self.mtp_train_only: bool = mtp_cfg.get("train_only", False)
+        self.mtp_self_distillation: bool = mtp_cfg.get("self_distillation", False)
+        self.mtp_self_distill_top_k: int = mtp_cfg.get("self_distill_top_k", 10000)
+        self.mtp_self_distill_temperature: float = mtp_cfg.get("self_distill_temperature", 1.0)
+        self.mtp_self_distill_loss_weight: float = mtp_cfg.get("self_distill_loss_weight", 0.5)
+        self.mtp_self_distill_head_weights: Optional[List[float]] = mtp_cfg.get(
+            "self_distill_head_weights", None
+        )
         self.mtp_use_at_inference: bool = mtp_cfg.get("use_mtp_at_inference", False)
         self.mtp_inference_strategy: str = mtp_cfg.get("inference_strategy", "confidence_adaptive")
         self.mtp_confidence_threshold: float = mtp_cfg.get("confidence_threshold", 0.9)
@@ -104,6 +123,11 @@ class LLM2Seq(nn.Module):
             model_name=cfg.encoder_name,
             trainable=cfg.encoder_trainable,
             use_lora=cfg.use_lora_for_encoder,
+            torch_dtype=cfg.encoder_torch_dtype,
+            lora_r=cfg.lora_r,
+            lora_alpha=cfg.lora_alpha,
+            lora_dropout=cfg.lora_dropout,
+            lora_target_modules=cfg.lora_target_modules,
         )
 
         # 2. Adaptor
@@ -111,12 +135,17 @@ class LLM2Seq(nn.Module):
             d_enc=cfg.d_enc,
             d_dec=cfg.d_dec,
             use_layer_fusion=cfg.use_layer_fusion,
+            fusion_type=cfg.fusion_type,
             fuse_layers=cfg.fuse_layers,
+            projection_type=cfg.adaptor_type,
             use_encstack=cfg.use_encstack,
             encstack_layers=cfg.encstack_layers,
             encstack_heads=cfg.dec_num_heads,
             encstack_ffn=cfg.dec_ffn_size,
             dropout=cfg.dec_dropout,
+            use_global_memory_tokens=cfg.use_global_memory_tokens,
+            num_global_memory_tokens=cfg.num_global_memory_tokens,
+            use_salience_gate=cfg.use_salience_gate,
         )
 
         # 3. Lightweight Decoder
@@ -200,13 +229,18 @@ class LLM2Seq(nn.Module):
         )
 
         # 2. Adapt encoder output to decoder memory
-        h_mem = self.adaptor(encoder_output, attention_mask=attention_mask)
+        adaptor_output = self.adaptor(encoder_output, attention_mask=attention_mask)
+        if isinstance(adaptor_output, tuple):
+            h_mem, memory_attention_mask = adaptor_output
+        else:
+            h_mem = adaptor_output
+            memory_attention_mask = attention_mask
 
         # 3. Decode
         decoder_states, _ = self.decoder(
             input_ids=decoder_input_ids,
             encoder_hidden_states=h_mem,
-            encoder_attention_mask=attention_mask,
+            encoder_attention_mask=memory_attention_mask,
             attention_mask=decoder_attention_mask,
         )
 
@@ -246,7 +280,8 @@ class LLM2Seq(nn.Module):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-    ) -> torch.Tensor:
+        return_attention_mask: bool = False,
+    ) -> Any:
         """
         Encode source and produce decoder memory (for inference).
 
@@ -258,7 +293,14 @@ class LLM2Seq(nn.Module):
             attention_mask=attention_mask,
             output_hidden_states=self.cfg.use_layer_fusion,
         )
-        h_mem = self.adaptor(encoder_output, attention_mask=attention_mask)
+        adaptor_output = self.adaptor(encoder_output, attention_mask=attention_mask)
+        if isinstance(adaptor_output, tuple):
+            h_mem, memory_attention_mask = adaptor_output
+        else:
+            h_mem = adaptor_output
+            memory_attention_mask = attention_mask
+        if return_attention_mask:
+            return h_mem, memory_attention_mask
         return h_mem
 
     @property
@@ -290,10 +332,12 @@ class LLM2Seq(nn.Module):
             f"{'='*50}",
             f"Encoder:          {self.cfg.encoder_name}",
             f"  Trainable:      {self.cfg.encoder_trainable}",
-            f"  LoRA:           {self.cfg.use_lora_for_encoder}",
             f"Adaptor:          {self.cfg.adaptor_type}",
             f"  Layer Fusion:   {self.cfg.use_layer_fusion}",
+            f"  Fusion Type:    {self.cfg.fusion_type}",
+            f"  Salience Gate:  {self.cfg.use_salience_gate}",
             f"  EncStack:       {self.cfg.use_encstack}",
+            f"  Global Tokens:  {self.cfg.num_global_memory_tokens if self.cfg.use_global_memory_tokens else 0}",
             f"Decoder:",
             f"  Layers:         {self.cfg.dec_num_layers}",
             f"  Hidden Size:    {self.cfg.dec_hidden_size}",
@@ -301,10 +345,14 @@ class LLM2Seq(nn.Module):
             f"  FFN Size:       {self.cfg.dec_ffn_size}",
             f"Features:",
             f"  MTP:            {self.cfg.use_mtp} ({self.cfg.mtp_type})",
+            f"  MTP Train Only: {self.cfg.mtp_train_only}",
+            f"  MTP Self-Dist:  {self.cfg.mtp_self_distillation}",
             f"  Distillation:   {self.cfg.use_distillation} ({self.cfg.kd_type})",
             f"{'='*50}",
             f"Total params:     {total:,}",
             f"Trainable params: {trainable:,}",
             f"Frozen params:    {frozen:,}",
         ]
+        if self.cfg.use_lora_for_encoder:
+            lines.insert(4, "  LoRA:           True")
         return "\n".join(lines)

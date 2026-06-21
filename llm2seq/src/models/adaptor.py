@@ -3,8 +3,9 @@ Adaptor module for LLM2Seq.
 
 Bridges encoder hidden states to decoder memory space via:
 1. LayerFusion: weighted combination of multiple encoder layer outputs.
-2. AdaptorMLP: projects from d_enc to d_dec.
+2. Projection adaptor: MLP or gated residual projection from d_enc to d_dec.
 3. Optional EncoderStack: additional Transformer encoder layers for refinement.
+4. Optional global memory tokens prepended to decoder cross-attention memory.
 
 Pipeline: LayerFusion → MLP → Optional EncStack
 """
@@ -12,7 +13,7 @@ Pipeline: LayerFusion → MLP → Optional EncStack
 from __future__ import annotations
 
 import math
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -71,6 +72,41 @@ class LayerFusion(nn.Module):
         return fused
 
 
+class TokenWiseLayerFusion(nn.Module):
+    """
+    Token-wise attention over selected encoder layers.
+
+    Unlike scalar LayerFusion, each token can choose a different mixture of
+    encoder layers, reducing information loss when lexical and semantic cues
+    live at different depths.
+    """
+
+    def __init__(self, num_layers: int, d_enc: int, dropout: float = 0.0):
+        super().__init__()
+        self.num_layers = num_layers
+        self.score = nn.Linear(d_enc, 1, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, hidden_states: Tuple[torch.Tensor, ...], layer_indices: List[int]) -> torch.Tensor:
+        assert len(layer_indices) == self.num_layers, (
+            f"Expected {self.num_layers} layer indices, got {len(layer_indices)}"
+        )
+
+        selected = []
+        num_total = len(hidden_states)
+        score_dtype = self.score.weight.dtype
+        for idx in layer_indices:
+            actual_idx = idx if idx >= 0 else num_total + idx
+            selected.append(hidden_states[actual_idx].to(dtype=score_dtype))
+
+        # [B, S, L, D]
+        stacked = torch.stack(selected, dim=2)
+        scores = self.score(stacked).squeeze(-1)  # [B, S, L]
+        weights = self.dropout(F.softmax(scores, dim=-1))
+        fused = torch.einsum("bsl,bsld->bsd", weights, stacked)
+        return fused
+
+
 class AdaptorMLP(nn.Module):
     """
     MLP that projects encoder hidden states from d_enc to d_dec.
@@ -109,6 +145,36 @@ class AdaptorMLP(nn.Module):
         x = self.linear2(x)
         x = self.dropout2(x)
         return x
+
+
+class GatedResidualProjection(nn.Module):
+    """
+    Residual projection from encoder space to decoder space.
+
+    A direct down-projection preserves a stable path for information transfer,
+    while a gated FFN learns task-specific updates.
+    """
+
+    def __init__(self, d_enc: int, d_dec: int, dropout: float = 0.1):
+        super().__init__()
+        self.input_norm = nn.LayerNorm(d_enc)
+        self.base_proj = nn.Linear(d_enc, d_dec)
+        self.gate_proj = nn.Linear(d_enc, d_dec)
+        self.update_norm = nn.LayerNorm(d_dec)
+        self.update = nn.Sequential(
+            nn.Linear(d_dec, d_dec * 4),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_dec * 4, d_dec),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.input_norm(x)
+        base = self.base_proj(x)
+        gate = torch.sigmoid(self.gate_proj(x))
+        update = self.update(self.update_norm(base))
+        return base + gate * update
 
 
 class EncoderStack(nn.Module):
@@ -167,6 +233,36 @@ class EncoderStack(nn.Module):
         return self.layers(x, src_key_padding_mask=src_key_padding_mask)
 
 
+class TokenSalienceGate(nn.Module):
+    """
+    Lightweight token-level salience gate for summarization.
+
+    The gate keeps every token in memory, but learns a soft importance multiplier
+    so the decoder can cross-attend more strongly to content-bearing tokens.
+    """
+
+    def __init__(self, d_model: int, dropout: float = 0.1):
+        super().__init__()
+        hidden = max(1, d_model // 4)
+        self.norm = nn.LayerNorm(d_model)
+        self.score = nn.Sequential(
+            nn.Linear(d_model, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, 1),
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        gate = torch.sigmoid(self.score(self.norm(x)))
+        if attention_mask is not None:
+            gate = gate.masked_fill(attention_mask.unsqueeze(-1) == 0, 0.0)
+        return x * (0.5 + gate)
+
+
 class Adaptor(nn.Module):
     """
     Full adaptor pipeline: LayerFusion → MLP → Optional EncStack.
@@ -178,12 +274,14 @@ class Adaptor(nn.Module):
         d_enc: Encoder hidden size.
         d_dec: Decoder hidden size.
         use_layer_fusion: Whether to fuse multiple encoder layers.
+        fusion_type: scalar or tokenwise layer fusion.
         fuse_layers: Layer indices for fusion (e.g., [-1, -4, -8, -12]).
         use_encstack: Whether to use additional encoder layers.
         encstack_layers: Number of EncStack layers.
         encstack_heads: Number of attention heads in EncStack.
         encstack_ffn: FFN size in EncStack.
         dropout: Dropout rate.
+        use_salience_gate: Whether to apply token-level content salience gating.
     """
 
     def __init__(
@@ -191,28 +289,52 @@ class Adaptor(nn.Module):
         d_enc: int,
         d_dec: int,
         use_layer_fusion: bool = True,
+        fusion_type: str = "scalar",
         fuse_layers: Optional[List[int]] = None,
+        projection_type: str = "mlp",
         use_encstack: bool = False,
         encstack_layers: int = 2,
         encstack_heads: int = 12,
         encstack_ffn: int = 3072,
         dropout: float = 0.1,
+        use_global_memory_tokens: bool = False,
+        num_global_memory_tokens: int = 0,
+        use_salience_gate: bool = False,
     ):
         super().__init__()
         self.d_enc = d_enc
         self.d_dec = d_dec
         self.use_layer_fusion = use_layer_fusion
+        self.fusion_type = fusion_type
         self.fuse_layers = fuse_layers or [-1, -4, -8, -12]
+        self.projection_type = projection_type
         self.use_encstack = use_encstack
+        self.use_global_memory_tokens = use_global_memory_tokens
+        self.num_global_memory_tokens = num_global_memory_tokens
+        self.use_salience_gate = use_salience_gate
 
         # Layer fusion module
         if use_layer_fusion:
-            self.layer_fusion = LayerFusion(num_layers=len(self.fuse_layers))
+            if fusion_type == "scalar":
+                self.layer_fusion = LayerFusion(num_layers=len(self.fuse_layers))
+            elif fusion_type == "tokenwise":
+                self.layer_fusion = TokenWiseLayerFusion(
+                    num_layers=len(self.fuse_layers),
+                    d_enc=d_enc,
+                    dropout=dropout,
+                )
+            else:
+                raise ValueError(f"Unknown fusion_type: {fusion_type}")
         else:
             self.layer_fusion = None
 
-        # MLP projection
-        self.mlp = AdaptorMLP(d_enc, d_dec, dropout=dropout)
+        # Projection from encoder to decoder memory space
+        if projection_type == "mlp":
+            self.proj = AdaptorMLP(d_enc, d_dec, dropout=dropout)
+        elif projection_type == "gated_residual":
+            self.proj = GatedResidualProjection(d_enc, d_dec, dropout=dropout)
+        else:
+            raise ValueError(f"Unknown projection_type: {projection_type}")
 
         # Optional encoder stack
         if use_encstack:
@@ -226,11 +348,19 @@ class Adaptor(nn.Module):
         else:
             self.encstack = None
 
+        self.salience_gate = TokenSalienceGate(d_dec, dropout=dropout) if use_salience_gate else None
+
+        if use_global_memory_tokens and num_global_memory_tokens > 0:
+            self.global_memory_tokens = nn.Parameter(torch.empty(num_global_memory_tokens, d_dec))
+            nn.init.normal_(self.global_memory_tokens, mean=0.0, std=0.02)
+        else:
+            self.global_memory_tokens = None
+
     def forward(
         self,
         encoder_output: dict,
         attention_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Adapt encoder output to decoder memory.
 
@@ -242,6 +372,7 @@ class Adaptor(nn.Module):
 
         Returns:
             H_mem: [B, S, d_dec] — memory for decoder cross-attention.
+            If global memory tokens are used, returns (H_mem, memory_attention_mask).
         """
         if self.use_layer_fusion and "hidden_states" in encoder_output:
             h = self.layer_fusion(encoder_output["hidden_states"], self.fuse_layers)
@@ -249,8 +380,12 @@ class Adaptor(nn.Module):
             h = encoder_output["last_hidden_state"]
 
         # Project d_enc → d_dec
-        h = h.to(dtype=self.mlp.linear1.weight.dtype)
-        h = self.mlp(h)
+        first_param = next(self.proj.parameters())
+        h = h.to(dtype=first_param.dtype)
+        h = self.proj(h)
+
+        if self.salience_gate is not None:
+            h = self.salience_gate(h, attention_mask=attention_mask)
 
         # Optional refinement
         if self.encstack is not None:
@@ -259,5 +394,18 @@ class Adaptor(nn.Module):
             if attention_mask is not None:
                 padding_mask = attention_mask == 0  # True for padded positions
             h = self.encstack(h, src_key_padding_mask=padding_mask)
+
+        if self.global_memory_tokens is not None:
+            bsz = h.size(0)
+            global_tokens = self.global_memory_tokens.to(dtype=h.dtype, device=h.device)
+            global_tokens = global_tokens.unsqueeze(0).expand(bsz, -1, -1)
+            h = torch.cat([global_tokens, h], dim=1)
+            if attention_mask is None:
+                token_mask = torch.ones(bsz, h.size(1) - self.num_global_memory_tokens, device=h.device, dtype=torch.long)
+            else:
+                token_mask = attention_mask
+            global_mask = torch.ones(bsz, self.num_global_memory_tokens, device=h.device, dtype=token_mask.dtype)
+            memory_attention_mask = torch.cat([global_mask, token_mask], dim=1)
+            return h, memory_attention_mask
 
         return h
