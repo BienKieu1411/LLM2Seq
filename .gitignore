@@ -32,5 +32,3 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
-
-llm2seq_h200/
