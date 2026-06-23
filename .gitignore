@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 .env
 llm2seq_h200/.env
+T5Gemma/.env
+T5Gemma/env.txt
 *.egg-info/
 dist/
 build/
@@ -19,6 +21,10 @@ data/raw/
 data/processed/
 data/teacher_outputs/
 *.jsonl
+T5Gemma/data/processed/
+T5Gemma/logs/
+T5Gemma/eval_outputs/
+T5Gemma/wikilingua/*.json
 
 # IDE
 .vscode/
