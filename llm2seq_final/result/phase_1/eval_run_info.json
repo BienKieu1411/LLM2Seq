@@ -1,10 +1,10 @@
 {
   "args": {
-    "config": "llm2seq_h200/configs/phase1_warmup_4096.yaml",
+    "config": "llm2seq_final/configs/phase1_warmup_4096.yaml",
     "checkpoint": "runs/h200_llm2seq_phase1_warmup/best.pt",
     "base_checkpoint": null,
-    "test_file": "llm2seq_h200/data/processed/test.jsonl",
-    "output_dir": "llm2seq_h200/eval_outputs/full_test_phase1_main",
+    "test_file": "llm2seq_final/data/processed/test.jsonl",
+    "output_dir": "llm2seq_final/eval_outputs/full_test_phase1_main",
     "decode_mode": "autoregressive",
     "limit": -1,
     "max_new_tokens": null,
@@ -20,7 +20,7 @@
   },
   "base_checkpoint": null,
   "checkpoint": "runs/h200_llm2seq_phase1_warmup/best.pt",
-  "config": "llm2seq_h200/configs/phase1_warmup_4096.yaml",
-  "test_file": "llm2seq_h200/data/processed/test.jsonl",
-  "output_dir": "llm2seq_h200/eval_outputs/full_test_phase1_main"
+  "config": "llm2seq_final/configs/phase1_warmup_4096.yaml",
+  "test_file": "llm2seq_final/data/processed/test.jsonl",
+  "output_dir": "llm2seq_final/eval_outputs/full_test_phase1_main"
 }

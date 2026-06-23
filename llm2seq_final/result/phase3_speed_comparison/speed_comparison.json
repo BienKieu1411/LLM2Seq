@@ -66,8 +66,8 @@
     }
   },
   "files": {
-    "main_metrics": "llm2seq_h200/eval_outputs/full_test_phase2_main/metrics.json",
-    "mtp_metrics": "llm2seq_h200/eval_outputs/full_test_phase3_mtp_verified/metrics.json"
+    "main_metrics": "llm2seq_final/eval_outputs/full_test_phase2_main/metrics.json",
+    "mtp_metrics": "llm2seq_final/eval_outputs/full_test_phase3_mtp_verified/metrics.json"
   },
   "note": "Use real_decode_tokens_per_second_speedup and latency_*_speedup as the real measured speedup. mtp_theoretical_decode_step_speedup only measures fewer verifier steps, not full serving latency."
 }

@@ -7,8 +7,8 @@ cd "${PROJECT_ROOT}"
 
 PHASE2_DIR="${PHASE2_DIR:-runs/h200_llm2seq_phase2_lora_encoder}"
 PHASE2_CKPT="${1:-${PHASE2_DIR}/best.pt}"
-CONFIG="${2:-${PHASE3_CONFIG:-llm2seq_h200/configs/phase3_mtp_self_distill_4096.yaml}}"
-LOG_DIR="${LOG_DIR:-llm2seq_h200/logs}"
+CONFIG="${2:-${PHASE3_CONFIG:-llm2seq_final/configs/phase3_mtp_self_distill_4096.yaml}}"
+LOG_DIR="${LOG_DIR:-llm2seq_final/logs}"
 mkdir -p "${LOG_DIR}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="${LOG_DIR}/${STAMP}_phase3.log"
@@ -20,7 +20,7 @@ fi
 
 if [[ ! -f "${PHASE2_CKPT}" ]]; then
   echo "Phase 2 checkpoint not found: ${PHASE2_CKPT}" >&2
-  echo "Usage: bash llm2seq_h200/scripts/train_phase3.sh /path/to/phase2/best.pt [config]" >&2
+  echo "Usage: bash llm2seq_final/scripts/train_phase3.sh /path/to/phase2/best.pt [config]" >&2
   exit 1
 fi
 

@@ -1,5 +1,5 @@
 project:
-  name: llm2seq_h200
+  name: llm2seq_final
   task: summarization
   output_dir: runs/h200_llm2seq_phase3_mtp_self_distill
 

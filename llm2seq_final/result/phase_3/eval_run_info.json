@@ -1,10 +1,10 @@
 {
   "args": {
-    "config": "llm2seq_h200/configs/phase3_mtp_self_distill_4096.yaml",
+    "config": "llm2seq_final/configs/phase3_mtp_self_distill_4096.yaml",
     "checkpoint": "runs/h200_llm2seq_phase3_mtp_self_distill/best.pt",
     "base_checkpoint": "runs/h200_llm2seq_phase2_lora_encoder/best.pt",
-    "test_file": "llm2seq_h200/data/processed/test.jsonl",
-    "output_dir": "llm2seq_h200/eval_outputs/full_test_phase3_mtp_verified",
+    "test_file": "llm2seq_final/data/processed/test.jsonl",
+    "output_dir": "llm2seq_final/eval_outputs/full_test_phase3_mtp_verified",
     "decode_mode": "mtp_verified",
     "limit": -1,
     "max_new_tokens": null,
@@ -20,7 +20,7 @@
   },
   "base_checkpoint": "runs/h200_llm2seq_phase2_lora_encoder/best.pt",
   "checkpoint": "runs/h200_llm2seq_phase3_mtp_self_distill/best.pt",
-  "config": "llm2seq_h200/configs/phase3_mtp_self_distill_4096.yaml",
-  "test_file": "llm2seq_h200/data/processed/test.jsonl",
-  "output_dir": "llm2seq_h200/eval_outputs/full_test_phase3_mtp_verified"
+  "config": "llm2seq_final/configs/phase3_mtp_self_distill_4096.yaml",
+  "test_file": "llm2seq_final/data/processed/test.jsonl",
+  "output_dir": "llm2seq_final/eval_outputs/full_test_phase3_mtp_verified"
 }

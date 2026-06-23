@@ -102,7 +102,7 @@ def convert_split(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_dir", required=True, help="Folder containing train.json, val.json, test.json")
-    parser.add_argument("--output_dir", default="llm2seq_h200/data/processed")
+    parser.add_argument("--output_dir", default="llm2seq_final/data/processed")
     parser.add_argument("--task", default="summarization")
     parser.add_argument("--max_train", type=int, default=-1)
     parser.add_argument("--max_eval", type=int, default=-1)

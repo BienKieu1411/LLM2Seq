@@ -36,9 +36,9 @@
   "tokens_per_decode_step": 1.0,
   "peak_gpu_memory_mb": 6160.92,
   "checkpoint": "runs/h200_llm2seq_phase1_warmup/best.pt",
-  "config": "llm2seq_h200/configs/phase1_warmup_4096.yaml",
-  "test_file": "llm2seq_h200/data/processed/test.jsonl",
-  "predictions_file": "llm2seq_h200/eval_outputs/full_test_phase1_main/predictions.jsonl",
+  "config": "llm2seq_final/configs/phase1_warmup_4096.yaml",
+  "test_file": "llm2seq_final/data/processed/test.jsonl",
+  "predictions_file": "llm2seq_final/eval_outputs/full_test_phase1_main/predictions.jsonl",
   "generation": {
     "max_new_tokens": 256,
     "min_new_tokens": 32,

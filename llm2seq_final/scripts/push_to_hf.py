@@ -110,11 +110,11 @@ def main() -> None:
     args = parser.parse_args()
 
     if not args.repo_id:
-        raise EnvironmentError("HF_REPO_ID is not set. Put it in llm2seq_h200/env.txt or pass --repo_id.")
+        raise EnvironmentError("HF_REPO_ID is not set. Put it in llm2seq_final/env.txt or pass --repo_id.")
 
     token = os.environ.get("HF_TOKEN")
     if not token:
-        raise EnvironmentError("HF_TOKEN is not set. Put it in llm2seq_h200/env.txt or export it on the server.")
+        raise EnvironmentError("HF_TOKEN is not set. Put it in llm2seq_final/env.txt or export it on the server.")
 
     api = HfApi(token=token)
     create_repo(args.repo_id, token=token, repo_type=args.repo_type, exist_ok=True)

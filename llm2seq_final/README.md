@@ -4,7 +4,7 @@ H200 version for long-context WikiLingua summarization.
 
 This folder is self-contained for server upload. It includes the H200 training
 entrypoints/configs and a bundled copy of the core `llm2seq` package under
-`llm2seq_h200/llm2seq`. It implements the architecture discussed for reducing
+`llm2seq_final/llm2seq`. It implements the architecture discussed for reducing
 encoder-to-decoder information loss:
 
 - LLM2Vec bidirectional encoder.
@@ -32,31 +32,31 @@ LLM2Seq is designed to minimize information loss when bridging a pre-trained bid
 
 ## Standalone Folder Layout
 
-Upload the whole `llm2seq_h200/` folder to the server. You do not need to
+Upload the whole `llm2seq_final/` folder to the server. You do not need to
 upload the parent repo or a separate `llm2seq/` folder.
 
 Key files included:
 
 ```text
-llm2seq_h200/requirements.txt
-llm2seq_h200/llm2seq/                 # bundled core package
-llm2seq_h200/configs/*.yaml
-llm2seq_h200/scripts/*.sh
-llm2seq_h200/scripts/*.py
-llm2seq_h200/run_pipeline.sh
-llm2seq_h200/install_deps.sh
-llm2seq_h200/smoke_check.sh
+llm2seq_final/requirements.txt
+llm2seq_final/llm2seq/                 # bundled core package
+llm2seq_final/configs/*.yaml
+llm2seq_final/scripts/*.sh
+llm2seq_final/scripts/*.py
+llm2seq_final/run_pipeline.sh
+llm2seq_final/install_deps.sh
+llm2seq_final/smoke_check.sh
 ```
 
 Recommended server commands:
 
 ```bash
-cd /path/containing/llm2seq_h200
-bash llm2seq_h200/smoke_check.sh
-bash llm2seq_h200/install_deps.sh
-cp llm2seq_h200/env.example.txt llm2seq_h200/env.txt
-nano llm2seq_h200/env.txt
-bash llm2seq_h200/run_pipeline.sh
+cd /path/containing/llm2seq_final
+bash llm2seq_final/smoke_check.sh
+bash llm2seq_final/install_deps.sh
+cp llm2seq_final/env.example.txt llm2seq_final/env.txt
+nano llm2seq_final/env.txt
+bash llm2seq_final/run_pipeline.sh
 ```
 
 If the server only has `python3`, set this in `env.txt`:
@@ -65,7 +65,7 @@ If the server only has `python3`, set this in `env.txt`:
 PYTHON_BIN=python3
 ```
 
-The scripts prepend `llm2seq_h200/` to `PYTHONPATH`, so training/evaluation
+The scripts prepend `llm2seq_final/` to `PYTHONPATH`, so training/evaluation
 uses the bundled package rather than requiring a package installed elsewhere.
 
 For H200 servers with NVIDIA driver CUDA 12.4, `install_deps.sh` installs a
@@ -100,9 +100,9 @@ PY
 The bundled WikiLingua folder is expected here:
 
 ```text
-llm2seq_h200/wikilingua/train.json
-llm2seq_h200/wikilingua/val.json
-llm2seq_h200/wikilingua/test.json
+llm2seq_final/wikilingua/train.json
+llm2seq_final/wikilingua/val.json
+llm2seq_final/wikilingua/test.json
 ```
 
 These files are JSONL-style files: each line is one JSON object with `src` and
@@ -116,7 +116,7 @@ Tóm tắt văn bản sau:
 ```
 
 Processed JSONL files are generated at runtime under
-`llm2seq_h200/data/processed/`. They are not required in the upload folder
+`llm2seq_final/data/processed/`. They are not required in the upload folder
 because `run_pipeline.sh` runs preprocessing before Phase 1.
 
 Current split sizes after preprocessing:
@@ -146,7 +146,7 @@ Encoder is frozen. Train only:
 Config:
 
 ```bash
-llm2seq_h200/configs/phase1_warmup_4096.yaml
+llm2seq_final/configs/phase1_warmup_4096.yaml
 ```
 
 ### Phase 2: LoRA Encoder Adaptation
@@ -165,7 +165,7 @@ the encoder to WikiLingua summarization.
 Config:
 
 ```bash
-llm2seq_h200/configs/phase2_lora_encoder_4096.yaml
+llm2seq_final/configs/phase2_lora_encoder_4096.yaml
 ```
 
 Phase 2 resets optimizer/global step on resume because it is a new training
@@ -200,7 +200,7 @@ variant: Phase 1 and Phase 2 first make the main summarizer usable, then Phase
 Config:
 
 ```bash
-llm2seq_h200/configs/phase3_mtp_self_distill_4096.yaml
+llm2seq_final/configs/phase3_mtp_self_distill_4096.yaml
 ```
 
 Phase 3 instantiates the same LoRA encoder structure as Phase 2, loads the
@@ -232,9 +232,9 @@ Each sample can be a JSON object:
 The script supports either a JSON list or multiple JSON objects in one file.
 
 ```bash
-python llm2seq_h200/scripts/prepare_wikilingua_json.py \
-  --input_dir llm2seq_h200/wikilingua \
-  --output_dir llm2seq_h200/data/processed \
+python llm2seq_final/scripts/prepare_wikilingua_json.py \
+  --input_dir llm2seq_final/wikilingua \
+  --output_dir llm2seq_final/data/processed \
   --max_train -1 \
   --max_eval -1 \
   --source_joiner "\\n" \
@@ -246,17 +246,17 @@ python llm2seq_h200/scripts/prepare_wikilingua_json.py \
 Install dependencies:
 
 ```bash
-bash llm2seq_h200/install_deps.sh
+bash llm2seq_final/install_deps.sh
 ```
 
 Create the local environment file:
 
 ```bash
-cp llm2seq_h200/env.example.txt llm2seq_h200/env.txt
-nano llm2seq_h200/env.txt
+cp llm2seq_final/env.example.txt llm2seq_final/env.txt
+nano llm2seq_final/env.txt
 ```
 
-Fill `HF_TOKEN` and `HF_REPO_ID` in `llm2seq_h200/env.txt` if you want
+Fill `HF_TOKEN` and `HF_REPO_ID` in `llm2seq_final/env.txt` if you want
 automatic upload to Hugging Face. Do not share `env.txt` because it contains
 secrets.
 
@@ -268,7 +268,7 @@ local checkpoint path is missing.
 Phase 1:
 
 ```bash
-bash llm2seq_h200/scripts/train_phase1.sh
+bash llm2seq_final/scripts/train_phase1.sh
 ```
 
 Default for H200: 4 epochs, micro-batch size 12, gradient accumulation 4,
@@ -278,7 +278,7 @@ micro-batch is kept below the point that fills the whole H200.
 Phase 2:
 
 ```bash
-bash llm2seq_h200/scripts/train_phase2.sh runs/h200_llm2seq_phase1_warmup/best.pt
+bash llm2seq_final/scripts/train_phase2.sh runs/h200_llm2seq_phase1_warmup/best.pt
 ```
 
 Default: 4 epochs, LoRA encoder adaptation, micro-batch size 2, gradient
@@ -289,7 +289,7 @@ still keeps micro-batch small.
 Phase 3:
 
 ```bash
-bash llm2seq_h200/scripts/train_phase3.sh runs/h200_llm2seq_phase2_lora_encoder/best.pt
+bash llm2seq_final/scripts/train_phase3.sh runs/h200_llm2seq_phase2_lora_encoder/best.pt
 ```
 
 Default for H200: 4 epochs, cascaded 4-head MTP-D, micro-batch size 8,
@@ -298,7 +298,7 @@ gradient accumulation 8, effective batch 64. Only MTP blocks are trainable.
 Run all phases:
 
 ```bash
-bash llm2seq_h200/scripts/train_all.sh
+bash llm2seq_final/scripts/train_all.sh
 ```
 
 By default, `train_all.sh` evaluates the full test set after each phase. Set
@@ -307,7 +307,7 @@ By default, `train_all.sh` evaluates the full test set after each phase. Set
 Logs are written to:
 
 ```text
-llm2seq_h200/logs/
+llm2seq_final/logs/
 ```
 
 During training, checkpoints are pushed to Hugging Face after every epoch:
@@ -364,29 +364,29 @@ can change this with `HF_CHECKPOINT_CACHE`.
 The dataset is expected at:
 
 ```text
-llm2seq_h200/wikilingua/train.json
-llm2seq_h200/wikilingua/val.json
-llm2seq_h200/wikilingua/test.json
+llm2seq_final/wikilingua/train.json
+llm2seq_final/wikilingua/val.json
+llm2seq_final/wikilingua/test.json
 ```
 
 Run preparation, phase 1, phase 2, phase 3, full test evaluation after each
 phase, and optional final HF upload of evaluation artifacts:
 
 ```bash
-bash llm2seq_h200/scripts/run_h200_pipeline.sh
+bash llm2seq_final/scripts/run_h200_pipeline.sh
 ```
 
-The script automatically loads `llm2seq_h200/env.txt` when that file exists.
+The script automatically loads `llm2seq_final/env.txt` when that file exists.
 You can also point to a different file with `ENV_FILE=/path/to/env.txt`.
 
 Default evaluation folders:
 
 ```text
-llm2seq_h200/eval_outputs/full_test_phase1_main
-llm2seq_h200/eval_outputs/full_test_phase2_main
-llm2seq_h200/eval_outputs/full_test_phase3_main
-llm2seq_h200/eval_outputs/full_test_phase3_mtp_verified
-llm2seq_h200/eval_outputs/phase3_speed_comparison
+llm2seq_final/eval_outputs/full_test_phase1_main
+llm2seq_final/eval_outputs/full_test_phase2_main
+llm2seq_final/eval_outputs/full_test_phase3_main
+llm2seq_final/eval_outputs/full_test_phase3_mtp_verified
+llm2seq_final/eval_outputs/phase3_speed_comparison
 ```
 
 `EVAL_LIMIT=-1` means full test set. For a smoke run, set a smaller value,
@@ -397,24 +397,24 @@ for example `EVAL_LIMIT=32`.
 Evaluate a checkpoint on the full test set:
 
 ```bash
-python llm2seq_h200/scripts/evaluate_full_test.py \
-  --config llm2seq_h200/configs/phase3_mtp_self_distill_4096.yaml \
+python llm2seq_final/scripts/evaluate_full_test.py \
+  --config llm2seq_final/configs/phase3_mtp_self_distill_4096.yaml \
   --checkpoint runs/h200_llm2seq_phase3_mtp_self_distill/best.pt \
   --base_checkpoint runs/h200_llm2seq_phase2_lora_encoder/best.pt \
-  --test_file llm2seq_h200/data/processed/test.jsonl \
-  --output_dir llm2seq_h200/eval_outputs/full_test_phase3_main \
+  --test_file llm2seq_final/data/processed/test.jsonl \
+  --output_dir llm2seq_final/eval_outputs/full_test_phase3_main \
   --decode_mode autoregressive
 ```
 
 Evaluate Phase 3 with main-head-constrained MTP decoding:
 
 ```bash
-python llm2seq_h200/scripts/evaluate_full_test.py \
-  --config llm2seq_h200/configs/phase3_mtp_self_distill_4096.yaml \
+python llm2seq_final/scripts/evaluate_full_test.py \
+  --config llm2seq_final/configs/phase3_mtp_self_distill_4096.yaml \
   --checkpoint runs/h200_llm2seq_phase3_mtp_self_distill/best.pt \
   --base_checkpoint runs/h200_llm2seq_phase2_lora_encoder/best.pt \
-  --test_file llm2seq_h200/data/processed/test.jsonl \
-  --output_dir llm2seq_h200/eval_outputs/full_test_phase3_mtp_verified \
+  --test_file llm2seq_final/data/processed/test.jsonl \
+  --output_dir llm2seq_final/eval_outputs/full_test_phase3_mtp_verified \
   --decode_mode mtp_verified
 ```
 
@@ -490,7 +490,7 @@ output while avoiding the worst slowdown cases.
 After Phase 3, the pipeline also writes:
 
 ```text
-llm2seq_h200/eval_outputs/phase3_speed_comparison/speed_comparison.json
+llm2seq_final/eval_outputs/phase3_speed_comparison/speed_comparison.json
 ```
 
 That file directly answers how much faster D-MTP is than the Phase 3 main-head
@@ -507,16 +507,16 @@ decoder. The most important fields are:
 ## Push Artifacts to Hugging Face
 
 ```bash
-python llm2seq_h200/scripts/push_to_hf.py \
+python llm2seq_final/scripts/push_to_hf.py \
   --folder runs/h200_llm2seq_phase1_warmup \
   --folder runs/h200_llm2seq_phase2_lora_encoder \
   --folder runs/h200_llm2seq_phase3_mtp_self_distill \
-  --folder llm2seq_h200/eval_outputs/full_test_phase1_main \
-  --folder llm2seq_h200/eval_outputs/full_test_phase2_main \
-  --folder llm2seq_h200/eval_outputs/full_test_phase3_main \
-  --folder llm2seq_h200/eval_outputs/full_test_phase3_mtp_verified \
-  --folder llm2seq_h200/eval_outputs/phase3_speed_comparison \
-  --folder llm2seq_h200/logs \
+  --folder llm2seq_final/eval_outputs/full_test_phase1_main \
+  --folder llm2seq_final/eval_outputs/full_test_phase2_main \
+  --folder llm2seq_final/eval_outputs/full_test_phase3_main \
+  --folder llm2seq_final/eval_outputs/full_test_phase3_mtp_verified \
+  --folder llm2seq_final/eval_outputs/phase3_speed_comparison \
+  --folder llm2seq_final/logs \
   --commit_message "Upload H200 LLM2Seq run"
 ```
 

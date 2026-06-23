@@ -28,17 +28,17 @@ export HF_AUTO_DOWNLOAD_CHECKPOINTS="${HF_AUTO_DOWNLOAD_CHECKPOINTS:-true}"
 export HF_CHECKPOINT_CACHE="${HF_CHECKPOINT_CACHE:-runs/hf_checkpoints}"
 
 # Make this folder self-contained: expose the bundled llm2seq package inside
-# llm2seq_h200/llm2seq when the parent repo is not uploaded.
+# llm2seq_final/llm2seq when the parent repo is not uploaded.
 if [[ -n "${PYTHONPATH:-}" ]]; then
   export PYTHONPATH="${H200_ROOT}:${PROJECT_ROOT}:${PYTHONPATH}"
 else
   export PYTHONPATH="${H200_ROOT}:${PROJECT_ROOT}"
 fi
 
-# Most configs intentionally use llm2seq_h200/... paths. If the uploaded folder
+# Most configs intentionally use llm2seq_final/... paths. If the uploaded folder
 # was renamed, create a best-effort compatibility symlink in the parent folder.
-if [[ "${H200_DIR_NAME}" != "llm2seq_h200" && ! -e "${PROJECT_ROOT}/llm2seq_h200" ]]; then
-  ln -s "${H200_ROOT}" "${PROJECT_ROOT}/llm2seq_h200" 2>/dev/null || true
+if [[ "${H200_DIR_NAME}" != "llm2seq_final" && ! -e "${PROJECT_ROOT}/llm2seq_final" ]]; then
+  ln -s "${H200_ROOT}" "${PROJECT_ROOT}/llm2seq_final" 2>/dev/null || true
 fi
 
 resolve_hf_checkpoint() {

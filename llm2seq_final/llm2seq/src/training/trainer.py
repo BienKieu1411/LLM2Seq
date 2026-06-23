@@ -204,7 +204,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
 
 
 def load_local_env_file() -> None:
-    """Load llm2seq_h200/env.txt when trainer is launched directly."""
+    """Load llm2seq_final/env.txt when trainer is launched directly."""
     h200_root = Path(__file__).resolve().parents[3]
     project_root = h200_root.parent
     env_file = Path(os.environ.get("ENV_FILE", h200_root / "env.txt"))

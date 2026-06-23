@@ -5,16 +5,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/load_env.sh"
 cd "${PROJECT_ROOT}"
 
-PHASE_NAME="${1:?Usage: bash llm2seq_h200/scripts/evaluate_phase.sh PHASE_NAME CONFIG CHECKPOINT OUTPUT_DIR [DECODE_MODE] [BASE_CHECKPOINT]}"
-CONFIG="${2:?Usage: bash llm2seq_h200/scripts/evaluate_phase.sh PHASE_NAME CONFIG CHECKPOINT OUTPUT_DIR [DECODE_MODE] [BASE_CHECKPOINT]}"
-CHECKPOINT="${3:?Usage: bash llm2seq_h200/scripts/evaluate_phase.sh PHASE_NAME CONFIG CHECKPOINT OUTPUT_DIR [DECODE_MODE] [BASE_CHECKPOINT]}"
-OUTPUT_DIR="${4:?Usage: bash llm2seq_h200/scripts/evaluate_phase.sh PHASE_NAME CONFIG CHECKPOINT OUTPUT_DIR [DECODE_MODE] [BASE_CHECKPOINT]}"
+PHASE_NAME="${1:?Usage: bash llm2seq_final/scripts/evaluate_phase.sh PHASE_NAME CONFIG CHECKPOINT OUTPUT_DIR [DECODE_MODE] [BASE_CHECKPOINT]}"
+CONFIG="${2:?Usage: bash llm2seq_final/scripts/evaluate_phase.sh PHASE_NAME CONFIG CHECKPOINT OUTPUT_DIR [DECODE_MODE] [BASE_CHECKPOINT]}"
+CHECKPOINT="${3:?Usage: bash llm2seq_final/scripts/evaluate_phase.sh PHASE_NAME CONFIG CHECKPOINT OUTPUT_DIR [DECODE_MODE] [BASE_CHECKPOINT]}"
+OUTPUT_DIR="${4:?Usage: bash llm2seq_final/scripts/evaluate_phase.sh PHASE_NAME CONFIG CHECKPOINT OUTPUT_DIR [DECODE_MODE] [BASE_CHECKPOINT]}"
 DECODE_MODE="${5:-autoregressive}"
 BASE_CHECKPOINT="${6:-}"
 
-TEST_FILE="${TEST_FILE:-${DATA_DIR:-llm2seq_h200/data/processed}/test.jsonl}"
+TEST_FILE="${TEST_FILE:-${DATA_DIR:-llm2seq_final/data/processed}/test.jsonl}"
 EVAL_LIMIT="${EVAL_LIMIT:--1}"
-LOG_DIR="${LOG_DIR:-llm2seq_h200/logs}"
+LOG_DIR="${LOG_DIR:-llm2seq_final/logs}"
 mkdir -p "${LOG_DIR}"
 
 STAMP="$(date +%Y%m%d_%H%M%S)"
@@ -72,7 +72,7 @@ if [[ -n "${BASE_CHECKPOINT}" ]]; then
   EXTRA_ARGS+=(--base_checkpoint "${BASE_CHECKPOINT}")
 fi
 
-"${PYTHON_BIN}" llm2seq_h200/scripts/evaluate_full_test.py \
+"${PYTHON_BIN}" llm2seq_final/scripts/evaluate_full_test.py \
   --config "${CONFIG}" \
   --checkpoint "${CHECKPOINT}" \
   --test_file "${TEST_FILE}" \

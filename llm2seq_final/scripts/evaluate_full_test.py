@@ -376,7 +376,7 @@ def main() -> None:
         help="Optional earlier-phase checkpoint to load before the current compact delta checkpoint.",
     )
     parser.add_argument("--test_file", default=None)
-    parser.add_argument("--output_dir", default="llm2seq_h200/eval_outputs")
+    parser.add_argument("--output_dir", default="llm2seq_final/eval_outputs")
     parser.add_argument(
         "--decode_mode",
         choices=["autoregressive", "mtp_verified"],
@@ -406,7 +406,7 @@ def main() -> None:
 
     project_output_dir = Path(raw_cfg["project"]["output_dir"])
     checkpoint_path = find_checkpoint(project_output_dir, args.checkpoint, raw_cfg)
-    test_file = Path(args.test_file or raw_cfg["data"].get("test_file", "llm2seq_h200/data/processed/test.jsonl"))
+    test_file = Path(args.test_file or raw_cfg["data"].get("test_file", "llm2seq_final/data/processed/test.jsonl"))
     if not test_file.exists():
         raise FileNotFoundError(test_file)
 

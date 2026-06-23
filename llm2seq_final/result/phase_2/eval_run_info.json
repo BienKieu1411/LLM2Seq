@@ -1,10 +1,10 @@
 {
   "args": {
-    "config": "llm2seq_h200/configs/phase2_lora_encoder_resume.yaml",
+    "config": "llm2seq_final/configs/phase2_lora_encoder_resume.yaml",
     "checkpoint": "runs/h200_llm2seq_phase2_lora_encoder/best.pt",
     "base_checkpoint": null,
-    "test_file": "llm2seq_h200/data/processed/test.jsonl",
-    "output_dir": "llm2seq_h200/eval_outputs/full_test_phase2_main",
+    "test_file": "llm2seq_final/data/processed/test.jsonl",
+    "output_dir": "llm2seq_final/eval_outputs/full_test_phase2_main",
     "decode_mode": "autoregressive",
     "limit": -1,
     "max_new_tokens": null,
@@ -20,7 +20,7 @@
   },
   "base_checkpoint": null,
   "checkpoint": "runs/h200_llm2seq_phase2_lora_encoder/best.pt",
-  "config": "llm2seq_h200/configs/phase2_lora_encoder_resume.yaml",
-  "test_file": "llm2seq_h200/data/processed/test.jsonl",
-  "output_dir": "llm2seq_h200/eval_outputs/full_test_phase2_main"
+  "config": "llm2seq_final/configs/phase2_lora_encoder_resume.yaml",
+  "test_file": "llm2seq_final/data/processed/test.jsonl",
+  "output_dir": "llm2seq_final/eval_outputs/full_test_phase2_main"
 }
