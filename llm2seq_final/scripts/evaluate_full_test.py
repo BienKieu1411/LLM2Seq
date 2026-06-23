@@ -240,6 +240,7 @@ def aggregate_mtp_metrics(metrics_list: List[Dict[str, Any]]) -> Dict[str, Any]:
         "emitted_tokens",
         "speedup_vs_autoregressive",
         "num_steps",
+        "fallback_after_mtp_steps",
     ]
     result: Dict[str, Any] = {}
     for key in numeric_keys:
@@ -264,6 +265,10 @@ def aggregate_mtp_metrics(metrics_list: List[Dict[str, Any]]) -> Dict[str, Any]:
         ]
 
     result["mtp_verified_with_main"] = all(bool(metrics.get("verified_with_main", False)) for metrics in metrics_list)
+    result["mtp_fallback_to_autoregressive_rate"] = round(
+        100.0 * safe_mean([1.0 if metrics.get("fallback_to_autoregressive") else 0.0 for metrics in metrics_list]),
+        6,
+    )
     return result
 
 
@@ -387,6 +392,9 @@ def main() -> None:
     parser.add_argument("--top_p", type=float, default=None)
     parser.add_argument("--repetition_penalty", type=float, default=None)
     parser.add_argument("--no_repeat_ngram_size", type=int, default=None)
+    parser.add_argument("--mtp_fallback_to_autoregressive", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--mtp_fallback_after_steps", type=int, default=None)
+    parser.add_argument("--mtp_fallback_min_emitted_length", type=float, default=None)
     parser.add_argument("--compute_bertscore", action="store_true")
     parser.add_argument("--bertscore_model_type", default="xlm-roberta-large")
     args = parser.parse_args()
@@ -459,6 +467,9 @@ def main() -> None:
         "top_p": float(generation_value(args, raw_cfg, "top_p", 1.0)),
         "repetition_penalty": float(generation_value(args, raw_cfg, "repetition_penalty", 1.15)),
         "no_repeat_ngram_size": int(generation_value(args, raw_cfg, "no_repeat_ngram_size", 3)),
+        "mtp_fallback_to_autoregressive": bool(generation_value(args, raw_cfg, "mtp_fallback_to_autoregressive", False)),
+        "mtp_fallback_after_steps": int(generation_value(args, raw_cfg, "mtp_fallback_after_steps", 1)),
+        "mtp_fallback_min_emitted_length": float(generation_value(args, raw_cfg, "mtp_fallback_min_emitted_length", 3.8)),
     }
     if args.decode_mode == "mtp_verified":
         if model.mtp_module is None:
@@ -507,6 +518,9 @@ def main() -> None:
                     top_p=generation_settings["top_p"],
                     repetition_penalty=generation_settings["repetition_penalty"],
                     no_repeat_ngram_size=generation_settings["no_repeat_ngram_size"],
+                    fallback_to_autoregressive=generation_settings["mtp_fallback_to_autoregressive"],
+                    fallback_after_steps=generation_settings["mtp_fallback_after_steps"],
+                    fallback_min_emitted_length=generation_settings["mtp_fallback_min_emitted_length"],
                     eos_token_id=tokenizer.eos_token_id,
                     pad_token_id=tokenizer.pad_token_id,
                     bos_token_id=tokenizer.bos_token_id or tokenizer.eos_token_id or tokenizer.pad_token_id,

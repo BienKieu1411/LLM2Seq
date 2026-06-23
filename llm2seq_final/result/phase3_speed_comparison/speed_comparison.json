@@ -1,0 +1,73 @@
+{
+  "summary": {
+    "real_decode_tokens_per_second_speedup": 0.637464,
+    "real_decode_examples_per_second_speedup": 0.63747,
+    "wall_clock_tokens_per_second_speedup": 0.637893,
+    "latency_mean_speedup": 0.63747,
+    "latency_p95_speedup": 0.542721,
+    "latency_mean_change_percent": 56.87,
+    "latency_p95_change_percent": 84.2567,
+    "tokens_per_decode_step_gain": 2.450036,
+    "mtp_theoretical_decode_step_speedup": 2.498872,
+    "mtp_acceptance_rate_mean": 0.132475,
+    "mtp_average_accepted_length_mean": 1.529902,
+    "mtp_average_emitted_length_mean": 2.498872
+  },
+  "main": {
+    "decode_mode": "autoregressive",
+    "decode_generated_tokens_per_second": 114.739,
+    "decode_examples_per_second": 1.43442,
+    "generated_tokens_per_second": 114.469,
+    "latency_seconds_mean": 0.697146,
+    "latency_seconds_p95": 1.170585,
+    "tokens_per_decode_step": 1.0,
+    "peak_gpu_memory_mb": 6189.515
+  },
+  "mtp_verified": {
+    "decode_mode": "mtp_verified",
+    "decode_generated_tokens_per_second": 73.142,
+    "decode_examples_per_second": 0.9144,
+    "generated_tokens_per_second": 73.019,
+    "latency_seconds_mean": 1.093613,
+    "latency_seconds_p95": 2.156881,
+    "tokens_per_decode_step": 2.450036,
+    "peak_gpu_memory_mb": 6413.671
+  },
+  "quality_delta": {
+    "rouge1": {
+      "main": 48.3643,
+      "mtp_verified": 48.3643,
+      "delta": 0.0
+    },
+    "rouge2": {
+      "main": 15.5403,
+      "mtp_verified": 15.5403,
+      "delta": 0.0
+    },
+    "rougeL": {
+      "main": 29.0525,
+      "mtp_verified": 29.0525,
+      "delta": 0.0
+    },
+    "rougeLsum": {
+      "main": 29.0525,
+      "mtp_verified": 29.0525,
+      "delta": 0.0
+    },
+    "bleu": {
+      "main": 3.4325,
+      "mtp_verified": 3.4325,
+      "delta": 0.0
+    },
+    "chrf": {
+      "main": 15.4475,
+      "mtp_verified": 15.4475,
+      "delta": 0.0
+    }
+  },
+  "files": {
+    "main_metrics": "llm2seq_h200/eval_outputs/full_test_phase2_main/metrics.json",
+    "mtp_metrics": "llm2seq_h200/eval_outputs/full_test_phase3_mtp_verified/metrics.json"
+  },
+  "note": "Use real_decode_tokens_per_second_speedup and latency_*_speedup as the real measured speedup. mtp_theoretical_decode_step_speedup only measures fewer verifier steps, not full serving latency."
+}

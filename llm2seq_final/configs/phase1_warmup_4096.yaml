@@ -60,9 +60,9 @@ training:
   log_every_steps: 5
 
 data:
-  train_file: llm2seq_h200/data/processed/train.jsonl
-  eval_file: llm2seq_h200/data/processed/validation.jsonl
-  test_file: llm2seq_h200/data/processed/test.jsonl
+  train_file: data/processed/train.jsonl
+  eval_file: data/processed/validation.jsonl
+  test_file: data/processed/test.jsonl
   source_prefix: "Tóm tắt văn bản sau:\n"
   max_source_length: 3072
   max_target_length: 384

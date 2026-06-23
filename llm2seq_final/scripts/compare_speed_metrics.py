@@ -69,6 +69,7 @@ def build_comparison(main_metrics: Dict[str, Any], mtp_metrics: Dict[str, Any]) 
             "mtp_acceptance_rate_mean": round(get_float(mtp_metrics, "mtp_acceptance_rate_mean"), 6),
             "mtp_average_accepted_length_mean": round(get_float(mtp_metrics, "mtp_average_accepted_length_mean"), 6),
             "mtp_average_emitted_length_mean": round(get_float(mtp_metrics, "mtp_average_emitted_length_mean"), 6),
+            "mtp_fallback_to_autoregressive_rate": round(get_float(mtp_metrics, "mtp_fallback_to_autoregressive_rate"), 6),
         },
         "main": {
             "decode_mode": main_metrics.get("decode_mode"),
@@ -89,6 +90,7 @@ def build_comparison(main_metrics: Dict[str, Any], mtp_metrics: Dict[str, Any]) 
             "latency_seconds_p95": round(mtp_latency_p95, 6),
             "tokens_per_decode_step": round(mtp_step_tokens, 6),
             "peak_gpu_memory_mb": round(get_float(mtp_metrics, "peak_gpu_memory_mb"), 3),
+            "fallback_to_autoregressive_rate": round(get_float(mtp_metrics, "mtp_fallback_to_autoregressive_rate"), 6),
         },
         "quality_delta": {
             "rouge1": metric_delta(main_metrics, mtp_metrics, "rouge1"),

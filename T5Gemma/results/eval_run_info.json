@@ -1,0 +1,20 @@
+{
+  "adapter": "runs/t5gemma2_1b_1b_lora_wikilingua/best_adapter",
+  "base_model": "google/t5gemma-2-1b-1b",
+  "device": "cuda",
+  "torch": "2.6.0+cu124",
+  "cuda_available": true,
+  "generation": {
+    "max_new_tokens": 256,
+    "min_new_tokens": 32,
+    "num_beams": 1,
+    "do_sample": false,
+    "temperature": 0.0,
+    "top_k": 0,
+    "top_p": 1.0,
+    "repetition_penalty": 1.15,
+    "no_repeat_ngram_size": 3
+  },
+  "metrics_file": "T5Gemma/eval_outputs/full_test/metrics.json",
+  "predictions_file": "T5Gemma/eval_outputs/full_test/predictions.jsonl"
+}

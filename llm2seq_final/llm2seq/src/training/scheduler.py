@@ -54,6 +54,7 @@ def build_optimizer_and_scheduler(
     encoder_lr: float = 1e-5,
     adaptor_lr: float = 2e-4,
     decoder_lr: float = 2e-4,
+    mtp_lr: float | None = None,
     weight_decay: float = 0.01,
     warmup_steps: int = 1000,
     max_steps: int = 50000,
@@ -65,13 +66,15 @@ def build_optimizer_and_scheduler(
     Parameter groups:
     1. Encoder parameters (lowest LR, possibly frozen).
     2. Adaptor parameters.
-    3. Decoder + LM head + MTP parameters.
+    3. MTP parameters.
+    4. Decoder + LM head parameters.
 
     Args:
         model: The LLM2Seq model.
         encoder_lr: Learning rate for encoder.
         adaptor_lr: Learning rate for adaptor.
-        decoder_lr: Learning rate for decoder + LM head + MTP.
+        decoder_lr: Learning rate for decoder + LM head.
+        mtp_lr: Learning rate for MTP heads/blocks. Defaults to decoder_lr.
         weight_decay: Weight decay coefficient.
         warmup_steps: Number of warmup steps.
         max_steps: Total number of training steps.
@@ -83,7 +86,10 @@ def build_optimizer_and_scheduler(
     # Classify parameters into groups
     encoder_params = []
     adaptor_params = []
+    mtp_params = []
     decoder_params = []
+    if mtp_lr is None:
+        mtp_lr = decoder_lr
 
     no_decay_keywords = {"bias", "layernorm", "layer_norm", "rmsnorm"}
 
@@ -98,8 +104,11 @@ def build_optimizer_and_scheduler(
         elif name.startswith("adaptor."):
             group = adaptor_params
             lr = adaptor_lr
+        elif name.startswith("mtp_module."):
+            group = mtp_params
+            lr = mtp_lr
         else:
-            # decoder, lm_head, mtp_module
+            # decoder, lm_head
             group = decoder_params
             lr = decoder_lr
 
@@ -109,11 +118,16 @@ def build_optimizer_and_scheduler(
         group.append({
             "params": [param],
             "lr": lr,
+            "component": "encoder" if group is encoder_params else (
+                "adaptor" if group is adaptor_params else (
+                    "mtp" if group is mtp_params else "decoder"
+                )
+            ),
             "weight_decay": weight_decay if apply_wd else 0.0,
         })
 
     # Flatten into param groups
-    param_groups = encoder_params + adaptor_params + decoder_params
+    param_groups = encoder_params + adaptor_params + mtp_params + decoder_params
 
     if not param_groups:
         raise ValueError("No trainable parameters found!")

@@ -25,6 +25,7 @@ echo "Log: ${log_file}"
   --adapter "${adapter_path}" \
   --test_file "${test_file}" \
   --output_dir "${EVAL_DIR}" \
+  --batch_size 64 \
   --limit "${EVAL_LIMIT}" \
   2>&1 | tee "${log_file}"
 

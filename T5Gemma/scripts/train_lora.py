@@ -107,10 +107,15 @@ class SummarizationDataset(Dataset):
         )
         labels = self.tokenizer(
             text_target=row["target"],
-            max_length=self.max_target_length,
+            max_length=self.max_target_length - 1, # Leave room for EOS
             truncation=True,
         )
-        model_inputs["labels"] = labels["input_ids"]
+        label_ids = labels["input_ids"]
+        if self.tokenizer.eos_token_id is not None:
+            if not label_ids or label_ids[-1] != self.tokenizer.eos_token_id:
+                label_ids.append(self.tokenizer.eos_token_id)
+                
+        model_inputs["labels"] = label_ids
         return model_inputs
 
 

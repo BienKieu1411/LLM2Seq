@@ -95,11 +95,22 @@ class CascadedMTPBlock(nn.Module):
         # Self-attention with residual
         residual = h
         h_norm = self.self_attn_norm(h)
-        h_attn, _ = self.self_attn(
-            h_norm, h_norm, h_norm,
-            attn_mask=causal_mask,
-            need_weights=False,
-        )
+        if not self.training and h_norm.size(1) == 1 and causal_mask is None:
+            # Exact length-1 fast path for inference. With a single query/key,
+            # attention weight is 1, so MHA reduces to V projection + out_proj.
+            embed_dim = self.hidden_size
+            in_proj_weight = self.self_attn.in_proj_weight
+            in_proj_bias = self.self_attn.in_proj_bias
+            v_weight = in_proj_weight[2 * embed_dim : 3 * embed_dim]
+            v_bias = None if in_proj_bias is None else in_proj_bias[2 * embed_dim : 3 * embed_dim]
+            h_attn = F.linear(h_norm, v_weight, v_bias)
+            h_attn = self.self_attn.out_proj(h_attn)
+        else:
+            h_attn, _ = self.self_attn(
+                h_norm, h_norm, h_norm,
+                attn_mask=causal_mask,
+                need_weights=False,
+            )
         h = residual + h_attn
 
         # FFN with residual

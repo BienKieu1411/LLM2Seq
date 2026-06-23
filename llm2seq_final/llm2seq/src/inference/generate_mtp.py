@@ -29,6 +29,9 @@ def mtp_generate(
     eos_token_id: Optional[int] = None,
     pad_token_id: Optional[int] = None,
     bos_token_id: Optional[int] = None,
+    fallback_to_autoregressive: bool = False,
+    fallback_after_steps: int = 1,
+    fallback_min_emitted_length: float = 3.8,
 ) -> dict:
     """
     MTP-accelerated generation.
@@ -78,6 +81,9 @@ def mtp_generate(
             eos_token_id=eos_token_id,
             pad_token_id=pad_token_id,
             bos_token_id=bos_token_id,
+            fallback_to_autoregressive=fallback_to_autoregressive,
+            fallback_after_steps=fallback_after_steps,
+            fallback_min_emitted_length=fallback_min_emitted_length,
         )
 
     return _mtp_generate_confidence(
@@ -102,6 +108,9 @@ def _mtp_generate_confidence(
     eos_token_id: Optional[int],
     pad_token_id: Optional[int],
     bos_token_id: Optional[int],
+    fallback_to_autoregressive: bool = False,
+    fallback_after_steps: int = 1,
+    fallback_min_emitted_length: float = 3.8,
 ) -> dict:
     """Legacy confidence-threshold MTP decoding without main-head verification."""
     device = input_ids.device
@@ -205,8 +214,11 @@ def _mtp_generate_verified(
     eos_token_id: Optional[int],
     pad_token_id: Optional[int],
     bos_token_id: Optional[int],
+    fallback_to_autoregressive: bool = False,
+    fallback_after_steps: int = 1,
+    fallback_min_emitted_length: float = 3.8,
 ) -> dict:
-    """Main-head-constrained greedy MTP decoding."""
+    """Main-head-constrained greedy MTP decoding with KV caching."""
     if input_ids.size(0) > 1:
         results = []
         for i in range(input_ids.size(0)):
@@ -222,6 +234,9 @@ def _mtp_generate_verified(
                     eos_token_id=eos_token_id,
                     pad_token_id=pad_token_id,
                     bos_token_id=bos_token_id,
+                    fallback_to_autoregressive=fallback_to_autoregressive,
+                    fallback_after_steps=fallback_after_steps,
+                    fallback_min_emitted_length=fallback_min_emitted_length,
                 )
             )
         max_len = max(result["generated_ids"].size(1) for result in results)
@@ -252,32 +267,40 @@ def _mtp_generate_verified(
     h_mem, memory_attention_mask = model.encode(
         input_ids, attention_mask, return_attention_mask=True
     )
+    
     generated = torch.full((1, 1), bos_token_id, dtype=torch.long, device=device)
+    generated_token_list = [int(bos_token_id)]
+    current_input_ids = generated
+    past_key_values = None
+    
     num_steps = 0
     total_generated = 0
     accepted_lengths: List[int] = []
     emitted_lengths: List[int] = []
     num_mtp_heads = model.cfg.mtp_num_heads
+    fallback_triggered = False
+    fallback_after_mtp_steps = None
 
     while total_generated < max_new_tokens:
-        decoder_states, _ = model.decoder(
-            input_ids=generated,
+        decoder_states, past_key_values = model.decoder(
+            input_ids=current_input_ids,
             encoder_hidden_states=h_mem,
             encoder_attention_mask=memory_attention_mask,
-            use_cache=False,
+            past_key_values=past_key_values,
+            use_cache=True,
         )
         last_hidden = decoder_states[:, -1:, :]
-        main_logits = _apply_greedy_constraints(
+        
+        main_logits = _apply_greedy_constraints_from_list(
             logits=model.lm_head(last_hidden).squeeze(1),
-            generated_prefix=generated,
+            prefix_tokens=generated_token_list,
             generated_count=total_generated,
             min_new_tokens=min_new_tokens,
             repetition_penalty=repetition_penalty,
             no_repeat_ngram_size=no_repeat_ngram_size,
             eos_token_id=eos_token_id,
         )
-        main_token = main_logits.argmax(dim=-1)
-        main_token = main_token.unsqueeze(1)
+        main_token = main_logits.argmax(dim=-1).unsqueeze(1)
 
         from ..models.mtp_heads import ParallelMTPHeads
         from ..models.mtp_cascaded import CascadedMTP
@@ -290,64 +313,135 @@ def _mtp_generate_verified(
             draft_results = []
 
         draft_tokens = [draft["token_ids"] for draft in draft_results]
+        
+        if not draft_tokens:
+            generated = torch.cat([generated, main_token], dim=1)
+            generated_token_list.append(int(main_token.item()))
+            total_generated += 1
+            current_input_ids = main_token
+            accepted_lengths.append(1)
+            emitted_lengths.append(1)
+            num_steps += 1
+            if eos_token_id is not None and main_token.item() == eos_token_id:
+                break
+            continue
+
         candidate = torch.cat([main_token] + draft_tokens, dim=1)
         remaining = max_new_tokens - total_generated
         candidate = candidate[:, :remaining]
 
-        verify_input = torch.cat([generated, candidate], dim=1)
-        verify_states, _ = model.decoder(
-            input_ids=verify_input,
+        verify_states, new_past = model.decoder(
+            input_ids=candidate,
             encoder_hidden_states=h_mem,
             encoder_attention_mask=memory_attention_mask,
-            use_cache=False,
+            past_key_values=past_key_values,
+            use_cache=True,
         )
-        start = generated.size(1) - 1
-        verify_logits = model.lm_head(verify_states[:, start : start + candidate.size(1), :])
-        verifier_tokens: List[torch.Tensor] = []
+        verify_logits = model.lm_head(verify_states)
+
+        accepted_drafts = 0
+        verifier_tokens = []
+        candidate_token_list = [int(token) for token in candidate[0].tolist()]
+
         for pos in range(candidate.size(1)):
-            prefix = verify_input[:, : start + pos + 1]
-            constrained_logits = _apply_greedy_constraints(
+            constrained_verify = _apply_greedy_constraints_from_list(
                 logits=verify_logits[:, pos, :],
-                generated_prefix=prefix,
-                generated_count=total_generated + pos,
+                prefix_tokens=generated_token_list + candidate_token_list[: pos + 1],
+                generated_count=total_generated + 1 + pos,
                 min_new_tokens=min_new_tokens,
                 repetition_penalty=repetition_penalty,
                 no_repeat_ngram_size=no_repeat_ngram_size,
                 eos_token_id=eos_token_id,
             )
-            verifier_tokens.append(constrained_logits.argmax(dim=-1, keepdim=True))
-        verifier_tokens = torch.cat(verifier_tokens, dim=1)
+            v_tok = constrained_verify.argmax(dim=-1).unsqueeze(1)
+            verifier_tokens.append(v_tok)
 
-        accepted_tokens: List[torch.Tensor] = []
-        accepted_drafts = 0
-        for pos in range(candidate.size(1)):
-            verifier_token = verifier_tokens[:, pos : pos + 1]
-            candidate_token = candidate[:, pos : pos + 1]
-            if pos == 0:
-                accepted_tokens.append(verifier_token)
-            elif torch.equal(candidate_token, verifier_token):
-                accepted_tokens.append(candidate_token)
-                accepted_drafts += 1
-            else:
-                accepted_tokens.append(verifier_token)
-                break
+            if pos < candidate.size(1) - 1:
+                if torch.equal(candidate[:, pos+1:pos+2], v_tok):
+                    accepted_drafts += 1
+                else:
+                    break
 
-            if eos_token_id is not None and accepted_tokens[-1].item() == eos_token_id:
-                break
+        accepted_cand = candidate[:, :1 + accepted_drafts]
+        corrected_tok = verifier_tokens[accepted_drafts]
 
+        emitted_this_step = [accepted_cand]
+        eos_found = False
+        
+        if eos_token_id is not None:
+            for i in range(accepted_cand.size(1)):
+                if accepted_cand[0, i].item() == eos_token_id:
+                    accepted_cand = accepted_cand[:, :i+1]
+                    emitted_this_step = [accepted_cand]
+                    corrected_tok = None
+                    eos_found = True
+                    break
+        
+        if not eos_found:
+            emitted_this_step.append(corrected_tok)
+            if eos_token_id is not None and corrected_tok.item() == eos_token_id:
+                eos_found = True
+
+        emitted_tensor = torch.cat(emitted_this_step, dim=1)
+
+        if total_generated + emitted_tensor.size(1) > max_new_tokens:
+            emitted_tensor = emitted_tensor[:, :max_new_tokens - total_generated]
+            corrected_tok = emitted_tensor[:, -1:]
+            
+        generated = torch.cat([generated, emitted_tensor], dim=1)
+        generated_token_list.extend(int(token) for token in emitted_tensor[0].tolist())
+        total_generated += emitted_tensor.size(1)
+        
         accepted_lengths.append(1 + accepted_drafts)
-        emitted_lengths.append(len(accepted_tokens))
-        for token in accepted_tokens:
-            generated = torch.cat([generated, token], dim=1)
-            total_generated += 1
-            if eos_token_id is not None and token.item() == eos_token_id:
-                break
-            if total_generated >= max_new_tokens:
-                break
-
+        emitted_lengths.append(emitted_tensor.size(1))
         num_steps += 1
-        if eos_token_id is not None and generated[:, -1].item() == eos_token_id:
+
+        if eos_found or total_generated >= max_new_tokens:
             break
+
+        keep_length = generated.size(1) - emitted_tensor.size(1) + accepted_cand.size(1)
+
+        past_key_values = _slice_decoder_cache(new_past, keep_length)
+
+        current_input_ids = corrected_tok
+
+        if (
+            fallback_to_autoregressive
+            and fallback_after_steps > 0
+            and num_steps >= fallback_after_steps
+            and total_generated < max_new_tokens
+            and safe_average(emitted_lengths) < fallback_min_emitted_length
+        ):
+            fallback_triggered = True
+            fallback_after_mtp_steps = num_steps
+            (
+                generated,
+                generated_token_list,
+                past_key_values,
+                current_input_ids,
+                total_generated,
+                num_steps,
+                eos_reached,
+            ) = _finish_autoregressive_from_state(
+                model=model,
+                h_mem=h_mem,
+                memory_attention_mask=memory_attention_mask,
+                generated=generated,
+                generated_token_list=generated_token_list,
+                current_input_ids=current_input_ids,
+                past_key_values=past_key_values,
+                total_generated=total_generated,
+                num_steps=num_steps,
+                max_new_tokens=max_new_tokens,
+                min_new_tokens=min_new_tokens,
+                repetition_penalty=repetition_penalty,
+                no_repeat_ngram_size=no_repeat_ngram_size,
+                eos_token_id=eos_token_id,
+            )
+            emitted_lengths.extend([1] * max(0, num_steps - len(emitted_lengths)))
+            accepted_lengths.extend([1] * max(0, num_steps - len(accepted_lengths)))
+            if eos_reached or total_generated >= max_new_tokens:
+                break
 
     metrics = compute_acceptance_metrics(accepted_lengths, num_mtp_heads)
     metrics["num_steps"] = num_steps
@@ -355,12 +449,160 @@ def _mtp_generate_verified(
     metrics["average_emitted_length"] = sum(emitted_lengths) / max(1, len(emitted_lengths))
     metrics["emitted_tokens"] = total_generated
     metrics["verified_with_main"] = True
+    metrics["fallback_to_autoregressive"] = fallback_triggered
+    metrics["fallback_after_mtp_steps"] = fallback_after_mtp_steps
 
     return {
         "generated_ids": generated[:, 1:],
         "num_steps": num_steps,
         "metrics": metrics,
     }
+
+
+def safe_average(values: List[int]) -> float:
+    return sum(values) / max(1, len(values))
+
+
+def _slice_decoder_cache(past_key_values, keep_length: int):
+    """Slice decoder self-attention cache while preserving cross-attention cache."""
+    if past_key_values is None:
+        return None
+
+    if hasattr(past_key_values, "key_cache"):
+        for layer_idx in range(len(past_key_values.key_cache)):
+            past_key_values.key_cache[layer_idx] = past_key_values.key_cache[layer_idx][:, :, :keep_length, :]
+            past_key_values.value_cache[layer_idx] = past_key_values.value_cache[layer_idx][:, :, :keep_length, :]
+        if hasattr(past_key_values, "_seen_tokens"):
+            past_key_values._seen_tokens = keep_length
+        return past_key_values
+
+    if isinstance(past_key_values, list):
+        sliced = []
+        for layer_past in past_key_values:
+            if isinstance(layer_past, dict):
+                layer_cache = {}
+                self_cache = layer_past.get("self")
+                if self_cache is not None:
+                    k, v = self_cache
+                    layer_cache["self"] = (
+                        k[:, :, :keep_length, :].contiguous(),
+                        v[:, :, :keep_length, :].contiguous(),
+                    )
+                if layer_past.get("cross") is not None:
+                    layer_cache["cross"] = layer_past["cross"]
+                sliced.append(layer_cache)
+            else:
+                k, v = layer_past
+                sliced.append(
+                    (
+                        k[:, :, :keep_length, :].contiguous(),
+                        v[:, :, :keep_length, :].contiguous(),
+                    )
+                )
+        return sliced
+
+    sliced_tuple = []
+    for layer_past in past_key_values:
+        k, v = layer_past
+        sliced_tuple.append(
+            (
+                k[:, :, :keep_length, :].contiguous(),
+                v[:, :, :keep_length, :].contiguous(),
+            )
+        )
+    return tuple(sliced_tuple)
+
+
+@torch.no_grad()
+def _finish_autoregressive_from_state(
+    model,
+    h_mem: torch.Tensor,
+    memory_attention_mask: torch.Tensor,
+    generated: torch.Tensor,
+    generated_token_list: List[int],
+    current_input_ids: torch.Tensor,
+    past_key_values,
+    total_generated: int,
+    num_steps: int,
+    max_new_tokens: int,
+    min_new_tokens: int,
+    repetition_penalty: float,
+    no_repeat_ngram_size: int,
+    eos_token_id: Optional[int],
+):
+    """Continue with standard greedy decoding from the current verified state."""
+    eos_reached = False
+    while total_generated < max_new_tokens:
+        decoder_states, past_key_values = model.decoder(
+            input_ids=current_input_ids,
+            encoder_hidden_states=h_mem,
+            encoder_attention_mask=memory_attention_mask,
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
+        logits = _apply_greedy_constraints_from_list(
+            logits=model.lm_head(decoder_states[:, -1, :]),
+            prefix_tokens=generated_token_list,
+            generated_count=total_generated,
+            min_new_tokens=min_new_tokens,
+            repetition_penalty=repetition_penalty,
+            no_repeat_ngram_size=no_repeat_ngram_size,
+            eos_token_id=eos_token_id,
+        )
+        next_token = logits.argmax(dim=-1, keepdim=True)
+        generated = torch.cat([generated, next_token], dim=1)
+        generated_token_list.append(int(next_token.item()))
+        current_input_ids = next_token
+        total_generated += 1
+        num_steps += 1
+        if eos_token_id is not None and int(next_token.item()) == eos_token_id:
+            eos_reached = True
+            break
+
+    return (
+        generated,
+        generated_token_list,
+        past_key_values,
+        current_input_ids,
+        total_generated,
+        num_steps,
+        eos_reached,
+    )
+
+
+def _apply_greedy_constraints_from_list(
+    logits: torch.Tensor,
+    prefix_tokens: List[int],
+    generated_count: int,
+    min_new_tokens: int,
+    repetition_penalty: float,
+    no_repeat_ngram_size: int,
+    eos_token_id: Optional[int],
+) -> torch.Tensor:
+    """Single-sample fast path for deterministic decoding constraints."""
+    constrained = logits.clone()
+
+    if eos_token_id is not None and generated_count + 1 < min_new_tokens:
+        constrained[:, eos_token_id] = float("-inf")
+
+    if repetition_penalty and repetition_penalty != 1.0:
+        for token_id in set(prefix_tokens):
+            if constrained[0, token_id] < 0:
+                constrained[0, token_id] *= repetition_penalty
+            else:
+                constrained[0, token_id] /= repetition_penalty
+
+    if no_repeat_ngram_size and len(prefix_tokens) >= no_repeat_ngram_size:
+        ngram_prefix = tuple(prefix_tokens[-(no_repeat_ngram_size - 1):])
+        blocked_tokens = []
+        for i in range(len(prefix_tokens) - no_repeat_ngram_size + 1):
+            ngram = tuple(prefix_tokens[i: i + no_repeat_ngram_size])
+            if ngram[:-1] == ngram_prefix:
+                blocked_tokens.append(ngram[-1])
+        if blocked_tokens:
+            constrained[0, blocked_tokens] = float("-inf")
+
+    return constrained
 
 
 def _apply_greedy_constraints(

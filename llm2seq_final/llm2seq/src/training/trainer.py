@@ -408,6 +408,49 @@ def set_training_mode(model: LLM2Seq, training_cfg: Dict[str, Any]) -> None:
             model.mtp_module.train()
 
 
+def get_mtp_self_distill_final_weight(raw_cfg: Dict[str, Any], cfg: LLM2SeqConfig) -> float:
+    """Return the configured final KL weight for MTP self-distillation."""
+    return float(
+        raw_cfg.get("mtp", {}).get(
+            "self_distill_loss_weight",
+            getattr(cfg, "mtp_self_distill_loss_weight", 0.5),
+        )
+    )
+
+
+def update_mtp_self_distill_schedule(
+    cfg: LLM2SeqConfig,
+    raw_cfg: Dict[str, Any],
+    global_step: int,
+    max_steps: int,
+) -> float:
+    """
+    Apply an optional KL-weight curriculum for Phase 3 MTP-D training.
+
+    MTP heads start from random blocks. A short CE-only period lets the draft
+    heads learn token prediction before asking them to match the main-head
+    top-k distribution.
+    """
+    if not (cfg.use_mtp and cfg.mtp_self_distillation):
+        return 0.0
+
+    mtp_cfg = raw_cfg.get("mtp", {})
+    final_weight = get_mtp_self_distill_final_weight(raw_cfg, cfg)
+    start_ratio = float(mtp_cfg.get("self_distill_start_ratio", 0.0))
+    warmup_ratio = float(mtp_cfg.get("self_distill_warmup_ratio", 0.0))
+    progress = float(global_step) / float(max(1, max_steps))
+
+    if progress < start_ratio:
+        weight = 0.0
+    elif warmup_ratio > 0.0 and progress < start_ratio + warmup_ratio:
+        weight = final_weight * ((progress - start_ratio) / max(warmup_ratio, 1e-8))
+    else:
+        weight = final_weight
+
+    cfg.mtp_self_distill_loss_weight = max(0.0, float(weight))
+    return cfg.mtp_self_distill_loss_weight
+
+
 def validate_config(raw_cfg: Dict[str, Any]) -> None:
     """Fail fast for incompatible training-stage/model combinations."""
     model_cfg = raw_cfg.get("model", {})
@@ -631,6 +674,7 @@ def train(
         encoder_lr=float(training_cfg.get("encoder_lr", 1e-5)),
         adaptor_lr=float(training_cfg.get("adaptor_lr", 2e-4)),
         decoder_lr=float(training_cfg.get("decoder_lr", 2e-4)),
+        mtp_lr=float(training_cfg.get("mtp_lr", training_cfg.get("decoder_lr", 2e-4))),
         weight_decay=float(training_cfg.get("weight_decay", 0.01)),
         warmup_steps=warmup_steps,
         max_steps=max_steps,
@@ -696,6 +740,29 @@ def train(
     logger.info(f"  Eval every: {eval_every} optimizer steps")
     logger.info(f"  Save every: {save_every} optimizer steps")
     logger.info(f"  Mixed precision: fp16={use_fp16}, bf16={use_bf16}")
+    component_lrs: Dict[str, float] = {}
+    for group in optimizer.param_groups:
+        component = str(group.get("component", "params"))
+        component_lrs.setdefault(component, float(group["lr"]))
+    logger.info(
+        "  Initial optimizer LRs: %s",
+        ", ".join(f"{name}={lr:.2e}" for name, lr in sorted(component_lrs.items())),
+    )
+    if cfg.use_mtp and cfg.mtp_train_only:
+        mtp_cfg = raw_cfg.get("mtp", {})
+        logger.info(
+            "  Training objective: MTP-only loss = %.4g * MTP_CE + %.4g * MTP_KL; "
+            "main CE is logged as frozen-path diagnostic only",
+            cfg.mtp_loss_weight,
+            get_mtp_self_distill_final_weight(raw_cfg, cfg) if cfg.mtp_self_distillation else 0.0,
+        )
+        if cfg.mtp_self_distillation:
+            logger.info(
+                "  MTP self-distill KL schedule: start_ratio=%.3f warmup_ratio=%.3f final_weight=%.4g",
+                float(mtp_cfg.get("self_distill_start_ratio", 0.0)),
+                float(mtp_cfg.get("self_distill_warmup_ratio", 0.0)),
+                get_mtp_self_distill_final_weight(raw_cfg, cfg),
+            )
 
     set_training_mode(model, training_cfg)
     running_loss = 0.0
@@ -717,6 +784,12 @@ def train(
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
             # Forward
+            current_mtp_kl_weight = update_mtp_self_distill_schedule(
+                cfg,
+                raw_cfg,
+                global_step,
+                max_steps,
+            )
             with autocast(device_type=device.type, dtype=amp_dtype, enabled=(use_fp16 or use_bf16)):
                 outputs = model(
                     input_ids=batch["input_ids"],
@@ -764,8 +837,11 @@ def train(
                     log_parts = [
                         f"Step {global_step}/{max_steps}",
                         f"Loss: {avg_loss:.4f}",
-                        f"CE: {avg_ce:.4f}",
                     ]
+                    if cfg.use_mtp and cfg.mtp_train_only:
+                        log_parts.append(f"Main_CE(frozen): {avg_ce:.4f}")
+                    else:
+                        log_parts.append(f"CE: {avg_ce:.4f}")
                     if cfg.use_distillation:
                         log_parts.append(f"KD: {avg_kd:.4f}")
                     if cfg.use_mtp:
@@ -773,10 +849,12 @@ def train(
                         log_parts.append(f"MTP_CE: {avg_mtp_ce:.4f}")
                         if cfg.mtp_self_distillation:
                             log_parts.append(f"MTP_KL: {avg_mtp_kl:.4f}")
-                    log_parts.extend([
-                        f"LR: {lr:.2e}",
-                        f"Epoch: {epoch}/{num_train_epochs}",
-                    ])
+                            log_parts.append(f"MTP_KL_w: {current_mtp_kl_weight:.3g}")
+                    if cfg.use_mtp and cfg.mtp_train_only:
+                        log_parts.append(f"MTP_LR: {lr:.2e}")
+                    else:
+                        log_parts.append(f"LR: {lr:.2e}")
+                    log_parts.append(f"Epoch: {epoch}/{num_train_epochs}")
                     logger.info(" | ".join(log_parts))
 
                     running_loss = 0.0
@@ -789,7 +867,12 @@ def train(
 
                 # Evaluation
                 if global_step % eval_every == 0:
+                    scheduled_mtp_kl_weight = getattr(cfg, "mtp_self_distill_loss_weight", 0.0)
+                    if cfg.use_mtp and cfg.mtp_self_distillation:
+                        cfg.mtp_self_distill_loss_weight = get_mtp_self_distill_final_weight(raw_cfg, cfg)
                     eval_loss = evaluate(model, eval_loader, device, amp_dtype, use_fp16 or use_bf16)
+                    if cfg.use_mtp and cfg.mtp_self_distillation:
+                        cfg.mtp_self_distill_loss_weight = scheduled_mtp_kl_weight
                     logger.info(f"Step {global_step} | Eval Loss: {eval_loss:.4f}")
                     set_training_mode(model, training_cfg)
 

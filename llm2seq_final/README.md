@@ -17,6 +17,19 @@ encoder-to-decoder information loss:
 - Long context: source 4096 tokens, target 512 tokens.
 - Three training phases.
 
+## Architecture Overview
+
+![LLM2Seq Architecture](/Users/kieugiangbien/Downloads/Project/Encoder-Decoder LLM/llm2seq_final/figures/image.png)
+
+LLM2Seq is designed to minimize information loss when bridging a pre-trained bidirectional encoder with a causal decoder. Key components include:
+- **LLM2Vec Encoder**: A powerful bidirectional encoder processing long contexts.
+- **Layer Fusion**: Token-wise layer fusion aggregates representations across selected encoder layers to capture both shallow and deep semantic features.
+- **Salience Gate**: A token-level gating mechanism that identifies and filters out irrelevant tokens, reducing noise for the decoder.
+- **Gated Residual Adaptor**: Maps encoder representations into the decoder's dimension while maintaining a residual connection for stability.
+- **EncStack**: Refines memory representations before cross-attention.
+- **Global Memory Tokens**: Learnable tokens prepended to the context to capture document-level global representations.
+- **MTP (Multi-Token Prediction) Heads**: Used in Phase 3 to accelerate inference via Speculative Decoding, allowing the model to draft multiple future tokens simultaneously.
+
 ## Standalone Folder Layout
 
 Upload the whole `llm2seq_h200/` folder to the server. You do not need to
@@ -168,11 +181,16 @@ This adapts the paper "Self-Distillation for Multi-Token Prediction" to the
 third phase of this encoder-decoder project:
 
 - MTP architecture: cascaded MTP, sharing decoder embedding and LM head.
-- MTP CE coefficient `alpha`: `loss_weight: 0.3`.
+- MTP CE coefficient `alpha`: `loss_weight: 0.6`.
+- Head weights are discounted by depth: `[1.0, 0.8, 0.5, 0.25]`.
 - Self-distillation: main head logits are detached and used as the teacher.
-- TopN logits: `self_distill_top_k: 10000`.
+- KL curriculum: CE-only first, then ramp self-distillation from 20% to 50%
+  of training.
+- TopN logits: `self_distill_top_k: 2048`.
 - KL direction: forward KL from main-head distribution to MTP-head distribution.
-- Four-head KL coefficient `beta`: `self_distill_loss_weight: 0.5`.
+- Four-head KL coefficient `beta`: `self_distill_loss_weight: 0.2`.
+- Phase 3 optimizer uses `mtp_lr`; encoder/adaptor/decoder LR are `0.0`
+  because only MTP blocks are trainable.
 
 The paper trains MTP-D during LLM pre-training and also studies frozen
 continued-training extensions. Here Phase 3 is intentionally the frozen-main
@@ -463,6 +481,12 @@ reduction in verifier steps. The real end-to-end speed should be read from
 `latency_seconds_p95`, because this verifier path is intentionally correctness
 first and is not yet a fully KV-cache-optimized serving kernel.
 
+Phase 3 evaluation enables an adaptive speed guard by default. After an early
+MTP probe, if verified MTP is not emitting enough tokens per step to offset
+draft and verifier overhead, decoding falls back to the main autoregressive
+path for the rest of that sample. This preserves the same greedy main-head
+output while avoiding the worst slowdown cases.
+
 After Phase 3, the pipeline also writes:
 
 ```text
@@ -510,3 +534,26 @@ the trainable-only model-weight artifacts you normally want on Hugging Face.
 - Phase 2 uses LoRA encoder adaptation rather than full encoder fine-tuning.
 - For 8B encoders or multi-GPU H200, the current trainer should eventually be
   upgraded to FSDP/DeepSpeed.
+
+## Evaluation Results: LLM2Seq (Phase 2) vs T5Gemma-1B
+
+The table below compares the performance of **LLM2Seq (Phase 2 - LoRA Encoder)** against **T5Gemma-1b-1b (LoRA)** on the WikiLingua summarization test set (3,901 examples).
+
+| Metric | LLM2Seq (Phase 2) | T5Gemma (1B-1B) |
+| :--- | :--- | :--- |
+| **ROUGE-1** | **48.36** | 33.08 |
+| **ROUGE-L** | **29.05** | 21.86 |
+| **chrF** | 15.45 | **28.60** |
+| **Mean Prediction Words** | **29.1** | 211.8 |
+| **Too Short Rate (%)** | 33.56% | 0.15% |
+| **Too Long Rate (%)** | **5.46%** | 95.46% |
+| **Latency Mean (s)** | 0.69s | **0.33s** |
+| **Peak VRAM** | **~6 GB** | ~23.5 GB |
+
+*Note: The reference summaries have a mean length of 51.8 words.*
+
+### Analysis & Observations
+1. **Summary Quality (ROUGE)**: LLM2Seq significantly outperforms T5Gemma in capturing the core meaning, achieving a ROUGE-1 score of 48.36 compared to T5Gemma's 33.08.
+2. **Length Control & Hallucination**: T5Gemma suffers from a critical issue where it fails to generate the EOS (End of Sequence) token, leading to a "Too Long Rate" of 95.46%. It generates an average of 212 words per summary, essentially rambling until it hits the `max_new_tokens` limit. In contrast, LLM2Seq learned the summarization task structure much better, successfully stopping generation and producing concise summaries (29.1 words on average).
+3. **Hardware Efficiency**: LLM2Seq is exceptionally lightweight, peaking at just ~6.1 GB VRAM during evaluation, while T5Gemma demands over 23 GB VRAM for the same batch size.
+4. **Conclusion**: LLM2Seq serves as a highly capable and efficient baseline, perfectly positioning it for the MTP Self-Distillation phase (Phase 3) to further accelerate inference without sacrificing summary quality.

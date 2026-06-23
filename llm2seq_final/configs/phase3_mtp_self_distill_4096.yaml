@@ -20,7 +20,8 @@ model:
   lora_r: 16
   lora_alpha: 32
   lora_dropout: 0.05
-  lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  lora_target_modules:
+    [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
   encoder_torch_dtype: bfloat16
   d_enc: 2048
   d_dec: 1024
@@ -52,24 +53,27 @@ mtp:
   type: cascaded
   num_heads: 4
   train_only: true
-  loss_weight: 0.3
-  head_weights: [1.0, 1.0, 1.0, 1.0]
+  loss_weight: 0.6
+  head_weights: [1.0, 0.8, 0.5, 0.25]
   self_distillation: true
-  self_distill_top_k: 10000
-  self_distill_temperature: 1.0
-  self_distill_loss_weight: 0.5
-  self_distill_head_weights: [1.0, 1.0, 1.0, 1.0]
+  self_distill_top_k: 2048
+  self_distill_temperature: 1.5
+  self_distill_loss_weight: 0.2
+  self_distill_start_ratio: 0.2
+  self_distill_warmup_ratio: 0.3
+  self_distill_head_weights: [1.0, 0.8, 0.5, 0.25]
 
 training:
   stage: h200_phase3_mtp_self_distill
-  num_train_epochs: 4
-  batch_size: 32
-  grad_accum_steps: 2
-  decoder_lr: 1.0e-4
+  num_train_epochs: 6
+  batch_size: 16
+  grad_accum_steps: 4
+  mtp_lr: 5.0e-4
+  decoder_lr: 0.0
   adaptor_lr: 0.0
   encoder_lr: 0.0
-  warmup_ratio: 0.03
-  min_lr_ratio: 0.1
+  warmup_ratio: 0.05
+  min_lr_ratio: 0.15
   weight_decay: 0.01
   max_grad_norm: 1.0
   fp16: false
@@ -84,9 +88,9 @@ training:
   reset_best_eval_loss_on_resume: true
 
 data:
-  train_file: llm2seq_h200/data/processed/train.jsonl
-  eval_file: llm2seq_h200/data/processed/validation.jsonl
-  test_file: llm2seq_h200/data/processed/test.jsonl
+  train_file: data/processed/train.jsonl
+  eval_file: data/processed/validation.jsonl
+  test_file: data/processed/test.jsonl
   source_prefix: "Tóm tắt văn bản sau:\n"
   max_source_length: 3072
   max_target_length: 384
@@ -105,3 +109,9 @@ generation:
   top_p: 1.0
   repetition_penalty: 1.15
   no_repeat_ngram_size: 3
+  # Speed guard: verified MTP is only useful if accepted blocks are long enough
+  # to pay for the extra draft + verifier work. Probe early; if emitted
+  # tokens/step is below this threshold, continue with main-head autoregressive.
+  mtp_fallback_to_autoregressive: true
+  mtp_fallback_after_steps: 1
+  mtp_fallback_min_emitted_length: 3.8

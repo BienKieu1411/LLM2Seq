@@ -84,6 +84,8 @@ class LLM2SeqConfig:
         self.mtp_self_distill_top_k: int = mtp_cfg.get("self_distill_top_k", 10000)
         self.mtp_self_distill_temperature: float = mtp_cfg.get("self_distill_temperature", 1.0)
         self.mtp_self_distill_loss_weight: float = mtp_cfg.get("self_distill_loss_weight", 0.5)
+        self.mtp_self_distill_start_ratio: float = mtp_cfg.get("self_distill_start_ratio", 0.0)
+        self.mtp_self_distill_warmup_ratio: float = mtp_cfg.get("self_distill_warmup_ratio", 0.0)
         self.mtp_self_distill_head_weights: Optional[List[float]] = mtp_cfg.get(
             "self_distill_head_weights", None
         )
