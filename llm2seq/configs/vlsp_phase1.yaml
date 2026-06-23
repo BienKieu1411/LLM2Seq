@@ -1,0 +1,83 @@
+project:
+  name: llm2seq
+  task: summarization
+  output_dir: runs/llm2seq_phase1_warmup_vlsp
+
+huggingface:
+  enabled: true
+  repo_id: null
+  repo_type: model
+  path_in_repo: checkpoints/phase1_warmup_vlsp
+  push_each_epoch: false
+  push_final_best: true
+  keep_local_epoch_checkpoints: 1
+  fail_on_error: true
+
+model:
+  encoder_name: McGill-NLP/LLM2Vec-Sheared-LLaMA-mntp
+  encoder_trainable: false
+  encoder_torch_dtype: bfloat16
+  d_enc: 2048
+  d_dec: 1024
+
+adaptor:
+  type: gated_residual
+  use_layer_fusion: true
+  fusion_type: tokenwise
+  fuse_layers: [-1, -4, -8, -12]
+  use_salience_gate: true
+  use_encstack: true
+  encstack_layers: 4
+  use_global_memory_tokens: true
+  num_global_memory_tokens: 16
+
+small_decoder:
+  num_layers: 8
+  hidden_size: 1024
+  num_heads: 16
+  ffn_size: 4096
+  dropout: 0.1
+  tie_embeddings: true
+  max_seq_len: 1024
+
+training:
+  stage: phase1_warmup_vlsp
+  num_train_epochs: 10
+  batch_size: 2
+  grad_accum_steps: 8
+  decoder_lr: 2.0e-4
+  adaptor_lr: 2.0e-4
+  encoder_lr: 0.0
+  warmup_ratio: 0.05
+  min_lr_ratio: 0.1
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  fp16: false
+  bf16: true
+  tf32: true
+  gradient_checkpointing: false
+  seed: 42
+  log_every_steps: 2
+
+data:
+  train_file: llm2seq/data/processed/vlsp/train.jsonl
+  eval_file: llm2seq/data/processed/vlsp/val.jsonl
+  test_file: llm2seq/data/processed/vlsp/test.jsonl
+  source_prefix: "Tóm tắt các văn bản sau thành một đoạn ngắn gọn:\n"
+  max_source_length: 8192
+  max_target_length: 768
+
+evaluation:
+  metrics: [rouge, latency]
+  eval_every_epochs: 1
+  save_every_epochs: 1
+
+generation:
+  do_sample: false
+  min_new_tokens: 32
+  max_new_tokens: 768
+  temperature: 0.0
+  top_k: 0
+  top_p: 1.0
+  repetition_penalty: 1.15
+  no_repeat_ngram_size: 3

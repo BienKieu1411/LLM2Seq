@@ -315,6 +315,16 @@ class AdapterCheckpointCallback(TrainerCallback):
         epoch_num = max(1, int(round(float(state.epoch or 0.0))))
         epoch_folder = self.output_dir / "epochs" / f"epoch_{epoch_num:03d}_adapter"
         self._save_adapter(model, epoch_folder, state, metrics, tag=f"epoch_{epoch_num:03d}")
+        
+        keep_limit = int(self.cfg.get("huggingface", {}).get("keep_local_epoch_checkpoints", 1))
+        if keep_limit > 0:
+            epochs_dir = self.output_dir / "epochs"
+            if epochs_dir.exists():
+                all_epochs = sorted([d for d in epochs_dir.iterdir() if d.is_dir() and d.name.startswith("epoch_")])
+                for d in all_epochs[:-keep_limit]:
+                    import shutil
+                    shutil.rmtree(d, ignore_errors=True)
+                    logging.info("Deleted old epoch checkpoint to save space: %s", d)
         if self.hf["push_each_epoch"]:
             upload_folder(
                 epoch_folder,
@@ -483,6 +493,12 @@ def main() -> None:
     final_folder = output_dir / "final_adapter"
     callback._save_adapter(model, final_folder, trainer.state, train_result.metrics, tag="final")
     write_json(output_dir / "train_metrics.json", train_result.metrics)
+
+    epochs_dir = output_dir / "epochs"
+    if epochs_dir.exists():
+        import shutil
+        shutil.rmtree(epochs_dir, ignore_errors=True)
+        logging.info("Deleted all epoch checkpoints after phase completion to save disk space.")
 
     if hf["push_final_best"]:
         upload_folder(final_folder, hf, f"{hf['path_in_repo']}/final_adapter", "T5Gemma LoRA final adapter")

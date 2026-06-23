@@ -3,7 +3,7 @@ __pycache__/
 *$py.class
 .venv/
 .env
-llm2seq_h200/.env
+llm2seq/.env
 T5Gemma/.env
 T5Gemma/env.txt
 *.egg-info/

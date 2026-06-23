@@ -1,0 +1,26 @@
+{
+  "args": {
+    "config": "llm2seq/configs/wikilingua_phase1.yaml",
+    "checkpoint": "runs/phase1_warmup/best.pt",
+    "base_checkpoint": null,
+    "test_file": "llm2seq/data/processed/test.jsonl",
+    "output_dir": "llm2seq/eval_outputs/full_test_phase1_main",
+    "decode_mode": "autoregressive",
+    "limit": -1,
+    "max_new_tokens": null,
+    "min_new_tokens": null,
+    "do_sample": null,
+    "temperature": null,
+    "top_k": null,
+    "top_p": null,
+    "repetition_penalty": null,
+    "no_repeat_ngram_size": null,
+    "compute_bertscore": false,
+    "bertscore_model_type": "xlm-roberta-large"
+  },
+  "base_checkpoint": null,
+  "checkpoint": "runs/phase1_warmup/best.pt",
+  "config": "llm2seq/configs/wikilingua_phase1.yaml",
+  "test_file": "llm2seq/data/processed/test.jsonl",
+  "output_dir": "llm2seq/eval_outputs/full_test_phase1_main"
+}

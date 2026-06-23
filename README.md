@@ -4,7 +4,7 @@ Nghiên cứu các kiến trúc Encoder-Decoder dựa trên LLM cho các bài to
 
 ## LLM2Seq Architecture Overview
 
-![LLM2Seq Architecture](./llm2seq_final/figures/image.png)
+![LLM2Seq Architecture](./llm2seq/figures/image.png)
 
 LLM2Seq được thiết kế nhằm tối ưu hóa việc truyền thông tin từ Encoder sang Decoder mà không làm suy giảm chất lượng:
 
@@ -15,24 +15,24 @@ LLM2Seq được thiết kế nhằm tối ưu hóa việc truyền thông tin t
   - *Salience Gate*: Bộ lọc nội dung (token-level), loại bỏ các token dư thừa giúp decoder bớt nhiễu.
   - *EncStack*: Tinh chỉnh lại bộ nhớ (memory refinement) trước khi đưa vào Cross-attention.
   - *Global Memory Tokens*: Các token toàn cục học được (learnable) gắn vào đầu dãy memory để tóm lược đại ý văn bản.
-- **Lightweight Decoder**: Decoder Transformer tự thiết kế (ví dụ cấu hình H200: 8 layers, 1024 hidden size) chuyên trách việc sinh văn bản.
+- **Lightweight Decoder**: Decoder Transformer tự thiết kế (ví dụ cấu hình LLM2Seq: 8 layers, 1024 hidden size) chuyên trách việc sinh văn bản.
 - **MTP (Multi-Token Prediction) Heads**: Các module phụ trợ (được train riêng ở Phase 3) giúp tăng tốc sinh từ bằng kỹ thuật Speculative Decoding (Dự đoán nhiều token cùng lúc).
 
 ## Evaluation Results: LLM2Seq vs T5Gemma2-1B-1B
 
 Dưới đây là kết quả so sánh hiệu năng của **LLM2Seq (Phase 2 - LoRA Encoder)** với **T5Gemma-1b-1b (LoRA)** trên tập test WikiLingua (3,901 mẫu).
 
-| Metric | LLM2Seq (Phase 2) | T5Gemma (1B-1B) |
-| :--- | :--- | :--- |
-| **ROUGE-1** | **48.36** | 33.08 |
-| **ROUGE-2** | 15.54 | **19.58** |
-| **ROUGE-L** | **29.05** | 21.86 |
-| **chrF** | 15.45 | **28.60** |
-| **Mean Prediction Words** | **29.1** | 211.8 |
-| **Too Short Rate (%)** | 33.56% | 0.15% |
-| **Too Long Rate (%)** | **5.46%** | 95.46% |
-| **Latency Mean (s)** | 0.69s | **0.33s** |
-| **Peak VRAM** | **~6 GB** | ~23.5 GB |
+| **Chỉ số (Metric)** | **LLM2Seq (Phase 2)** | **T5Gemma (1B-1B)** | **Đánh giá chi tiết** |
+| :--- | :---: | :---: | :--- |
+| **ROUGE-1** | **48.36** | 33.08 | *LLM2Seq vượt trội (+15.28)* |
+| **ROUGE-2** | 15.54 | **19.58** | *T5Gemma nhỉnh hơn (+4.04)* |
+| **ROUGE-L** | **29.05** | 21.86 | *LLM2Seq vượt trội (+7.19)* |
+| **chrF** | 15.45 | **28.60** | *T5Gemma nhỉnh hơn (+13.15)* |
+| **Số từ sinh ra trung bình** | **29.1** | 211.8 | *LLM2Seq súc tích, sát với mức 51.8 từ của gốc* |
+| **Tỷ lệ sinh quá ngắn** | 33.56% | **0.15%** | *LLM2Seq đôi khi bị thiếu ý* |
+| **Tỷ lệ sinh quá dài** | **5.46%** | 95.46% | *T5Gemma lỗi không học được token kết thúc* |
+| **Độ trễ trung bình** (Latency)| 0.69s | **0.33s** | *T5Gemma giải mã nhanh hơn gấp đôi* |
+| **Tiêu tốn bộ nhớ** (Peak VRAM)| **~6 GB** | ~23.5 GB | *LLM2Seq siêu tiết kiệm VRAM* |
 
 *Ghi chú: Độ dài trung bình của bản tóm tắt mẫu (reference) là 51.8 từ.*
 
@@ -52,11 +52,19 @@ Dưới đây là kết quả so sánh hiệu năng của **LLM2Seq (Phase 2 - L
 
 ### Nhận xét kết quả Phase 3 (Speculative Decoding với MTP)
 
-Phase 3 tập trung huấn luyện các MTP (Multi-Token Prediction) Heads nhằm tăng tốc độ sinh từ thông qua kỹ thuật Speculative Decoding. Dưới đây là kết quả thực tế trên tập test:
+Phase 3 tập trung huấn luyện các MTP (Multi-Token Prediction) Heads nhằm tăng tốc độ sinh từ thông qua kỹ thuật Speculative Decoding. Dưới đây là bảng so sánh hiệu năng giải mã thực tế giữa giải mã tự hồi quy thông thường (Phase 2) và Speculative Decoding (Phase 3) trên cùng một tập test:
 
+| **Chỉ số (Metric)** | **Phase 2** (Autoregressive) | **Phase 3** (MTP Speculative) | **Mức độ thay đổi** |
+| :--- | :---: | :---: | :---: |
+| **Tốc độ sinh từ** (Decode Tokens/s) | **114.74** | 73.14 | *-36.2%* |
+| **Độ trễ trung bình** (Latency Mean) | **0.69s** | 1.09s | *Chậm hơn 0.4s* |
+| **Tokens sinh ra / Bước giải mã** | 1.00 | **2.45** | *Nhanh gấp 2.45 lần* |
+| **Tỷ lệ dự đoán đúng** (Acceptance) | - | **13.25%** | *Cần cải thiện* |
+
+**Phân tích chi tiết**:
 - **Chất lượng đầu ra**: Đầu ra sinh bởi quá trình Speculative Decoding giữ được sự chính xác tuyệt đối so với giải mã tự hồi quy (Autoregressive) truyền thống (Quality Delta = 0.0 đối với toàn bộ các chỉ số ROUGE và chrF).
 - **Tỷ lệ chấp nhận (Acceptance Rate)**: Các token được MTP Heads dự đoán có tỷ lệ được mô hình chính chấp nhận (Acceptance Rate) đạt **13.25%**. Trung bình mỗi bước giải mã, hệ thống đánh giá được 2.45 tokens.
-- **Tốc độ thực tế (Latency)**: Ở phiên bản hiện tại, Speculative Decoding chưa mang lại khả năng tăng tốc. Thời gian trễ trung bình (Latency Mean) tăng từ 0.69s lên **1.09s** (tương đương Speedup ~0.64x). 
+- **Tốc độ thực tế (Latency)**: Ở phiên bản hiện tại, Speculative Decoding chưa mang lại khả năng tăng tốc. Thời gian trễ trung bình (Latency Mean) tăng từ 0.69s lên **1.09s** (tương đương Speedup ~0.64x), và lượng token tạo ra mỗi giây cũng giảm từ 114.7 xuống 73.1.
 
 **Nguyên nhân & Hạn chế**: 
 Nguyên nhân cốt lõi khiến tỷ lệ chấp nhận (Acceptance Rate) còn thấp và chưa tối ưu được thời gian trễ là do **quá trình huấn luyện (training) chưa đủ**. Do **hạn chế về mặt tài nguyên phần cứng**, các MTP Heads trong Phase 3 chưa được hội tụ hoàn toàn để đạt độ chính xác cao nhất trong việc đoán trước các token. 

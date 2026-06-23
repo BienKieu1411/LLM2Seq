@@ -35,7 +35,7 @@ def main() -> None:
     load_env_file(root)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=str(root / "configs/lora_l40_512.yaml"))
+    parser.add_argument("--config", default=str(root / "configs/wikilingua_lora_3072.yaml"))
     parser.add_argument("--folder", required=True)
     parser.add_argument("--path_in_repo", default=None)
     parser.add_argument("--commit_message", default="Upload T5Gemma baseline artifact")

@@ -1,0 +1,117 @@
+project:
+  name: llm2seq
+  task: summarization
+  output_dir: runs/phase3_mtp_self_distill_wikilingua
+
+huggingface:
+  enabled: true
+  repo_id: null
+  repo_type: model
+  path_in_repo: checkpoints/phase3_mtp_self_distill_wikilingua
+  push_each_epoch: false
+  push_final_best: true
+  keep_local_epoch_checkpoints: 1
+  fail_on_error: true
+
+model:
+  encoder_name: McGill-NLP/LLM2Vec-Sheared-LLaMA-mntp
+  encoder_trainable: false
+  use_lora_for_encoder: true
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  lora_target_modules:
+    [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  encoder_torch_dtype: bfloat16
+  d_enc: 2048
+  d_dec: 1024
+
+adaptor:
+  type: gated_residual
+  use_layer_fusion: true
+  fusion_type: tokenwise
+  fuse_layers: [-1, -4, -8, -12]
+  use_salience_gate: true
+  use_encstack: true
+  encstack_layers: 4
+  use_global_memory_tokens: true
+  num_global_memory_tokens: 16
+
+small_decoder:
+  num_layers: 8
+  hidden_size: 1024
+  num_heads: 16
+  ffn_size: 4096
+  dropout: 0.1
+  tie_embeddings: true
+  max_seq_len: 1024
+
+features:
+  use_mtp: true
+
+mtp:
+  type: cascaded
+  num_heads: 4
+  train_only: true
+  loss_weight: 0.6
+  head_weights: [1.0, 0.8, 0.5, 0.25]
+  self_distillation: true
+  self_distill_top_k: 2048
+  self_distill_temperature: 1.5
+  self_distill_loss_weight: 0.2
+  self_distill_start_ratio: 0.2
+  self_distill_warmup_ratio: 0.3
+  self_distill_head_weights: [1.0, 0.8, 0.5, 0.25]
+
+training:
+  stage: phase3_mtp_self_distill_wikilingua
+  num_train_epochs: 6
+  batch_size: 20
+  grad_accum_steps: 4
+  mtp_lr: 5.0e-4
+  decoder_lr: 0.0
+  adaptor_lr: 0.0
+  encoder_lr: 0.0
+  warmup_ratio: 0.05
+  min_lr_ratio: 0.15
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  fp16: false
+  bf16: true
+  tf32: true
+  gradient_checkpointing: false
+  freeze_non_mtp: true
+  seed: 42
+  log_every_steps: 5
+  skip_optimizer_resume: true
+  reset_global_step_on_resume: true
+  reset_best_eval_loss_on_resume: true
+
+data:
+  train_file: data/processed/train.jsonl
+  eval_file: data/processed/validation.jsonl
+  test_file: data/processed/test.jsonl
+  source_prefix: "Tóm tắt văn bản sau:\n"
+  max_source_length: 3072
+  max_target_length: 384
+
+evaluation:
+  metrics: [rouge, latency]
+  eval_every_epochs: 1
+  save_every_epochs: 1
+
+generation:
+  do_sample: false
+  min_new_tokens: 32
+  max_new_tokens: 256
+  temperature: 0.0
+  top_k: 0
+  top_p: 1.0
+  repetition_penalty: 1.15
+  no_repeat_ngram_size: 3
+  # Speed guard: verified MTP is only useful if accepted blocks are long enough
+  # to pay for the extra draft + verifier work. Probe early; if emitted
+  # tokens/step is below this threshold, continue with main-head autoregressive.
+  mtp_fallback_to_autoregressive: true
+  mtp_fallback_after_steps: 1
+  mtp_fallback_min_emitted_length: 3.8

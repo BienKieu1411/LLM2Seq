@@ -22,7 +22,7 @@ if [[ -f "${ENV_FILE}" ]]; then
 fi
 
 export PYTHON_BIN="${PYTHON_BIN:-${PYTHON:-python3}}"
-export CONFIG="${CONFIG:-T5Gemma/configs/lora_l40_512.yaml}"
+export CONFIG="${CONFIG:-T5Gemma/configs/wikilingua_lora_3072.yaml}"
 export WIKI_DIR="${WIKI_DIR:-T5Gemma/wikilingua}"
 export DATA_DIR="${DATA_DIR:-T5Gemma/data/processed}"
 export RUN_DIR="${RUN_DIR:-runs/t5gemma2_1b_1b_lora_wikilingua}"

@@ -1,0 +1,89 @@
+project:
+  name: t5gemma2_1b_1b_vlsp_lora
+  task: summarization
+  output_dir: runs/t5gemma2_1b_1b_lora_vlsp
+
+huggingface:
+  enabled: true
+  repo_id: null
+  repo_type: model
+  path_in_repo: checkpoints/t5gemma2_1b_1b_lora_vlsp
+  push_each_epoch: false
+  push_final_best: true
+  push_eval_outputs: true
+  fail_on_error: true
+  private: false
+
+model:
+  model_name_or_path: google/t5gemma-2-1b-1b
+  trust_remote_code: true
+  torch_dtype: bfloat16
+  use_cache_for_eval: true
+
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  bias: none
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+    - q
+    - k
+    - v
+    - o
+    - wi
+    - wi_0
+    - wi_1
+    - wo
+
+training:
+  num_train_epochs: 10
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 8
+  learning_rate: 1.0e-4
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  lr_scheduler_type: cosine
+  optim: adamw_torch_fused
+  bf16: true
+  fp16: false
+  tf32: true
+  gradient_checkpointing: true
+  group_by_length: true
+  dataloader_num_workers: 2
+  logging_steps: 2
+  seed: 42
+
+data:
+  train_file: T5Gemma/data/processed/vlsp/train.jsonl
+  eval_file: T5Gemma/data/processed/vlsp/val.jsonl
+  test_file: T5Gemma/data/processed/vlsp/test.jsonl
+  source_prefix: "Tóm tắt các văn bản sau thành một đoạn ngắn gọn:\n"
+  max_source_length: 8192
+  max_target_length: 768
+
+generation:
+  max_new_tokens: 768
+  min_new_tokens: 32
+  num_beams: 1
+  do_sample: false
+  early_stopping: true
+  temperature: 0.0
+  top_k: 0
+  top_p: 1.0
+  repetition_penalty: 1.15
+  no_repeat_ngram_size: 3
+  eval_batch_size: 2
+
+evaluation:
+  compute_bertscore: false
+  bertscore_model_type: xlm-roberta-large

@@ -35,8 +35,8 @@ print("gpu:", name)
 print("gpu capability:", capability)
 print("supported arch list:", arch_list)
 
-if "L40" in name.upper() and capability < (8, 9):
-    raise SystemExit(f"Expected an Ada/L40-class GPU capability around sm_89, got {capability}.")
-if "L40" in name.upper() and "sm_89" not in arch_list and "compute_89" not in arch_list:
-    raise SystemExit("Installed PyTorch wheel does not advertise sm_89 support for L40-class GPUs.")
+if "45GB" in name.upper() and capability < (8, 9):
+    raise SystemExit(f"Expected an Ada/45GB-class GPU capability around sm_89, got {capability}.")
+if "45GB" in name.upper() and "sm_89" not in arch_list and "compute_89" not in arch_list:
+    raise SystemExit("Installed PyTorch wheel does not advertise sm_89 support for 45GB-class GPUs.")
 PY

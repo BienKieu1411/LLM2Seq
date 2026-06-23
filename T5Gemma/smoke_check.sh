@@ -7,7 +7,7 @@ source "${SCRIPT_DIR}/scripts/load_env.sh"
 required_files=(
   "${T5GEMMA_ROOT}/README.md"
   "${T5GEMMA_ROOT}/requirements.txt"
-  "${T5GEMMA_ROOT}/configs/lora_l40_512.yaml"
+  "${T5GEMMA_ROOT}/configs/wikilingua_lora_3072.yaml"
   "${T5GEMMA_ROOT}/scripts/load_env.sh"
   "${T5GEMMA_ROOT}/scripts/prepare_wikilingua_json.py"
   "${T5GEMMA_ROOT}/scripts/train_lora.py"
