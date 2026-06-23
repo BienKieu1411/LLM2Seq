@@ -180,7 +180,7 @@ class HuggingFaceRunPusher:
     def upload_final_artifacts(self) -> None:
         if not (self.enabled and self.push_final_best):
             return
-        for filename in ("best.pt", "final.pt", "config.yaml", "train.log", "checkpoint_manifest.json"):
+        for filename in ("best.pt", "config.yaml", "train.log", "checkpoint_manifest.json"):
             self.upload_file(
                 self.output_dir / filename,
                 filename,
@@ -887,36 +887,8 @@ def train(
                         )
                         logger.info(f"New best eval loss: {best_eval_loss:.4f}")
 
-                # Periodic save
-                if global_step % save_every == 0:
-                    epoch_ckpt_path = os.path.join(output_dir, f"epoch_{epoch:03d}.pt")
-                    save_checkpoint(
-                        model, optimizer, global_step, best_eval_loss,
-                        epoch_ckpt_path,
-                        include_optimizer=False,
-                        raw_config=raw_cfg,
-                    )
-                    hf_pusher.upload_epoch_checkpoint(epoch_ckpt_path, epoch, global_step)
-                    cleanup_epoch_checkpoints(
-                        output_dir,
-                        keep_last=hf_pusher.keep_local_epoch_checkpoints,
-                    )
 
-                    save_checkpoint(
-                        model, optimizer, global_step, best_eval_loss,
-                        os.path.join(output_dir, f"checkpoint_{global_step}.pt"),
-                        include_optimizer=True,
-                        raw_config=raw_cfg,
-                    )
-                    cleanup_periodic_checkpoints(output_dir, keep_last=1)
 
-    # Final save
-    save_checkpoint(
-        model, optimizer, global_step, best_eval_loss,
-        os.path.join(output_dir, "final.pt"),
-        include_optimizer=False,
-        raw_config=raw_cfg,
-    )
     hf_pusher.upload_final_artifacts()
     logger.info(f"Training complete. Best eval loss: {best_eval_loss:.4f}")
 
