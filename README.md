@@ -49,3 +49,15 @@ Dưới đây là kết quả so sánh hiệu năng của **LLM2Seq (Phase 2 - L
 4. **Kết luận**: 
    - Cả hai kiến trúc đều có ưu nhược điểm riêng. T5Gemma-1B-1B có lợi thế tuyệt đối về tốc độ giải mã thuần túy, trong khi LLM2Seq lại làm tốt hơn ở khả năng tóm tắt súc tích và tối ưu hóa VRAM. 
    - Đối với LLM2Seq, nền tảng chất lượng và bộ nhớ tốt ở Phase 2 chính là tiền đề hoàn hảo để tiếp tục triển khai Phase 3 (Speculative Decoding bằng MTP Heads), qua đó khắc phục điểm yếu duy nhất là độ trễ (Latency).
+
+### Nhận xét kết quả Phase 3 (Speculative Decoding với MTP)
+
+Phase 3 tập trung huấn luyện các MTP (Multi-Token Prediction) Heads nhằm tăng tốc độ sinh từ thông qua kỹ thuật Speculative Decoding. Dưới đây là kết quả thực tế trên tập test:
+
+- **Chất lượng đầu ra**: Đầu ra sinh bởi quá trình Speculative Decoding giữ được sự chính xác tuyệt đối so với giải mã tự hồi quy (Autoregressive) truyền thống (Quality Delta = 0.0 đối với toàn bộ các chỉ số ROUGE và chrF).
+- **Tỷ lệ chấp nhận (Acceptance Rate)**: Các token được MTP Heads dự đoán có tỷ lệ được mô hình chính chấp nhận (Acceptance Rate) đạt **13.25%**. Trung bình mỗi bước giải mã, hệ thống đánh giá được 2.45 tokens.
+- **Tốc độ thực tế (Latency)**: Ở phiên bản hiện tại, Speculative Decoding chưa mang lại khả năng tăng tốc. Thời gian trễ trung bình (Latency Mean) tăng từ 0.69s lên **1.09s** (tương đương Speedup ~0.64x). 
+
+**Nguyên nhân & Hạn chế**: 
+Nguyên nhân cốt lõi khiến tỷ lệ chấp nhận (Acceptance Rate) còn thấp và chưa tối ưu được thời gian trễ là do **quá trình huấn luyện (training) chưa đủ**. Do **hạn chế về mặt tài nguyên phần cứng**, các MTP Heads trong Phase 3 chưa được hội tụ hoàn toàn để đạt độ chính xác cao nhất trong việc đoán trước các token. 
+Khi mô hình đoán sai nhiều, chi phí tính toán để xác minh (verification overhead) sẽ lớn hơn lợi ích tăng tốc. Trong tương lai, nếu có thêm tài nguyên tính toán để tiếp tục huấn luyện Phase 3 kỹ hơn, Acceptance Rate sẽ được cải thiện đáng kể, qua đó mang lại khả năng tăng tốc thực sự cho toàn bộ kiến trúc LLM2Seq.
