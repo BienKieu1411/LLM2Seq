@@ -109,6 +109,7 @@ generation:
   top_p: 1.0
   repetition_penalty: 1.15
   no_repeat_ngram_size: 3
+  eval_batch_size: 64
   # Speed guard: verified MTP is only useful if accepted blocks are long enough
   # to pay for the extra draft + verifier work. Probe early; if emitted
   # tokens/step is below this threshold, continue with main-head autoregressive.

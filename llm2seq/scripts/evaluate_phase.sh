@@ -78,7 +78,6 @@ fi
   --test_file "${TEST_FILE}" \
   --output_dir "${OUTPUT_DIR}" \
   --decode_mode "${DECODE_MODE}" \
-  --batch_size 64 \
   --limit "${EVAL_LIMIT}" \
   "${EXTRA_ARGS[@]}" \
   2>&1 | tee "${LOG_FILE}"

@@ -20,9 +20,9 @@ PHASE3_SPEED_COMPARE_DIR="${PHASE3_SPEED_COMPARE_DIR:-${EVAL_ROOT}/phase3_speed_
 RUN_PHASE_EVAL="${RUN_PHASE_EVAL:-true}"
 
 bash llm2seq/scripts/train_phase1.sh "${PHASE1_CONFIG}"
-if [[ "${RUN_PHASE_EVAL}" == "true" ]]; then
-  bash llm2seq/scripts/evaluate_phase.sh phase1_main "${PHASE1_CONFIG}" "${PHASE1_DIR}/best.pt" "${PHASE1_EVAL_DIR}" autoregressive
-fi
+# if [[ "${RUN_PHASE_EVAL}" == "true" ]]; then
+#   bash llm2seq/scripts/evaluate_phase.sh phase1_main "${PHASE1_CONFIG}" "${PHASE1_DIR}/best.pt" "${PHASE1_EVAL_DIR}" autoregressive
+# fi
 
 bash llm2seq/scripts/train_phase2.sh "${PHASE1_DIR}/best.pt" "${PHASE2_CONFIG}"
 if [[ "${RUN_PHASE_EVAL}" == "true" ]]; then
