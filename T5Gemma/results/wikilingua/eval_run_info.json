@@ -2,7 +2,7 @@
   "adapter": "runs/t5gemma2_1b_1b_lora_wikilingua/best_adapter",
   "base_model": "google/t5gemma-2-1b-1b",
   "device": "cuda",
-  "torch": "2.6.0+cu124",
+  "torch": "2.12.1+cu130",
   "cuda_available": true,
   "generation": {
     "max_new_tokens": 256,

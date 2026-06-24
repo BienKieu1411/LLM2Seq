@@ -14,9 +14,9 @@ python3 -m pip install -r T5Gemma/requirements.txt
 echo "Preparing WikiLingua data for T5Gemma..."
 python3 T5Gemma/scripts/prepare_wikilingua_json.py --input_dir T5Gemma/datasets/wikilingua --output_dir T5Gemma/data/processed
 echo "Training T5Gemma on WikiLingua..."
-CONFIG="T5Gemma/configs/wikilingua_lora_3072.yaml" bash T5Gemma/scripts/train.sh
+PYTHONPATH=T5Gemma python3 T5Gemma/scripts/train_lora.py --config "T5Gemma/configs/wikilingua_lora_3072.yaml"
 echo "Evaluating T5Gemma on WikiLingua..."
-CONFIG="T5Gemma/configs/wikilingua_lora_3072.yaml" bash T5Gemma/scripts/evaluate.sh
+PYTHONPATH=T5Gemma python3 T5Gemma/scripts/evaluate_full_test.py --config "T5Gemma/configs/wikilingua_lora_3072.yaml"
 
 echo "--------------------------------------------------------------------------"
 echo " 2. Fine-tune T5Gemma on VLSP "
@@ -24,9 +24,9 @@ echo "--------------------------------------------------------------------------
 echo "Preparing VLSP data for T5Gemma..."
 python3 T5Gemma/scripts/prepare_vlsp_json.py --input_dir T5Gemma/datasets/vlsp --output_dir T5Gemma/data/processed/vlsp
 echo "Training T5Gemma on VLSP..."
-CONFIG="T5Gemma/configs/vlsp_lora.yaml" bash T5Gemma/scripts/train.sh
+PYTHONPATH=T5Gemma python3 T5Gemma/scripts/train_lora.py --config "T5Gemma/configs/vlsp_lora.yaml"
 echo "Evaluating T5Gemma on VLSP..."
-CONFIG="T5Gemma/configs/vlsp_lora.yaml" bash T5Gemma/scripts/evaluate.sh
+PYTHONPATH=T5Gemma python3 T5Gemma/scripts/evaluate_full_test.py --config "T5Gemma/configs/vlsp_lora.yaml"
 
 
 echo "--------------------------------------------------------------------------"
