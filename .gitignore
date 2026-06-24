@@ -3,6 +3,7 @@ __pycache__/
 *$py.class
 .venv/
 .env
+env.txt
 llm2seq/.env
 T5Gemma/.env
 T5Gemma/env.txt
