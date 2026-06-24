@@ -11,15 +11,18 @@ echo "--------------------------------------------------------------------------
 echo "Setting up environment for T5Gemma..."
 python3 -m pip install -r T5Gemma/requirements.txt
 
-# prepare_wikilingua_json.py is automatically run by run_pipeline.sh
-CONFIG="T5Gemma/configs/wikilingua_lora_3072.yaml" WIKI_DIR="T5Gemma/wikilingua" DATA_DIR="T5Gemma/data/processed" bash T5Gemma/run_pipeline.sh
-
+echo "Preparing WikiLingua data for T5Gemma..."
+python3 T5Gemma/scripts/prepare_wikilingua_json.py --input_dir T5Gemma/datasets/wikilingua --output_dir T5Gemma/data/processed
+echo "Training T5Gemma on WikiLingua..."
+CONFIG="T5Gemma/configs/wikilingua_lora_3072.yaml" bash T5Gemma/scripts/train.sh
+echo "Evaluating T5Gemma on WikiLingua..."
+CONFIG="T5Gemma/configs/wikilingua_lora_3072.yaml" bash T5Gemma/scripts/evaluate.sh
 
 echo "--------------------------------------------------------------------------"
 echo " 2. Fine-tune T5Gemma on VLSP "
 echo "--------------------------------------------------------------------------"
 echo "Preparing VLSP data for T5Gemma..."
-python3 T5Gemma/scripts/prepare_vlsp_json.py --input_dir T5Gemma/vlsp --output_dir T5Gemma/data/processed/vlsp
+python3 T5Gemma/scripts/prepare_vlsp_json.py --input_dir T5Gemma/datasets/vlsp --output_dir T5Gemma/data/processed/vlsp
 echo "Training T5Gemma on VLSP..."
 CONFIG="T5Gemma/configs/vlsp_lora.yaml" bash T5Gemma/scripts/train.sh
 echo "Evaluating T5Gemma on VLSP..."
@@ -33,25 +36,31 @@ echo "Switching environment for llm2seq (downgrading transformers)..."
 python3 -m pip install -r llm2seq/requirements.txt
 
 echo "Preparing VLSP data for llm2seq..."
-python3 llm2seq/scripts/prepare_vlsp_json.py --input_dir llm2seq/vlsp --output_dir llm2seq/data/processed/vlsp
-echo "Running llm2seq 3 phases on VLSP..."
-PHASE1_CONFIG="llm2seq/configs/vlsp_phase1.yaml" \
-PHASE2_CONFIG="llm2seq/configs/vlsp_phase2.yaml" \
-PHASE3_CONFIG="llm2seq/configs/vlsp_phase3.yaml" \
-PHASE1_DIR="runs/llm2seq_phase1_warmup_vlsp" \
-PHASE2_DIR="runs/llm2seq_phase2_lora_encoder_vlsp" \
-PHASE3_DIR="runs/llm2seq_phase3_mtp_self_distill_vlsp" \
-PHASE1_EVAL_DIR="llm2seq/eval_outputs/vlsp_full_test_phase1_main" \
-PHASE2_EVAL_DIR="llm2seq/eval_outputs/vlsp_full_test_phase2_main" \
-PHASE3_EVAL_DIR="llm2seq/eval_outputs/vlsp_full_test_phase3_main" \
-PHASE3_MTP_EVAL_DIR="llm2seq/eval_outputs/vlsp_full_test_phase3_mtp_verified" \
-PHASE3_SPEED_COMPARE_DIR="llm2seq/eval_outputs/vlsp_phase3_speed_comparison" \
-bash llm2seq/scripts/train_all.sh
+python3 llm2seq/scripts/prepare_vlsp_json.py --input_dir llm2seq/datasets/vlsp --output_dir llm2seq/data/processed/vlsp
+echo "Running llm2seq Phase 1 on VLSP..."
+bash llm2seq/scripts/train_phase1.sh "llm2seq/configs/vlsp_phase1.yaml"
+
+echo "Running llm2seq Phase 2 on VLSP..."
+bash llm2seq/scripts/train_phase2.sh "runs/llm2seq_phase1_warmup_vlsp/best.pt" "llm2seq/configs/vlsp_phase2.yaml"
+echo "Evaluating llm2seq Phase 2 on VLSP..."
+bash llm2seq/scripts/evaluate_phase.sh phase2_main "llm2seq/configs/vlsp_phase2.yaml" "runs/llm2seq_phase2_lora_encoder_vlsp/best.pt" "llm2seq/eval_outputs/vlsp_full_test_phase2_main" autoregressive
+
+echo "Running llm2seq Phase 3 on VLSP..."
+bash llm2seq/scripts/train_phase3.sh "runs/llm2seq_phase2_lora_encoder_vlsp/best.pt" "llm2seq/configs/vlsp_phase3.yaml"
+echo "Evaluating llm2seq Phase 3 on VLSP..."
+bash llm2seq/scripts/evaluate_phase.sh phase3_main "llm2seq/configs/vlsp_phase3.yaml" "runs/llm2seq_phase3_mtp_self_distill_vlsp/best.pt" "llm2seq/eval_outputs/vlsp_full_test_phase3_main" autoregressive "runs/llm2seq_phase2_lora_encoder_vlsp/best.pt"
+bash llm2seq/scripts/evaluate_phase.sh phase3_mtp "llm2seq/configs/vlsp_phase3.yaml" "runs/llm2seq_phase3_mtp_self_distill_vlsp/best.pt" "llm2seq/eval_outputs/vlsp_full_test_phase3_mtp_verified" mtp_verified "runs/llm2seq_phase2_lora_encoder_vlsp/best.pt"
+python3 llm2seq/scripts/compare_speed_metrics.py \
+  --main_metrics "llm2seq/eval_outputs/vlsp_full_test_phase3_main/metrics.json" \
+  --mtp_metrics "llm2seq/eval_outputs/vlsp_full_test_phase3_mtp_verified/metrics.json" \
+  --output_dir "llm2seq/eval_outputs/vlsp_phase3_speed_comparison"
 
 
 echo "--------------------------------------------------------------------------"
 echo " 4. Fine-tune phase 3 llm2seq WikiLingua (Optional / Remaining GPU time) "
 echo "--------------------------------------------------------------------------"
+echo "Preparing WikiLingua data for llm2seq..."
+python3 llm2seq/scripts/prepare_wikilingua_json.py --input_dir llm2seq/datasets/wikilingua --output_dir llm2seq/data/processed
 PHASE2_WIKI_DIR="runs/llm2seq_llm2seq_phase2_lora_encoder"
 HF_REPO_ID="${HF_REPO_ID:-BienKieu/llm2seq-wikilingua}"
 PHASE2_HF_PATH="checkpoints/llm2seq_phase2_lora_encoder/best.pt"

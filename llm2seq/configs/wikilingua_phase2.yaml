@@ -68,9 +68,9 @@ training:
   reset_best_eval_loss_on_resume: true
 
 data:
-  train_file: data/processed/train.jsonl
-  eval_file: data/processed/validation.jsonl
-  test_file: data/processed/test.jsonl
+  train_file: llm2seq/data/processed/train.jsonl
+  eval_file: llm2seq/data/processed/validation.jsonl
+  test_file: llm2seq/data/processed/test.jsonl
   source_prefix: "Tóm tắt văn bản sau:\n"
   max_source_length: 3072
   max_target_length: 384
