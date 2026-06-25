@@ -37,6 +37,7 @@ from ..models.llm2seq_model import LLM2Seq, LLM2SeqConfig
 from ..data.dataset import Seq2SeqDataset
 from ..data.collator import Seq2SeqCollator
 from .scheduler import build_optimizer_and_scheduler
+from ..inference.generate import autoregressive_generate
 
 logger = logging.getLogger(__name__)
 
@@ -329,6 +330,25 @@ def apply_trainable_policy(model: LLM2Seq, training_cfg: Dict[str, Any]) -> None
     if len(trainable_names) > 12:
         logger.info("... plus %d more MTP tensors", len(trainable_names) - 12)
     logger.info("Trainable params after policy: %s", f"{model.get_trainable_params():,}")
+
+
+def apply_gradual_unfreeze_policy(model: LLM2Seq, freeze_decoder: bool) -> None:
+    """Freeze or unfreeze decoder + adaptor parameters for gradual unfreezing.
+
+    When freeze_decoder=True, only encoder (LoRA) parameters remain trainable.
+    When freeze_decoder=False, decoder + adaptor are unfrozen so all components train together.
+    """
+    changed = []
+    for name, param in model.named_parameters():
+        if name.startswith("decoder.") or name.startswith("lm_head.") or name.startswith("adaptor."):
+            new_grad = not freeze_decoder
+            if param.requires_grad != new_grad:
+                param.requires_grad = new_grad
+                changed.append(name)
+
+    action = "Froze" if freeze_decoder else "Unfroze"
+    logger.info("%s %d decoder/adaptor/lm_head parameters", action, len(changed))
+    logger.info("Trainable params now: %s", f"{model.get_trainable_params():,}")
 
 
 def get_allowed_missing_prefixes(stage: str, context: str) -> tuple[str, ...]:
@@ -764,6 +784,29 @@ def train(
                 get_mtp_self_distill_final_weight(raw_cfg, cfg),
             )
 
+    # Gradual unfreezing setup
+    gradual_unfreeze_ratio = float(training_cfg.get("gradual_unfreeze_ratio", 0.0))
+    gradual_unfreeze_step = int(max_steps * gradual_unfreeze_ratio) if gradual_unfreeze_ratio > 0 else 0
+    gradual_unfreeze_applied = False
+    if gradual_unfreeze_ratio > 0:
+        apply_gradual_unfreeze_policy(model, freeze_decoder=True)
+        # Rebuild optimizer to exclude frozen params
+        optimizer, scheduler = build_optimizer_and_scheduler(
+            model=model,
+            encoder_lr=float(training_cfg.get("encoder_lr", 1e-5)),
+            adaptor_lr=float(training_cfg.get("adaptor_lr", 2e-4)),
+            decoder_lr=float(training_cfg.get("decoder_lr", 2e-4)),
+            mtp_lr=float(training_cfg.get("mtp_lr", training_cfg.get("decoder_lr", 2e-4))),
+            weight_decay=float(training_cfg.get("weight_decay", 0.01)),
+            warmup_steps=warmup_steps,
+            max_steps=max_steps,
+            min_lr_ratio=float(training_cfg.get("min_lr_ratio", 0.1)),
+        )
+        logger.info(
+            "Gradual unfreezing enabled: decoder/adaptor frozen for first %d/%d steps (%.0f%%)",
+            gradual_unfreeze_step, max_steps, gradual_unfreeze_ratio * 100,
+        )
+
     set_training_mode(model, training_cfg)
     running_loss = 0.0
     running_ce = 0.0
@@ -823,6 +866,37 @@ def train(
                 optimizer.zero_grad()
                 scheduler.step()
                 global_step += 1
+
+                # Gradual unfreezing: unfreeze decoder/adaptor at the scheduled step
+                if gradual_unfreeze_step > 0 and not gradual_unfreeze_applied and global_step >= gradual_unfreeze_step:
+                    gradual_unfreeze_applied = True
+                    apply_gradual_unfreeze_policy(model, freeze_decoder=False)
+                    remaining_steps = max_steps - global_step
+                    unfreeze_warmup = int(remaining_steps * float(training_cfg.get("gradual_unfreeze_warmup_ratio", 0.1)))
+                    # After unfreeze, use a gentler encoder LR (defaults to decoder_lr)
+                    post_unfreeze_encoder_lr = float(
+                        training_cfg.get("gradual_unfreeze_encoder_lr",
+                                         training_cfg.get("decoder_lr", 5e-5))
+                    )
+                    optimizer, scheduler = build_optimizer_and_scheduler(
+                        model=model,
+                        encoder_lr=post_unfreeze_encoder_lr,
+                        adaptor_lr=float(training_cfg.get("adaptor_lr", 2e-4)),
+                        decoder_lr=float(training_cfg.get("decoder_lr", 2e-4)),
+                        mtp_lr=float(training_cfg.get("mtp_lr", training_cfg.get("decoder_lr", 2e-4))),
+                        weight_decay=float(training_cfg.get("weight_decay", 0.01)),
+                        warmup_steps=unfreeze_warmup,
+                        max_steps=remaining_steps,
+                        min_lr_ratio=float(training_cfg.get("min_lr_ratio", 0.1)),
+                    )
+                    set_training_mode(model, training_cfg)
+                    logger.info(
+                        "Gradual unfreeze triggered at step %d: decoder/adaptor now trainable. "
+                        "New optimizer: encoder_lr=%.2e (was %.2e), %d warmup steps for %d remaining steps.",
+                        global_step, post_unfreeze_encoder_lr,
+                        float(training_cfg.get("encoder_lr", 1e-5)),
+                        unfreeze_warmup, remaining_steps,
+                    )
 
                 # Logging
                 if global_step % log_every == 0:
@@ -887,10 +961,129 @@ def train(
                         )
                         logger.info(f"New best eval loss: {best_eval_loss:.4f}")
 
+                    # The actual completed epoch according to global_step
+                    completed_epochs = global_step // steps_per_epoch
 
+                    # Save per-epoch checkpoint
+                    if completed_epochs > 0:
+                        epoch_ckpt_path = os.path.join(output_dir, f"epoch_{completed_epochs}.pt")
+                        save_checkpoint(
+                            model, optimizer, global_step, eval_loss,
+                            epoch_ckpt_path,
+                            include_optimizer=False,
+                            raw_config=raw_cfg,
+                        )
+                        logger.info(f"Saved epoch {completed_epochs} checkpoint: {epoch_ckpt_path}")
+                        hf_pusher.upload_epoch_checkpoint(epoch_ckpt_path, completed_epochs, global_step)
+                        cleanup_epoch_checkpoints(output_dir, hf_pusher.keep_local_epoch_checkpoints)
+
+                # ROUGE evaluation at configured epoch intervals
+                rouge_eval_every = int(eval_cfg.get("rouge_eval_every_epochs", 0))
+                rouge_eval_max_samples = int(eval_cfg.get("rouge_eval_max_samples", 500))
+                if rouge_eval_every > 0 and global_step > 0 and global_step % (steps_per_epoch * rouge_eval_every) == 0:
+                    completed_epochs = global_step // steps_per_epoch
+                    logger.info("Running ROUGE evaluation at epoch %d (max %d samples)...", completed_epochs, rouge_eval_max_samples)
+                    rouge_start = time.perf_counter()
+                    rouge_scores = evaluate_rouge(
+                        model, eval_dataset, tokenizer, device, raw_cfg,
+                        max_samples=rouge_eval_max_samples,
+                    )
+                    rouge_elapsed = time.perf_counter() - rouge_start
+                    logger.info(
+                        "Epoch %d ROUGE: R1=%.2f | R2=%.2f | RL=%.2f (%.1fs)",
+                        completed_epochs,
+                        rouge_scores["rouge1"],
+                        rouge_scores["rouge2"],
+                        rouge_scores["rougeL"],
+                        rouge_elapsed,
+                    )
+                    set_training_mode(model, training_cfg)
+
+    # Save the absolute final model as best.pt regardless of eval loss
+    final_ckpt_path = os.path.join(output_dir, "best.pt")
+    logger.info("Saving final model state as %s", final_ckpt_path)
+    save_checkpoint(
+        model, optimizer, global_step, best_eval_loss,
+        final_ckpt_path,
+        include_optimizer=False,
+        raw_config=raw_cfg,
+    )
 
     hf_pusher.upload_final_artifacts()
     logger.info(f"Training complete. Best eval loss: {best_eval_loss:.4f}")
+
+
+def _compute_rouge_scores(predictions: list[str], references: list[str]) -> dict[str, float]:
+    """Compute ROUGE scores. Lazy-imports rouge_scorer to avoid loading it at trainer import time."""
+    from rouge_score import rouge_scorer as _rs
+    scorer = _rs.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=False)
+    totals = {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
+    for pred, ref in zip(predictions, references):
+        scores = scorer.score(ref, pred)
+        for name in totals:
+            totals[name] += scores[name].fmeasure
+    n = max(1, len(predictions))
+    return {name: round((v / n) * 100.0, 2) for name, v in totals.items()}
+
+
+@torch.no_grad()
+def evaluate_rouge(
+    model: LLM2Seq,
+    eval_dataset: "Seq2SeqDataset",
+    tokenizer: Any,
+    device: torch.device,
+    raw_cfg: Dict[str, Any],
+    max_samples: int = 500,
+) -> Dict[str, float]:
+    """Run autoregressive generation on eval set and compute ROUGE scores."""
+    model.eval()
+    data_cfg = raw_cfg.get("data", {})
+    gen_cfg = raw_cfg.get("generation", {})
+    source_prefix = data_cfg.get("source_prefix", "")
+    max_source_length = data_cfg.get("max_source_length", 512)
+    eval_batch_size = gen_cfg.get("eval_batch_size", 64)
+
+    examples = eval_dataset.examples[:max_samples]
+    predictions: list[str] = []
+    references: list[str] = []
+
+    for i in range(0, len(examples), eval_batch_size):
+        batch_ex = examples[i : i + eval_batch_size]
+        sources = [source_prefix + ex["source"] for ex in batch_ex]
+        refs = [ex["target"] for ex in batch_ex]
+
+        enc = tokenizer(
+            sources,
+            return_tensors="pt",
+            truncation=True,
+            padding=True,
+            max_length=max_source_length,
+        ).to(device)
+
+        out_ids = autoregressive_generate(
+            model,
+            input_ids=enc["input_ids"],
+            attention_mask=enc["attention_mask"],
+            max_new_tokens=int(gen_cfg.get("max_new_tokens", 256)),
+            min_new_tokens=int(gen_cfg.get("min_new_tokens", 32)),
+            do_sample=False,
+            temperature=0.0,
+            top_k=0,
+            top_p=1.0,
+            repetition_penalty=float(gen_cfg.get("repetition_penalty", 1.15)),
+            no_repeat_ngram_size=int(gen_cfg.get("no_repeat_ngram_size", 3)),
+            eos_token_id=tokenizer.eos_token_id,
+            pad_token_id=tokenizer.pad_token_id,
+            bos_token_id=tokenizer.bos_token_id or tokenizer.eos_token_id or tokenizer.pad_token_id,
+        )
+
+        for j in range(len(batch_ex)):
+            pred = tokenizer.decode(out_ids[j], skip_special_tokens=True).strip()
+            predictions.append(pred)
+            references.append(refs[j])
+
+    rouge = _compute_rouge_scores(predictions, references)
+    return rouge
 
 
 @torch.no_grad()

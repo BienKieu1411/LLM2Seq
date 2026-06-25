@@ -1,0 +1,98 @@
+project:
+  name: llm2seq
+  task: summarization
+  output_dir: runs/phase2_lora_encoder_qwen_wikilingua
+
+huggingface:
+  enabled: true
+  repo_id: null
+  repo_type: model
+  path_in_repo: checkpoints/phase2_lora_encoder_qwen_wikilingua
+  push_each_epoch: true
+  push_final_best: true
+  keep_local_epoch_checkpoints: 1
+  fail_on_error: true
+
+model:
+  encoder_name: Qwen/Qwen3-Embedding-0.6B
+  encoder_trainable: true
+  use_lora_for_encoder: true
+  lora_r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+  lora_target_modules:
+    [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  encoder_torch_dtype: bfloat16
+  d_enc: 1024
+  d_dec: 1024
+
+adaptor:
+  type: gated_residual
+  use_layer_fusion: true
+  fusion_type: tokenwise
+  fuse_layers: [-1, -4, -8, -12]
+  use_salience_gate: true
+  use_encstack: true
+  encstack_layers: 4
+  use_global_memory_tokens: true
+  num_global_memory_tokens: 16
+
+small_decoder:
+  num_layers: 8
+  hidden_size: 1024
+  num_heads: 16
+  ffn_size: 4096
+  dropout: 0.1
+  tie_embeddings: true
+  max_seq_len: 1024
+
+training:
+  stage: phase2_lora_encoder_qwen_wikilingua
+  num_train_epochs: 6
+  batch_size: 8
+  grad_accum_steps: 4
+  decoder_lr: 5.0e-5
+  adaptor_lr: 5.0e-5
+  encoder_lr: 5.0e-4
+  warmup_ratio: 0.05
+  min_lr_ratio: 0.1
+  weight_decay: 0.05
+  max_grad_norm: 1.0
+  gradual_unfreeze_encoder_lr: 5.0e-5
+  gradual_unfreeze_ratio: 0.33 # Freeze decoder+adaptor for first 33% of steps
+  gradual_unfreeze_warmup_ratio: 0.1 # 10% warmup after unfreeze
+  fp16: false
+  bf16: true
+  tf32: true
+  gradient_checkpointing: true
+  seed: 42
+  log_every_steps: 5
+  skip_optimizer_resume: true
+  reset_global_step_on_resume: true
+  reset_best_eval_loss_on_resume: true
+
+data:
+  train_file: llm2seq/data/processed/train.jsonl
+  eval_file: llm2seq/data/processed/validation.jsonl
+  test_file: llm2seq/data/processed/test.jsonl
+  source_prefix: "Tóm tắt văn bản sau:\n"
+  max_source_length: 3072
+  max_target_length: 384
+
+evaluation:
+  metrics: [rouge, latency]
+  eval_every_epochs: 1
+  save_every_epochs: 1
+  rouge_eval_every_epochs: 2
+  rouge_eval_max_samples: 500
+
+generation:
+  do_sample: false
+  min_new_tokens: 32
+  max_new_tokens: 256
+  temperature: 0.0
+  top_k: 0
+  top_p: 1.0
+  repetition_penalty: 1.15
+  no_repeat_ngram_size: 3
+  eval_batch_size: 64

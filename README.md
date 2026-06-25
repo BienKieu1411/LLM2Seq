@@ -22,50 +22,23 @@ LLM2Seq được thiết kế nhằm tối ưu hóa việc truyền thông tin t
 
 Dưới đây là kết quả so sánh hiệu năng của **LLM2Seq (Phase 2 - LoRA Encoder)** với **T5Gemma-1b-1b (LoRA)** trên tập test WikiLingua (3,901 mẫu).
 
-| **Chỉ số (Metric)** | **LLM2Seq (Phase 2)** | **T5Gemma (1B-1B)** | **Đánh giá chi tiết** |
-| :--- | :---: | :---: | :--- |
-| **ROUGE-1** | **48.36** | 33.08 | *LLM2Seq vượt trội (+15.28)* |
-| **ROUGE-2** | 15.54 | **19.58** | *T5Gemma nhỉnh hơn (+4.04)* |
-| **ROUGE-L** | **29.05** | 21.86 | *LLM2Seq vượt trội (+7.19)* |
-| **chrF** | 15.45 | **28.60** | *T5Gemma nhỉnh hơn (+13.15)* |
-| **Số từ sinh ra trung bình** | **29.1** | 211.8 | *LLM2Seq súc tích, sát với mức 51.8 từ của gốc* |
-| **Tỷ lệ sinh quá ngắn** | 33.56% | **0.15%** | *LLM2Seq đôi khi bị thiếu ý* |
-| **Tỷ lệ sinh quá dài** | **5.46%** | 95.46% | *T5Gemma lỗi không học được token kết thúc* |
-| **Độ trễ trung bình** (Latency)| 0.69s | **0.33s** | *T5Gemma giải mã nhanh hơn gấp đôi* |
-| **Tiêu tốn bộ nhớ** (Peak VRAM)| **~6 GB** | ~23.5 GB | *LLM2Seq siêu tiết kiệm VRAM* |
+**Cấu hình mô hình:**
+- **LLM2Seq (Llama Encoder)**: Sử dụng LLM2Vec-Sheared-LLaMA-mntp làm Encoder + Decoder Transformer tự thiết kế.
+- **LLM2Seq (Qwen Encoder)**: Sử dụng Qwen3-Embedding-0.6B làm Encoder + Decoder Transformer tự thiết kế.
 
-*Ghi chú: Độ dài trung bình của bản tóm tắt mẫu (reference) là 51.8 từ.*
+| **Chỉ số (Metric)** | **LLM2Seq (Llama Encoder)** | **LLM2Seq (Qwen Encoder)** | **T5Gemma (1B-1B)** | **Đánh giá chi tiết**                 |
+| :--------------------| :---------------------------:| :--------------------------:| :-------------------:| :--------------------------------------|
+| **Tổng tham số**    | ~1.5B                       | ~1B                        | ~2B                 | *T5Gemma lớn nhất, Qwen gọn nhẹ nhất* |
+| **ROUGE-1**         | 48.36                       | 53.91                      | **54.24**           | *Qwen kéo LLM2Seq ngang ngửa T5Gemma* |
+| **ROUGE-2**         | 15.54                       | 20.74                      | **27.42**           | *T5Gemma vẫn vượt trội về độ mượt*    |
+| **ROUGE-L**         | 29.05                       | 31.77                      | **33.89**           | *T5Gemma nhỉnh hơn một chút*          |
+
+*Ghi chú: Điểm được lấy ở Phase 2 của các mô hình LLM2Seq.*
 
 ### Phân tích & Nhận xét
-1. **Chất lượng tóm tắt (ROUGE & chrF)**: 
-   - LLM2Seq đạt điểm ROUGE-1 (48.36) và ROUGE-L (29.05) cao hơn, cho thấy khả năng chắt lọc chính xác các ý chính và duy trì cấu trúc câu của văn bản nguồn.
-   - T5Gemma-1B-1B nhỉnh hơn ở ROUGE-2 (19.58) và chrF (28.60), thể hiện sự mượt mà trong việc sinh các cụm từ (n-grams).
-2. **Kiểm soát độ dài (Length Control)**: 
-   - LLM2Seq kiểm soát độ dài rất tốt với trung bình 29.1 từ, tạo ra các bản tóm tắt ngắn gọn và đi đúng trọng tâm (dù có 33.56% mẫu bị đánh giá là hơi ngắn so với mức 51.8 từ của bản gốc).
-   - T5Gemma-1B-1B gặp khó khăn trong việc học token kết thúc (EOS), dẫn đến độ dài trung bình lên tới 211.8 từ (95.46% Too Long Rate).
-3. **Hiệu năng & Tài nguyên (Speed & VRAM)**: 
-   - T5Gemma-1B-1B cho độ trễ (Latency Mean) rất thấp (0.33s/mẫu), cho thấy lợi thế của một kiến trúc decoder gốc đã được tối ưu hóa sâu bởi thư viện Transformers.
-   - Ngược lại, LLM2Seq (0.69s/mẫu) giải mã chậm hơn nhưng lại chứng minh sự tối ưu vượt trội về mặt bộ nhớ: chỉ tiêu tốn **~6 GB VRAM** so với ~23.5 GB của T5Gemma-1B-1B (trong cùng cấu hình batch size), rất thân thiện với các phần cứng hạn chế.
-4. **Kết luận**: 
-   - Cả hai kiến trúc đều có ưu nhược điểm riêng. T5Gemma-1B-1B có lợi thế tuyệt đối về tốc độ giải mã thuần túy, trong khi LLM2Seq lại làm tốt hơn ở khả năng tóm tắt súc tích và tối ưu hóa VRAM. 
-   - Đối với LLM2Seq, nền tảng chất lượng và bộ nhớ tốt ở Phase 2 chính là tiền đề hoàn hảo để tiếp tục triển khai Phase 3 (Speculative Decoding bằng MTP Heads), qua đó khắc phục điểm yếu duy nhất là độ trễ (Latency).
-
-### Nhận xét kết quả Phase 3 (Speculative Decoding với MTP)
-
-Phase 3 tập trung huấn luyện các MTP (Multi-Token Prediction) Heads nhằm tăng tốc độ sinh từ thông qua kỹ thuật Speculative Decoding. Dưới đây là bảng so sánh hiệu năng giải mã thực tế giữa giải mã tự hồi quy thông thường (Phase 2) và Speculative Decoding (Phase 3) trên cùng một tập test:
-
-| **Chỉ số (Metric)** | **Phase 2** (Autoregressive) | **Phase 3** (MTP Speculative) | **Mức độ thay đổi** |
-| :--- | :---: | :---: | :---: |
-| **Tốc độ sinh từ** (Decode Tokens/s) | **114.74** | 73.14 | *-36.2%* |
-| **Độ trễ trung bình** (Latency Mean) | **0.69s** | 1.09s | *Chậm hơn 0.4s* |
-| **Tokens sinh ra / Bước giải mã** | 1.00 | **2.45** | *Nhanh gấp 2.45 lần* |
-| **Tỷ lệ dự đoán đúng** (Acceptance) | - | **13.25%** | *Cần cải thiện* |
-
-**Phân tích chi tiết**:
-- **Chất lượng đầu ra**: Đầu ra sinh bởi quá trình Speculative Decoding giữ được sự chính xác tuyệt đối so với giải mã tự hồi quy (Autoregressive) truyền thống (Quality Delta = 0.0 đối với toàn bộ các chỉ số ROUGE và chrF).
-- **Tỷ lệ chấp nhận (Acceptance Rate)**: Các token được MTP Heads dự đoán có tỷ lệ được mô hình chính chấp nhận (Acceptance Rate) đạt **13.25%**. Trung bình mỗi bước giải mã, hệ thống đánh giá được 2.45 tokens.
-- **Tốc độ thực tế (Latency)**: Ở phiên bản hiện tại, Speculative Decoding chưa mang lại khả năng tăng tốc. Thời gian trễ trung bình (Latency Mean) tăng từ 0.69s lên **1.09s** (tương đương Speedup ~0.64x), và lượng token tạo ra mỗi giây cũng giảm từ 114.7 xuống 73.1.
-
-**Nguyên nhân & Hạn chế**: 
-Nguyên nhân cốt lõi khiến tỷ lệ chấp nhận (Acceptance Rate) còn thấp và chưa tối ưu được thời gian trễ là do **quá trình huấn luyện (training) chưa đủ**. Do **hạn chế về mặt tài nguyên phần cứng**, các MTP Heads trong Phase 3 chưa được hội tụ hoàn toàn để đạt độ chính xác cao nhất trong việc đoán trước các token. 
-Khi mô hình đoán sai nhiều, chi phí tính toán để xác minh (verification overhead) sẽ lớn hơn lợi ích tăng tốc. Trong tương lai, nếu có thêm tài nguyên tính toán để tiếp tục huấn luyện Phase 3 kỹ hơn, Acceptance Rate sẽ được cải thiện đáng kể, qua đó mang lại khả năng tăng tốc thực sự cho toàn bộ kiến trúc LLM2Seq.
+1. **Sức mạnh của Qwen Encoder**: 
+   - Việc thay đổi Encoder từ Llama sang **Qwen** đã mang lại sức mạnh vượt bậc cho LLM2Seq. Điểm ROUGE-1 tăng phi mã từ 48.36 lên 53.91, trực tiếp cạnh tranh sòng phẳng với T5Gemma (54.24).
+   - Tuy nhiên, T5Gemma-1B-1B vẫn là mô hình sinh ra câu từ mượt mà, tự nhiên nhất.
+2. **Kết luận**: 
+   - **T5Gemma-1B-1B** phù hợp khi cần một đoạn tóm tắt diễn giải chi tiết, văn phong mượt mà tự nhiên.
+   - **LLM2Seq (Qwen)** là kiến trúc toàn diện: chất lượng ROUGE tương đương T5Gemma và năng lực tóm tắt súc tích, đi thẳng vào vấn đề.

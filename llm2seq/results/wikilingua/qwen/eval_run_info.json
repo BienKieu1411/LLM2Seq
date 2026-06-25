@@ -1,0 +1,29 @@
+{
+  "args": {
+    "config": "llm2seq/configs/wikilingua_qwen_phase2.yaml",
+    "checkpoint": "runs/phase2_lora_encoder_qwen_wikilingua/best.pt",
+    "base_checkpoint": null,
+    "test_file": "llm2seq/data/processed/test.jsonl",
+    "output_dir": "llm2seq/eval_outputs/qwen_wiki_full_test_phase2",
+    "decode_mode": "autoregressive",
+    "limit": -1,
+    "max_new_tokens": null,
+    "min_new_tokens": null,
+    "do_sample": null,
+    "temperature": null,
+    "top_k": null,
+    "top_p": null,
+    "repetition_penalty": null,
+    "no_repeat_ngram_size": null,
+    "mtp_fallback_to_autoregressive": null,
+    "mtp_fallback_after_steps": null,
+    "mtp_fallback_min_emitted_length": null,
+    "compute_bertscore": false,
+    "bertscore_model_type": "xlm-roberta-large"
+  },
+  "base_checkpoint": null,
+  "checkpoint": "runs/phase2_lora_encoder_qwen_wikilingua/best.pt",
+  "config": "llm2seq/configs/wikilingua_qwen_phase2.yaml",
+  "test_file": "llm2seq/data/processed/test.jsonl",
+  "output_dir": "llm2seq/eval_outputs/qwen_wiki_full_test_phase2"
+}

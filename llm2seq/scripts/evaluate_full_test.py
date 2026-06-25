@@ -491,14 +491,19 @@ def main() -> None:
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
 
+    eval_batch_size = raw_cfg.get("generation", {}).get("eval_batch_size", 128)
+    
     with predictions_path.open("w", encoding="utf-8") as out_f:
-        for example in tqdm(examples, desc="Generating"):
-            source = example["source"]
-            reference = example["target"]
+        for i in tqdm(range(0, len(examples), eval_batch_size), desc="Generating (Batched)"):
+            batch_examples = examples[i : i + eval_batch_size]
+            sources_batch = [ex["source"] for ex in batch_examples]
+            references_batch = [ex["target"] for ex in batch_examples]
+            
             enc = tokenizer(
-                source_prefix + source,
+                [source_prefix + s for s in sources_batch],
                 return_tensors="pt",
                 truncation=True,
+                padding=True,
                 max_length=raw_cfg["data"]["max_source_length"],
             ).to(device)
 
@@ -518,9 +523,6 @@ def main() -> None:
                     top_p=generation_settings["top_p"],
                     repetition_penalty=generation_settings["repetition_penalty"],
                     no_repeat_ngram_size=generation_settings["no_repeat_ngram_size"],
-                    fallback_to_autoregressive=generation_settings["mtp_fallback_to_autoregressive"],
-                    fallback_after_steps=generation_settings["mtp_fallback_after_steps"],
-                    fallback_min_emitted_length=generation_settings["mtp_fallback_min_emitted_length"],
                     eos_token_id=tokenizer.eos_token_id,
                     pad_token_id=tokenizer.pad_token_id,
                     bos_token_id=tokenizer.bos_token_id or tokenizer.eos_token_id or tokenizer.pad_token_id,
@@ -542,46 +544,57 @@ def main() -> None:
                 out_ids = mtp_result["generated_ids"]
                 sample_mtp_metrics = mtp_result.get("metrics", {})
                 mtp_metrics_list.append(sample_mtp_metrics)
+                
             sync_device(device)
-            latency = time.perf_counter() - generation_start
-
-            prediction = tokenizer.decode(out_ids[0], skip_special_tokens=True).strip()
-            new_tokens = int(out_ids.ne(tokenizer.pad_token_id).sum().item())
-            total_new_tokens += new_tokens
-            latencies.append(latency)
-            new_token_counts.append(float(new_tokens))
-            if sample_mtp_metrics:
-                decode_steps.append(float(sample_mtp_metrics.get("num_steps", 0.0)))
-            else:
-                decode_steps.append(float(new_tokens))
-            predictions.append(prediction)
-            references.append(reference)
-            sources.append(source)
-            source_words = word_count(source)
-            reference_words = word_count(reference)
-            prediction_words = word_count(prediction)
-            row = {
-                "id": example.get("id"),
-                "source": source,
-                "reference": reference,
-                "prediction": prediction,
-                "source_chars": len(source),
-                "reference_chars": len(reference),
-                "prediction_chars": len(prediction),
-                "source_words": source_words,
-                "reference_words": reference_words,
-                "prediction_words": prediction_words,
-                "length_ratio": round(prediction_words / max(1, reference_words), 6),
-                "compression_ratio": round(prediction_words / max(1, source_words), 6),
-                "repeated_trigram_rate": round(repeated_ngram_rate(prediction, n=3), 6),
-                "decode_mode": args.decode_mode,
-                "latency_seconds": round(latency, 6),
-                "generated_tokens": new_tokens,
-                "decode_steps": round(decode_steps[-1], 6),
-            }
-            if sample_mtp_metrics:
-                row["mtp_metrics"] = sample_mtp_metrics
-            out_f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            batch_latency = time.perf_counter() - generation_start
+            latency_per_sample = batch_latency / len(batch_examples)
+            
+            for j in range(len(batch_examples)):
+                prediction = tokenizer.decode(out_ids[j], skip_special_tokens=True).strip()
+                if tokenizer.pad_token_id is not None:
+                    new_tokens = int(out_ids[j].ne(tokenizer.pad_token_id).sum().item())
+                else:
+                    new_tokens = out_ids[j].size(0)
+                
+                total_new_tokens += new_tokens
+                latencies.append(latency_per_sample)
+                new_token_counts.append(float(new_tokens))
+                
+                if sample_mtp_metrics:
+                    decode_steps.append(float(sample_mtp_metrics.get("num_steps", 0.0)))
+                else:
+                    decode_steps.append(float(new_tokens))
+                    
+                predictions.append(prediction)
+                references.append(references_batch[j])
+                sources.append(sources_batch[j])
+                
+                source_words = word_count(sources_batch[j])
+                reference_words = word_count(references_batch[j])
+                prediction_words = word_count(prediction)
+                
+                row = {
+                    "id": batch_examples[j].get("id"),
+                    "source": sources_batch[j],
+                    "reference": references_batch[j],
+                    "prediction": prediction,
+                    "source_chars": len(sources_batch[j]),
+                    "reference_chars": len(references_batch[j]),
+                    "prediction_chars": len(prediction),
+                    "source_words": source_words,
+                    "reference_words": reference_words,
+                    "prediction_words": prediction_words,
+                    "length_ratio": round(prediction_words / max(1, reference_words), 6),
+                    "compression_ratio": round(prediction_words / max(1, source_words), 6),
+                    "repeated_trigram_rate": round(repeated_ngram_rate(prediction, n=3), 6),
+                    "decode_mode": args.decode_mode,
+                    "latency_seconds": round(latency_per_sample, 6),
+                    "generated_tokens": new_tokens,
+                    "decode_steps": round(decode_steps[-1], 6),
+                }
+                if sample_mtp_metrics:
+                    row["mtp_metrics"] = sample_mtp_metrics
+                out_f.write(json.dumps(row, ensure_ascii=False) + "\n")
             out_f.flush()
 
     sync_device(device)
