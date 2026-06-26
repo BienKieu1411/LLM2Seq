@@ -8,7 +8,7 @@ huggingface:
   repo_id: null
   repo_type: model
   path_in_repo: checkpoints/phase3_mtp_self_distill_vlsp
-  push_each_epoch: false
+  push_each_epoch: true
   push_final_best: true
   keep_local_epoch_checkpoints: 1
   fail_on_error: true
@@ -65,9 +65,9 @@ mtp:
 
 training:
   stage: phase3_mtp_self_distill_vlsp
-  num_train_epochs: 10
+  num_train_epochs: 4
   batch_size: 2
-  grad_accum_steps: 16
+  grad_accum_steps: 1
   mtp_lr: 5.0e-4
   decoder_lr: 0.0
   adaptor_lr: 0.0
@@ -89,11 +89,11 @@ training:
 
 data:
   train_file: llm2seq/data/processed/vlsp/train.jsonl
-  eval_file: llm2seq/data/processed/vlsp/val.jsonl
+  # eval_file: null
   test_file: llm2seq/data/processed/vlsp/test.jsonl
   source_prefix: "Tóm tắt các văn bản sau thành một đoạn ngắn gọn:\n"
-  max_source_length: 8192
-  max_target_length: 768
+  max_source_length: 5120
+  max_target_length: 512
 
 evaluation:
   metrics: [rouge, latency]
@@ -102,12 +102,12 @@ evaluation:
 
 generation:
   do_sample: false
-  min_new_tokens: 32
-  max_new_tokens: 768
+  min_new_tokens: 96
+  max_new_tokens: 512
   temperature: 0.0
   top_k: 0
   top_p: 1.0
-  repetition_penalty: 1.15
+  repetition_penalty: 1.05
   no_repeat_ngram_size: 3
   eval_batch_size: 16
   mtp_fallback_to_autoregressive: true

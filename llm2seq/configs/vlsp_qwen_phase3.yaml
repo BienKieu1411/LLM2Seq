@@ -1,29 +1,29 @@
 project:
   name: llm2seq
   task: summarization
-  output_dir: runs/phase3_mtp_self_distill_wikilingua
+  output_dir: runs/phase3_mtp_self_distill_qwen_vlsp
 
 huggingface:
   enabled: true
   repo_id: null
   repo_type: model
-  path_in_repo: checkpoints/phase3_mtp_self_distill_wikilingua
+  path_in_repo: checkpoints/phase3_mtp_self_distill_qwen_vlsp
   push_each_epoch: true
   push_final_best: true
   keep_local_epoch_checkpoints: 1
   fail_on_error: true
 
 model:
-  encoder_name: McGill-NLP/LLM2Vec-Sheared-LLaMA-mntp
+  encoder_name: Qwen/Qwen3-Embedding-0.6B
   encoder_trainable: false
   use_lora_for_encoder: true
-  lora_r: 16
-  lora_alpha: 32
+  lora_r: 32
+  lora_alpha: 64
   lora_dropout: 0.05
   lora_target_modules:
     [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
   encoder_torch_dtype: bfloat16
-  d_enc: 2048
+  d_enc: 1024
   d_dec: 1024
 
 adaptor:
@@ -64,10 +64,10 @@ mtp:
   self_distill_head_weights: [1.0, 0.8, 0.5, 0.25]
 
 training:
-  stage: phase3_mtp_self_distill_wikilingua
-  num_train_epochs: 6
+  stage: phase3_mtp_self_distill_qwen_vlsp
+  num_train_epochs: 8
   batch_size: 20
-  grad_accum_steps: 4
+  grad_accum_steps: 1
   mtp_lr: 5.0e-4
   decoder_lr: 0.0
   adaptor_lr: 0.0
@@ -88,12 +88,12 @@ training:
   reset_best_eval_loss_on_resume: true
 
 data:
-  train_file: llm2seq/data/processed/train.jsonl
-  eval_file: llm2seq/data/processed/validation.jsonl
-  test_file: llm2seq/data/processed/test.jsonl
-  source_prefix: "Tóm tắt văn bản sau:\n"
-  max_source_length: 3072
-  max_target_length: 384
+  train_file: llm2seq/data/processed/vlsp/train.jsonl
+  # eval_file: null
+  test_file: llm2seq/data/processed/vlsp/test.jsonl
+  source_prefix: "Tóm tắt các văn bản sau thành một đoạn ngắn gọn:\n"
+  max_source_length: 5120
+  max_target_length: 512
 
 evaluation:
   metrics: [rouge, latency]
@@ -102,12 +102,12 @@ evaluation:
 
 generation:
   do_sample: false
-  min_new_tokens: 32
-  max_new_tokens: 256
+  min_new_tokens: 96
+  max_new_tokens: 512
   temperature: 0.0
   top_k: 0
   top_p: 1.0
-  repetition_penalty: 1.15
+  repetition_penalty: 1.05
   no_repeat_ngram_size: 3
   eval_batch_size: 64
   # Speed guard: verified MTP is only useful if accepted blocks are long enough

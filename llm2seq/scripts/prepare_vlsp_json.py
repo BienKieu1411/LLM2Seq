@@ -28,11 +28,22 @@ def convert_split(
                 continue
             example = json.loads(line)
             source_parts = []
-            for doc in example.get("text", []):
-                if isinstance(doc, list):
-                    source_parts.append(" ".join(doc))
-                elif isinstance(doc, str):
-                    source_parts.append(doc)
+            if "single_documents" in example:
+                for doc in example["single_documents"]:
+                    doc_parts = []
+                    if doc.get("title"):
+                        doc_parts.append(f"Title: {doc['title']}")
+                    if doc.get("anchor_text"):
+                        doc_parts.append(f"Anchor: {doc['anchor_text']}")
+                    if doc.get("raw_text"):
+                        doc_parts.append(f"Raw: {doc['raw_text']}")
+                    source_parts.append("\\n".join(doc_parts))
+            elif "text" in example:
+                for doc in example.get("text", []):
+                    if isinstance(doc, list):
+                        source_parts.append(" ".join(doc))
+                    elif isinstance(doc, str):
+                        source_parts.append(doc)
             source = source_joiner.join(source_parts)
             target_list = example.get("summary", [])
             target = target_joiner.join(target_list) if isinstance(target_list, list) else str(target_list)

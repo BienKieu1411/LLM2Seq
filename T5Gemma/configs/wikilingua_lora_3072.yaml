@@ -8,7 +8,7 @@ huggingface:
   repo_id: null
   repo_type: model
   path_in_repo: checkpoints/t5gemma2_1b_1b_lora_wikilingua
-  push_each_epoch: false
+  push_each_epoch: true
   push_final_best: true
   push_eval_outputs: true
   fail_on_error: true

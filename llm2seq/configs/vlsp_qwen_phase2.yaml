@@ -1,13 +1,13 @@
 project:
   name: llm2seq
   task: summarization
-  output_dir: runs/phase2_lora_encoder_qwen_wikilingua
+  output_dir: runs/phase2_lora_encoder_qwen_vlsp
 
 huggingface:
   enabled: true
   repo_id: null
   repo_type: model
-  path_in_repo: checkpoints/phase2_lora_encoder_qwen_wikilingua
+  path_in_repo: checkpoints/phase2_lora_encoder_qwen_vlsp
   push_each_epoch: true
   push_final_best: true
   keep_local_epoch_checkpoints: 1
@@ -47,13 +47,13 @@ small_decoder:
   max_seq_len: 1024
 
 training:
-  stage: phase2_lora_encoder_qwen_wikilingua
+  stage: phase2_lora_encoder_qwen_vlsp
   num_train_epochs: 6
-  batch_size: 8
-  grad_accum_steps: 4
+  batch_size: 16
+  grad_accum_steps: 1
   decoder_lr: 5.0e-5
   adaptor_lr: 5.0e-5
-  encoder_lr: 5.0e-4
+  encoder_lr: 1.0e-4
   warmup_ratio: 0.05
   min_lr_ratio: 0.1
   weight_decay: 0.05
@@ -72,12 +72,12 @@ training:
   reset_best_eval_loss_on_resume: true
 
 data:
-  train_file: llm2seq/data/processed/train.jsonl
-  eval_file: llm2seq/data/processed/validation.jsonl
-  test_file: llm2seq/data/processed/test.jsonl
-  source_prefix: "Tóm tắt văn bản sau:\n"
-  max_source_length: 3072
-  max_target_length: 384
+  train_file: llm2seq/data/processed/vlsp/train.jsonl
+  # eval_file: null
+  test_file: llm2seq/data/processed/vlsp/test.jsonl
+  source_prefix: "Tóm tắt các văn bản sau thành một đoạn ngắn gọn:\n"
+  max_source_length: 5120
+  max_target_length: 512
 
 evaluation:
   metrics: [rouge, latency]
@@ -86,11 +86,11 @@ evaluation:
 
 generation:
   do_sample: false
-  min_new_tokens: 32
-  max_new_tokens: 256
+  min_new_tokens: 96
+  max_new_tokens: 512
   temperature: 0.0
   top_k: 0
   top_p: 1.0
-  repetition_penalty: 1.15
+  repetition_penalty: 1.05
   no_repeat_ngram_size: 3
   eval_batch_size: 64

@@ -8,7 +8,7 @@ huggingface:
   repo_id: null
   repo_type: model
   path_in_repo: checkpoints/t5gemma2_1b_1b_lora_vlsp
-  push_each_epoch: false
+  push_each_epoch: true
   push_final_best: true
   push_eval_outputs: true
   fail_on_error: true
@@ -44,10 +44,10 @@ lora:
     - wo
 
 training:
-  num_train_epochs: 6
+  num_train_epochs: 4
   per_device_train_batch_size: 2
   per_device_eval_batch_size: 2
-  gradient_accumulation_steps: 8
+  gradient_accumulation_steps: 1
   learning_rate: 1.0e-4
   warmup_ratio: 0.05
   weight_decay: 0.01
@@ -65,15 +65,15 @@ training:
 
 data:
   train_file: T5Gemma/data/processed/vlsp/train.jsonl
-  eval_file: T5Gemma/data/processed/vlsp/val.jsonl
+  # eval_file: null
   test_file: T5Gemma/data/processed/vlsp/test.jsonl
   source_prefix: "Tóm tắt các văn bản sau thành một đoạn ngắn gọn:\n"
-  max_source_length: 8192
-  max_target_length: 768
+  max_source_length: 5120
+  max_target_length: 512
 
 generation:
-  max_new_tokens: 768
-  min_new_tokens: 32
+  max_new_tokens: 512
+  min_new_tokens: 96
   num_beams: 1
   do_sample: false
   early_stopping: true

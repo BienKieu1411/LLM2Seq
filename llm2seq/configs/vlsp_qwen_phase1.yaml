@@ -1,23 +1,23 @@
 project:
   name: llm2seq
   task: summarization
-  output_dir: runs/llm2seq_phase1_warmup_vlsp
+  output_dir: runs/phase1_warmup_qwen_vlsp
 
 huggingface:
   enabled: true
   repo_id: null
   repo_type: model
-  path_in_repo: checkpoints/phase1_warmup_vlsp
-  push_each_epoch: false
+  path_in_repo: checkpoints/phase1_warmup_qwen_vlsp
+  push_each_epoch: true
   push_final_best: true
   keep_local_epoch_checkpoints: 1
   fail_on_error: true
 
 model:
-  encoder_name: McGill-NLP/LLM2Vec-Sheared-LLaMA-mntp
+  encoder_name: Qwen/Qwen3-Embedding-0.6B
   encoder_trainable: false
   encoder_torch_dtype: bfloat16
-  d_enc: 2048
+  d_enc: 1024
   d_dec: 1024
 
 adaptor:
@@ -41,14 +41,14 @@ small_decoder:
   max_seq_len: 1024
 
 training:
-  stage: phase1_warmup_vlsp
-  num_train_epochs: 10
-  batch_size: 2
-  grad_accum_steps: 8
+  stage: phase1_warmup_qwen_vlsp
+  num_train_epochs: 4
+  batch_size: 16
+  grad_accum_steps: 1
   decoder_lr: 2.0e-4
   adaptor_lr: 2.0e-4
   encoder_lr: 0.0
-  warmup_ratio: 0.05
+  warmup_ratio: 0.03
   min_lr_ratio: 0.1
   weight_decay: 0.01
   max_grad_norm: 1.0
@@ -57,15 +57,15 @@ training:
   tf32: true
   gradient_checkpointing: false
   seed: 42
-  log_every_steps: 2
+  log_every_steps: 5
 
 data:
   train_file: llm2seq/data/processed/vlsp/train.jsonl
-  eval_file: llm2seq/data/processed/vlsp/val.jsonl
+  # eval_file: null
   test_file: llm2seq/data/processed/vlsp/test.jsonl
   source_prefix: "Tóm tắt các văn bản sau thành một đoạn ngắn gọn:\n"
-  max_source_length: 8192
-  max_target_length: 768
+  max_source_length: 5120
+  max_target_length: 512
 
 evaluation:
   metrics: [rouge, latency]
@@ -74,11 +74,11 @@ evaluation:
 
 generation:
   do_sample: false
-  min_new_tokens: 32
-  max_new_tokens: 768
+  min_new_tokens: 96
+  max_new_tokens: 512
   temperature: 0.0
   top_k: 0
   top_p: 1.0
   repetition_penalty: 1.15
   no_repeat_ngram_size: 3
-  eval_batch_size: 16
+  eval_batch_size: 64

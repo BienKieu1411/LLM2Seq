@@ -202,10 +202,11 @@ def make_training_arguments(cfg: Dict[str, Any], output_dir: Path) -> Seq2SeqTra
     }
     params = inspect.signature(Seq2SeqTrainingArguments.__init__).parameters
     valid_kwargs = {k: v for k, v in kwargs.items() if k in params}
+    eval_strat = "epoch" if cfg["data"].get("eval_file") else "no"
     if "eval_strategy" in params:
-        valid_kwargs["eval_strategy"] = "epoch"
+        valid_kwargs["eval_strategy"] = eval_strat
     else:
-        valid_kwargs["evaluation_strategy"] = "epoch"
+        valid_kwargs["evaluation_strategy"] = eval_strat
     return Seq2SeqTrainingArguments(**valid_kwargs)
 
 
@@ -402,10 +403,11 @@ def main() -> None:
     dtype = torch_dtype_from_config(cfg["model"].get("torch_dtype", "bfloat16"))
 
     train_file = Path(cfg["data"]["train_file"])
-    eval_file = Path(cfg["data"]["eval_file"])
+    eval_file_str = cfg["data"].get("eval_file")
+    eval_file = Path(eval_file_str) if eval_file_str else None
     if not train_file.exists():
         raise FileNotFoundError(train_file)
-    if not eval_file.exists():
+    if eval_file and not eval_file.exists():
         raise FileNotFoundError(eval_file)
 
     logging.info("Loading tokenizer: %s", model_name)
@@ -446,13 +448,15 @@ def main() -> None:
         int(cfg["data"]["max_source_length"]),
         int(cfg["data"]["max_target_length"]),
     )
-    eval_dataset = SummarizationDataset(
-        eval_file,
-        tokenizer,
-        cfg["data"].get("source_prefix", ""),
-        int(cfg["data"]["max_source_length"]),
-        int(cfg["data"]["max_target_length"]),
-    )
+    eval_dataset = None
+    if eval_file:
+        eval_dataset = SummarizationDataset(
+            eval_file,
+            tokenizer,
+            cfg["data"].get("source_prefix", ""),
+            int(cfg["data"]["max_source_length"]),
+            int(cfg["data"]["max_target_length"]),
+        )
     collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
         model=model,
@@ -469,7 +473,7 @@ def main() -> None:
         hf=hf,
     )
 
-    log_model_summary(model, cfg, len(train_dataset), len(eval_dataset))
+    log_model_summary(model, cfg, len(train_dataset), len(eval_dataset) if eval_dataset else 0)
     training_args = make_training_arguments(cfg, output_dir)
     trainer_kwargs = {
         "model": model,

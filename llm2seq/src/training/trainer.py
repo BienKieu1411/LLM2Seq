@@ -614,7 +614,7 @@ def train(
 
     # Dataset
     train_file = data_cfg.get("train_file", "data/processed/train.jsonl")
-    eval_file = data_cfg.get("eval_file", "data/processed/eval.jsonl")
+    eval_file = data_cfg.get("eval_file")
 
     train_dataset = Seq2SeqDataset(
         data_path=train_file,
@@ -623,13 +623,15 @@ def train(
         max_target_length=data_cfg.get("max_target_length", 256),
         source_prefix=data_cfg.get("source_prefix", ""),
     )
-    eval_dataset = Seq2SeqDataset(
-        data_path=eval_file,
-        tokenizer=tokenizer,
-        max_source_length=data_cfg.get("max_source_length", 512),
-        max_target_length=data_cfg.get("max_target_length", 256),
-        source_prefix=data_cfg.get("source_prefix", ""),
-    )
+    eval_dataset = None
+    if eval_file:
+        eval_dataset = Seq2SeqDataset(
+            data_path=eval_file,
+            tokenizer=tokenizer,
+            max_source_length=data_cfg.get("max_source_length", 512),
+            max_target_length=data_cfg.get("max_target_length", 256),
+            source_prefix=data_cfg.get("source_prefix", ""),
+        )
 
     collator = Seq2SeqCollator(
         pad_token_id=tokenizer.pad_token_id,
@@ -647,14 +649,16 @@ def train(
         pin_memory=True,
         drop_last=True,
     )
-    eval_loader = DataLoader(
-        eval_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        collate_fn=collator,
-        num_workers=2,
-        pin_memory=True,
-    )
+    eval_loader = None
+    if eval_dataset:
+        eval_loader = DataLoader(
+            eval_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=collator,
+            num_workers=2,
+            pin_memory=True,
+        )
 
     # Training params
     grad_accum_steps = int(training_cfg.get("grad_accum_steps", 8))
@@ -750,7 +754,10 @@ def train(
 
     # Training loop
     logger.info(f"Train file: {train_file} ({len(train_dataset):,} examples)")
-    logger.info(f"Eval file: {eval_file} ({len(eval_dataset):,} examples)")
+    if eval_dataset:
+        logger.info(f"Eval file: {eval_file} ({len(eval_dataset):,} examples)")
+    else:
+        logger.info("Eval file: None (Evaluation disabled)")
     logger.info(f"Starting training for {num_train_epochs} epochs ({max_steps:,} optimizer steps)...")
     logger.info(f"  Batch size: {batch_size}")
     logger.info(f"  Gradient accumulation: {grad_accum_steps}")
@@ -941,25 +948,28 @@ def train(
 
                 # Evaluation
                 if global_step % eval_every == 0:
-                    scheduled_mtp_kl_weight = getattr(cfg, "mtp_self_distill_loss_weight", 0.0)
-                    if cfg.use_mtp and cfg.mtp_self_distillation:
-                        cfg.mtp_self_distill_loss_weight = get_mtp_self_distill_final_weight(raw_cfg, cfg)
-                    eval_loss = evaluate(model, eval_loader, device, amp_dtype, use_fp16 or use_bf16)
-                    if cfg.use_mtp and cfg.mtp_self_distillation:
-                        cfg.mtp_self_distill_loss_weight = scheduled_mtp_kl_weight
-                    logger.info(f"Step {global_step} | Eval Loss: {eval_loss:.4f}")
-                    set_training_mode(model, training_cfg)
-
-                    # Save best
-                    if eval_loss < best_eval_loss:
-                        best_eval_loss = eval_loss
-                        save_checkpoint(
-                            model, optimizer, global_step, best_eval_loss,
-                            os.path.join(output_dir, "best.pt"),
-                            include_optimizer=False,
-                            raw_config=raw_cfg,
-                        )
-                        logger.info(f"New best eval loss: {best_eval_loss:.4f}")
+                    if eval_loader is not None:
+                        scheduled_mtp_kl_weight = getattr(cfg, "mtp_self_distill_loss_weight", 0.0)
+                        if cfg.use_mtp and cfg.mtp_self_distillation:
+                            cfg.mtp_self_distill_loss_weight = get_mtp_self_distill_final_weight(raw_cfg, cfg)
+                        eval_loss = evaluate(model, eval_loader, device, amp_dtype, use_fp16 or use_bf16)
+                        if cfg.use_mtp and cfg.mtp_self_distillation:
+                            cfg.mtp_self_distill_loss_weight = scheduled_mtp_kl_weight
+                        logger.info(f"Step {global_step} | Eval Loss: {eval_loss:.4f}")
+                        set_training_mode(model, training_cfg)
+    
+                        # Save best
+                        if eval_loss < best_eval_loss:
+                            best_eval_loss = eval_loss
+                            save_checkpoint(
+                                model, optimizer, global_step, best_eval_loss,
+                                os.path.join(output_dir, "best.pt"),
+                                include_optimizer=False,
+                                raw_config=raw_cfg,
+                            )
+                            logger.info(f"New best eval loss: {best_eval_loss:.4f}")
+                    else:
+                        eval_loss = 0.0
 
                     # The actual completed epoch according to global_step
                     completed_epochs = global_step // steps_per_epoch
@@ -977,27 +987,6 @@ def train(
                         hf_pusher.upload_epoch_checkpoint(epoch_ckpt_path, completed_epochs, global_step)
                         cleanup_epoch_checkpoints(output_dir, hf_pusher.keep_local_epoch_checkpoints)
 
-                # ROUGE evaluation at configured epoch intervals
-                rouge_eval_every = int(eval_cfg.get("rouge_eval_every_epochs", 0))
-                rouge_eval_max_samples = int(eval_cfg.get("rouge_eval_max_samples", 500))
-                if rouge_eval_every > 0 and global_step > 0 and global_step % (steps_per_epoch * rouge_eval_every) == 0:
-                    completed_epochs = global_step // steps_per_epoch
-                    logger.info("Running ROUGE evaluation at epoch %d (max %d samples)...", completed_epochs, rouge_eval_max_samples)
-                    rouge_start = time.perf_counter()
-                    rouge_scores = evaluate_rouge(
-                        model, eval_dataset, tokenizer, device, raw_cfg,
-                        max_samples=rouge_eval_max_samples,
-                    )
-                    rouge_elapsed = time.perf_counter() - rouge_start
-                    logger.info(
-                        "Epoch %d ROUGE: R1=%.2f | R2=%.2f | RL=%.2f (%.1fs)",
-                        completed_epochs,
-                        rouge_scores["rouge1"],
-                        rouge_scores["rouge2"],
-                        rouge_scores["rougeL"],
-                        rouge_elapsed,
-                    )
-                    set_training_mode(model, training_cfg)
 
     # Save the absolute final model as best.pt regardless of eval loss
     final_ckpt_path = os.path.join(output_dir, "best.pt")
