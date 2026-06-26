@@ -495,8 +495,8 @@ def _slice_decoder_cache(past_key_values, keep_length: int):
                 k, v = layer_past
                 sliced.append(
                     (
-                        k[:, :, :keep_length, :].contiguous(),
-                        v[:, :, :keep_length, :].contiguous(),
+                        k[:, :, :keep_length, :],
+                        v[:, :, :keep_length, :],
                     )
                 )
         return sliced
@@ -506,8 +506,8 @@ def _slice_decoder_cache(past_key_values, keep_length: int):
         k, v = layer_past
         sliced_tuple.append(
             (
-                k[:, :, :keep_length, :].contiguous(),
-                v[:, :, :keep_length, :].contiguous(),
+                k[:, :, :keep_length, :],
+                v[:, :, :keep_length, :],
             )
         )
     return tuple(sliced_tuple)
@@ -580,25 +580,26 @@ def _apply_greedy_constraints_from_list(
     eos_token_id: Optional[int],
 ) -> torch.Tensor:
     """Single-sample fast path for deterministic decoding constraints."""
-    constrained = logits.clone()
+    constrained = logits
 
     if eos_token_id is not None and generated_count + 1 < min_new_tokens:
         constrained[:, eos_token_id] = float("-inf")
 
     if repetition_penalty and repetition_penalty != 1.0:
-        for token_id in set(prefix_tokens):
-            if constrained[0, token_id] < 0:
-                constrained[0, token_id] *= repetition_penalty
-            else:
-                constrained[0, token_id] /= repetition_penalty
+        unique_tokens = list(set(prefix_tokens))
+        if unique_tokens:
+            score = constrained[0, unique_tokens]
+            score = torch.where(score < 0, score * repetition_penalty, score / repetition_penalty)
+            constrained[0, unique_tokens] = score
 
     if no_repeat_ngram_size and len(prefix_tokens) >= no_repeat_ngram_size:
-        ngram_prefix = tuple(prefix_tokens[-(no_repeat_ngram_size - 1):])
+        n = no_repeat_ngram_size
+        prefix_len = len(prefix_tokens)
+        prefix = prefix_tokens[-(n - 1):]
         blocked_tokens = []
-        for i in range(len(prefix_tokens) - no_repeat_ngram_size + 1):
-            ngram = tuple(prefix_tokens[i: i + no_repeat_ngram_size])
-            if ngram[:-1] == ngram_prefix:
-                blocked_tokens.append(ngram[-1])
+        for i in range(prefix_len - n + 1):
+            if prefix_tokens[i : i + n - 1] == prefix:
+                blocked_tokens.append(prefix_tokens[i + n - 1])
         if blocked_tokens:
             constrained[0, blocked_tokens] = float("-inf")
 

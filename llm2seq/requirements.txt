@@ -1,5 +1,5 @@
 # Core dependencies
-transformers>=4.43.1,<4.48
+transformers>=4.48.0
 huggingface_hub>=0.23
 datasets>=2.20
 accelerate>=0.30

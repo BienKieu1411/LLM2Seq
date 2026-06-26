@@ -42,7 +42,7 @@ small_decoder:
 
 training:
   stage: phase1_warmup_qwen_vlsp
-  num_train_epochs: 4
+  num_train_epochs: 6
   batch_size: 16
   grad_accum_steps: 1
   decoder_lr: 2.0e-4
@@ -63,7 +63,8 @@ data:
   train_file: llm2seq/data/processed/vlsp/train.jsonl
   # eval_file: null
   test_file: llm2seq/data/processed/vlsp/test.jsonl
-  source_prefix: "Tóm tắt các văn bản sau thành một đoạn ngắn gọn:\n"
+  source_prefix: "Dựa vào tiêu đề, từ khóa và nội dung của các văn bản sau, hãy tóm tắt thành một đoạn ngắn gọn:
+"
   max_source_length: 5120
   max_target_length: 512
 

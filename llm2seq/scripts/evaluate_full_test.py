@@ -150,6 +150,8 @@ def is_allowed_missing_key(key: str, allowed_prefixes: tuple[str, ...], stage: s
         return False
     if context == "delta" and "phase3_mtp_self_distill" in stage and key.startswith("encoder.") and "lora_" in key:
         pass
+    elif context == "base" and "phase2_lora_encoder" in stage and key.startswith("encoder.") and "lora_" in key:
+        pass
     elif "phase1_warmup" not in stage and key.startswith("encoder.") and "lora_" in key:
         return False
     if context == "delta" and key.startswith("mtp_module.blocks."):
@@ -244,7 +246,7 @@ def aggregate_mtp_metrics(metrics_list: List[Dict[str, Any]]) -> Dict[str, Any]:
     ]
     result: Dict[str, Any] = {}
     for key in numeric_keys:
-        values = [float(metrics[key]) for metrics in metrics_list if key in metrics]
+        values = [float(metrics[key]) for metrics in metrics_list if key in metrics and metrics[key] is not None]
         if values:
             result[f"mtp_{key}_mean"] = round(safe_mean(values), 6)
             result[f"mtp_{key}_median"] = round(safe_median(values), 6)

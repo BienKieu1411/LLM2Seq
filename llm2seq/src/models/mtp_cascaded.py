@@ -269,12 +269,12 @@ class CascadedMTP(nn.Module):
             h_k = block(h_prev, future_embed, causal_mask=None)
 
             logits_k = self.lm_head(h_k)  # [B, 1, vocab_size]
-            probs = torch.softmax(logits_k, dim=-1)
-            confidence, token_ids = probs.max(dim=-1)
-
+            # Skip expensive softmax since we only need argmax for verified decoding
+            token_ids = logits_k.argmax(dim=-1)
+            
             drafts.append({
                 "token_ids": token_ids,
-                "confidence": confidence,
+                "confidence": None,  # Not used in verified mode
             })
 
             # Next depth uses this prediction

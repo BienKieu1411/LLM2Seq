@@ -109,10 +109,10 @@ generation:
   top_p: 1.0
   repetition_penalty: 1.15
   no_repeat_ngram_size: 3
-  eval_batch_size: 64
+  eval_batch_size: 1
   # Speed guard: verified MTP is only useful if accepted blocks are long enough
   # to pay for the extra draft + verifier work. Probe early; if emitted
   # tokens/step is below this threshold, continue with main-head autoregressive.
-  mtp_fallback_to_autoregressive: true
+  mtp_fallback_to_autoregressive: false
   mtp_fallback_after_steps: 1
   mtp_fallback_min_emitted_length: 3.8

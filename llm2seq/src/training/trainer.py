@@ -540,6 +540,7 @@ def write_checkpoint_manifest(raw_cfg: Dict[str, Any], output_dir: str) -> None:
 def train(
     config_path: str,
     resume_from: Optional[str] = None,
+    base_checkpoint: Optional[str] = None,
 ) -> None:
     """
     Main training function.
@@ -715,6 +716,17 @@ def train(
     global_step = 0
     best_eval_loss = float("inf")
     stage = str(training_cfg.get("stage", ""))
+    base_state_dict = None
+    # Load base checkpoint if provided
+    base_ckpt_path_str = base_checkpoint or training_cfg.get("base_checkpoint", None)
+    if base_ckpt_path_str:
+        base_ckpt_path = resolve_resume_checkpoint_path(base_ckpt_path_str, raw_cfg, stage)
+        if base_ckpt_path:
+            logger.info(f"Loading required base checkpoint before resume: {base_ckpt_path}")
+            base_ckpt = torch.load(base_ckpt_path, map_location="cpu")
+            base_state_dict = base_ckpt.get("model_state_dict", base_ckpt)
+            model.load_state_dict(base_state_dict, strict=False)
+
     checkpoint_path = resolve_resume_checkpoint_path(
         resume_from or training_cfg.get("resume_from", None),
         raw_cfg,
@@ -723,6 +735,13 @@ def train(
     if checkpoint_path:
         logger.info(f"Resuming from checkpoint: {checkpoint_path}")
         ckpt = torch.load(checkpoint_path, map_location="cpu")
+        
+        # Merge base_state_dict into ckpt so load_model_state_checked doesn't complain about missing Phase 2 weights
+        if base_state_dict is not None:
+            for k, v in base_state_dict.items():
+                if k not in ckpt["model_state_dict"]:
+                    ckpt["model_state_dict"][k] = v
+
         load_model_state_checked(
             model=model,
             state_dict=ckpt["model_state_dict"],
@@ -736,6 +755,10 @@ def train(
             logger.info("Skipped optimizer state resume because training.skip_optimizer_resume=true")
         if "global_step" in ckpt and not training_cfg.get("reset_global_step_on_resume", False):
             global_step = ckpt["global_step"]
+            # Fast-forward the learning rate scheduler and update param groups
+            if global_step > 0:
+                scheduler.last_epoch = global_step - 1
+                scheduler.step()
         elif "global_step" in ckpt:
             logger.info("Reset global step because training.reset_global_step_on_resume=true")
         if "best_eval_loss" in ckpt and not training_cfg.get("reset_best_eval_loss_on_resume", False):
@@ -823,7 +846,7 @@ def train(
     running_mtp_kl = 0.0
     step_count = 0
 
-    epoch = 0
+    epoch = global_step // max(1, steps_per_epoch)
     while global_step < max_steps:
         epoch += 1
         for batch in train_loader:
@@ -1249,9 +1272,10 @@ def main():
     parser = argparse.ArgumentParser(description="LLM2Seq Training")
     parser.add_argument("--config", required=True, help="Path to YAML config file")
     parser.add_argument("--resume", default=None, help="Path to checkpoint to resume from")
+    parser.add_argument("--base_checkpoint", default=None, help="Path to base checkpoint to load before resuming")
     args = parser.parse_args()
 
-    train(config_path=args.config, resume_from=args.resume)
+    train(config_path=args.config, resume_from=args.resume, base_checkpoint=args.base_checkpoint)
 
 
 if __name__ == "__main__":

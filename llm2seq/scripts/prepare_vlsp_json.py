@@ -75,8 +75,8 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     source_joiner = decode_separator(args.source_joiner)
     target_joiner = decode_separator(args.target_joiner)
-    for filepath in input_dir.glob("*.label.jsonl"):
-        split_name = filepath.name.replace(".label.jsonl", "")
+    for filepath in input_dir.glob("*.jsonl"):
+        split_name = filepath.name.replace(".jsonl", "")
         if split_name == "vlsp_2022_abmusu":
             continue
         convert_split(

@@ -44,8 +44,8 @@ lora:
     - wo
 
 training:
-  num_train_epochs: 4
-  per_device_train_batch_size: 2
+  num_train_epochs: 6
+  per_device_train_batch_size: 16
   per_device_eval_batch_size: 2
   gradient_accumulation_steps: 1
   learning_rate: 1.0e-4
@@ -67,13 +67,13 @@ data:
   train_file: T5Gemma/data/processed/vlsp/train.jsonl
   # eval_file: null
   test_file: T5Gemma/data/processed/vlsp/test.jsonl
-  source_prefix: "Tóm tắt các văn bản sau thành một đoạn ngắn gọn:\n"
+  source_prefix: "Dựa vào tiêu đề, từ khóa và nội dung của các văn bản sau, hãy tóm tắt thành một đoạn ngắn gọn:\n"
   max_source_length: 5120
   max_target_length: 512
 
 generation:
   max_new_tokens: 512
-  min_new_tokens: 96
+  min_new_tokens: 32
   num_beams: 1
   do_sample: false
   early_stopping: true
