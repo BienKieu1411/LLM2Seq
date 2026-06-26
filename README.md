@@ -29,9 +29,9 @@ Dưới đây là kết quả so sánh hiệu năng của **LLM2Seq (Phase 2 - L
 | **Chỉ số (Metric)** | **LLM2Seq (Llama Encoder)** | **LLM2Seq (Qwen Encoder)** | **T5Gemma (1B-1B)** | **Đánh giá chi tiết**                 |
 | :--------------------| :---------------------------:| :--------------------------:| :-------------------:| :--------------------------------------|
 | **Tổng tham số**    | ~1.5B                       | ~1B                        | ~2B                 | *T5Gemma lớn nhất, Qwen gọn nhẹ nhất* |
-| **ROUGE-1**         | 48.36                       | 53.91                      | **54.24**           | *Qwen kéo LLM2Seq ngang ngửa T5Gemma* |
-| **ROUGE-2**         | 15.54                       | 20.74                      | **27.42**           | *T5Gemma vẫn vượt trội về độ mượt*    |
-| **ROUGE-L**         | 29.05                       | 31.77                      | **33.89**           | *T5Gemma nhỉnh hơn một chút*          |
+| **ROUGE-1**         | 48.36                       | 54.01                      | **54.24**           | *Qwen kéo LLM2Seq ngang ngửa T5Gemma* |
+| **ROUGE-2**         | 15.54                       | 20.83                      | **27.42**           | *T5Gemma vẫn vượt trội về độ mượt*    |
+| **ROUGE-L**         | 29.05                       | 31.83                      | **33.89**           | *T5Gemma nhỉnh hơn một chút*          |
 
 *Ghi chú: Điểm được lấy ở Phase 2 của các mô hình LLM2Seq.*
 
@@ -47,7 +47,7 @@ Dưới đây là kết quả so sánh hiệu năng của **LLM2Seq (Phase 2 - L
 
 ## Evaluation Results: Phase 3 (MTP Speedup)
 
-Dưới đây là kết quả đánh giá tốc độ sinh văn bản của kiến trúc **MTP (Multi-Token Prediction)** so với phương pháp sinh từng từ truyền thống (Autoregressive Baseline) trên tập WikiLingua.
+Kế thừa phiên bản tốt nhất từ Phase 2 là **LLM2Seq (Qwen Encoder)**, mô hình tiếp tục được huấn luyện Phase 3 để tích hợp module MTP. Dưới đây là kết quả so sánh tốc độ sinh văn bản của **Kiến trúc MTP (Verified Decoding)** so với phương pháp sinh từng từ truyền thống (Autoregressive Baseline) của chính nó trên tập WikiLingua.
 
 | **Chỉ số (Metric)**             | **Autoregressive (Baseline)** | **MTP (Verified Decoding)** | **Đánh giá chi tiết**                                     |
 | :--------------------------------| :-----------------------------:| :---------------------------:| :----------------------------------------------------------|
