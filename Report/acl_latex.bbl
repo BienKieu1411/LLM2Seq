@@ -1,0 +1,192 @@
+\begin{thebibliography}{26}
+\providecommand{\natexlab}[1]{#1}
+
+\bibitem[{Bahdanau et~al.(2015)Bahdanau, Cho, and Bengio}]{bahdanau2015neural}
+Dzmitry Bahdanau, Kyunghyun Cho, and Yoshua Bengio. 2015.
+\newblock Neural machine translation by jointly learning to align and
+  translate.
+\newblock In \emph{International Conference on Learning Representations}.
+
+\bibitem[{BehnamGhader et~al.(2024)BehnamGhader, Adlakha, Mosbach, Bahdanau,
+  Chapados, and Reddy}]{behnamghader2024llm2vec}
+Parishad BehnamGhader, Vaibhav Adlakha, Marius Mosbach, Dzmitry Bahdanau,
+  Nicolas Chapados, and Siva Reddy. 2024.
+\newblock {LLM2Vec}: Large language models are secretly powerful text encoders.
+\newblock In \emph{First Conference on Language Modeling}.
+
+\bibitem[{Brown et~al.(2020)Brown, Mann, Ryder, Subbiah, Kaplan, Dhariwal,
+  Neelakantan, Shyam, Sastry, Askell et~al.}]{brown2020language}
+Tom~B. Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared Kaplan,
+  Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda
+  Askell, and 1 others. 2020.
+\newblock Language models are few-shot learners.
+\newblock \emph{Advances in Neural Information Processing Systems}.
+
+\bibitem[{Cai et~al.(2024)Cai, Li, Geng, Peng, Lee, Chen, and
+  Dao}]{cai2024medusa}
+Tianle Cai, Yuhong Li, Zhengyang Geng, Hongwu Peng, Jason~D. Lee, Deming Chen,
+  and Tri Dao. 2024.
+\newblock Medusa: Simple llm inference acceleration framework with multiple
+  decoding heads.
+\newblock \emph{arXiv preprint arXiv:2401.10774}.
+
+\bibitem[{{DeepSeek-AI}(2024)}]{deepseekai2024deepseekv3}
+{DeepSeek-AI}. 2024.
+\newblock {DeepSeek-V3} technical report.
+\newblock \emph{arXiv preprint arXiv:2412.19437}.
+
+\bibitem[{Dubey et~al.(2024)Dubey, Jauhri, Pandey, Kadian, Al-Dahle, Letman,
+  Mathur, Schelten, Yang, Fan et~al.}]{dubey2024llama3}
+Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Kadian, Ahmad
+  Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten, Amy Yang, Angela Fan,
+  and 1 others. 2024.
+\newblock The llama 3 herd of models.
+\newblock \emph{arXiv preprint arXiv:2407.21783}.
+
+\bibitem[{Gloeckle et~al.(2024)Gloeckle, Idrissi, Roziere, Lopez-Paz, and
+  Synnaeve}]{gloeckle2024mtp}
+Fabian Gloeckle, Badr~Youbi Idrissi, Baptiste Roziere, David Lopez-Paz, and
+  Gabriel Synnaeve. 2024.
+\newblock Better and faster large language models via multi-token prediction.
+\newblock \emph{arXiv preprint arXiv:2404.19737}.
+
+\bibitem[{Hinton et~al.(2015)Hinton, Vinyals, and Dean}]{hinton2015distilling}
+Geoffrey Hinton, Oriol Vinyals, and Jeff Dean. 2015.
+\newblock Distilling the knowledge in a neural network.
+\newblock In \emph{NIPS Deep Learning and Representation Learning Workshop}.
+
+\bibitem[{Hu et~al.(2022)Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and
+  Chen}]{hu2022lora}
+Edward~J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
+  Wang, Lu~Wang, and Weizhu Chen. 2022.
+\newblock {LoRA}: Low-rank adaptation of large language models.
+\newblock In \emph{International Conference on Learning Representations}.
+
+\bibitem[{Ladhak et~al.(2020)Ladhak, Durmus, Cardie, and
+  McKeown}]{ladhak2020wikilingua}
+Faisal Ladhak, Esin Durmus, Claire Cardie, and Kathleen McKeown. 2020.
+\newblock {WikiLingua}: A new benchmark dataset for cross-lingual abstractive
+  summarization.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  EMNLP 2020}, pages 4034--4048.
+
+\bibitem[{Leviathan et~al.(2023)Leviathan, Kalman, and
+  Matias}]{leviathan2023speculative}
+Yaniv Leviathan, Matan Kalman, and Yossi Matias. 2023.
+\newblock Fast inference from transformers via speculative decoding.
+\newblock In \emph{Proceedings of the 40th International Conference on Machine
+  Learning}.
+
+\bibitem[{Lewis et~al.(2020)Lewis, Liu, Goyal, Ghazvininejad, Mohamed, Levy,
+  Stoyanov, and Zettlemoyer}]{lewis2020bart}
+Mike Lewis, Yinhan Liu, Naman Goyal, Marjan Ghazvininejad, Abdelrahman Mohamed,
+  Omer Levy, Veselin Stoyanov, and Luke Zettlemoyer. 2020.
+\newblock {BART}: Denoising sequence-to-sequence pre-training for natural
+  language generation, translation, and comprehension.
+\newblock In \emph{Proceedings of the 58th Annual Meeting of the Association
+  for Computational Linguistics}, pages 7871--7880.
+
+\bibitem[{Lin(2004)}]{lin2004rouge}
+Chin-Yew Lin. 2004.
+\newblock {ROUGE}: A package for automatic evaluation of summaries.
+\newblock In \emph{Text Summarization Branches Out}, pages 74--81.
+
+\bibitem[{Luo et~al.(2025)Luo, Zheng, Mu, Li, Zhang, Gao, Xu, Feng, Liu, Xiao,
+  and Zhu}]{luo2025lamate}
+Yingfeng Luo, Tong Zheng, Yongyu Mu, Bei Li, Qinghong Zhang, Yongqi Gao,
+  Ziqiang Xu, Peinan Feng, Xiaoqian Liu, Tong Xiao, and Jingbo Zhu. 2025.
+\newblock Beyond decoder-only: Large language models can be good encoders for
+  machine translation.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  ACL 2025}, pages 9399--9431.
+
+\bibitem[{Muennighoff et~al.(2024)Muennighoff, Su, Wang, Yang, Wei, Yu, Singh,
+  and Kiela}]{muennighoff2024grit}
+Niklas Muennighoff, Hongjin Su, Liang Wang, Nan Yang, Furu Wei, Tao Yu,
+  Amanpreet Singh, and Douwe Kiela. 2024.
+\newblock Generative representational instruction tuning.
+\newblock \emph{arXiv preprint arXiv:2402.09906}.
+
+\bibitem[{Post(2018)}]{post2018call}
+Matt Post. 2018.
+\newblock A call for clarity in reporting {BLEU} scores.
+\newblock In \emph{Proceedings of the Third Conference on Machine Translation:
+  Research Papers}, pages 186--191.
+
+\bibitem[{Raffel et~al.(2020)Raffel, Shazeer, Roberts, Lee, Narang, Matena,
+  Zhou, Li, and Liu}]{raffel2020t5}
+Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang, Michael
+  Matena, Yanqi Zhou, Wei Li, and Peter~J. Liu. 2020.
+\newblock Exploring the limits of transfer learning with a unified text-to-text
+  transformer.
+\newblock \emph{Journal of Machine Learning Research}, 21(140):1--67.
+
+\bibitem[{Stern et~al.(2018)Stern, Shazeer, and Uszkoreit}]{stern2018blockwise}
+Mitchell Stern, Noam Shazeer, and Jakob Uszkoreit. 2018.
+\newblock Blockwise parallel decoding for deep autoregressive models.
+\newblock In \emph{Advances in Neural Information Processing Systems}.
+
+\bibitem[{Sutskever et~al.(2014)Sutskever, Vinyals, and
+  Le}]{sutskever2014sequence}
+Ilya Sutskever, Oriol Vinyals, and Quoc~V. Le. 2014.
+\newblock Sequence to sequence learning with neural networks.
+\newblock In \emph{Advances in Neural Information Processing Systems}.
+
+\bibitem[{Vaswani et~al.(2017)Vaswani, Shazeer, Parmar, Uszkoreit, Jones,
+  Gomez, Kaiser, and Polosukhin}]{vaswani2017attention}
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones,
+  Aidan~N. Gomez, Lukasz Kaiser, and Illia Polosukhin. 2017.
+\newblock Attention is all you need.
+\newblock In \emph{Advances in Neural Information Processing Systems}.
+
+\bibitem[{Wang et~al.(2019)Wang, Li, Xiao, Zhu, Li, Wong, and
+  Chao}]{wang2019deeptransformer}
+Qiang Wang, Bei Li, Tong Xiao, Jingbo Zhu, Changliang Li, Derek~F. Wong, and
+  Lidia~S. Chao. 2019.
+\newblock Learning deep transformer models for machine translation.
+\newblock In \emph{Proceedings of the 57th Annual Meeting of the Association
+  for Computational Linguistics}, pages 1810--1822.
+
+\bibitem[{Xiao et~al.(2023)Xiao, Lin, Seznec, Wu, Demouth, and
+  Han}]{xiao2023smoothquant}
+Guangxuan Xiao, Ji~Lin, Mickael Seznec, Hao Wu, Julien Demouth, and Song Han.
+  2023.
+\newblock {SmoothQuant}: Accurate and efficient post-training quantization for
+  large language models.
+\newblock In \emph{Proceedings of the 40th International Conference on Machine
+  Learning}.
+
+\bibitem[{Xue et~al.(2021)Xue, Constant, Roberts, Kale, Al-Rfou, Siddhant,
+  Barua, and Raffel}]{xue2021mt5}
+Linting Xue, Noah Constant, Adam Roberts, Mihir Kale, Rami Al-Rfou, Aditya
+  Siddhant, Aditya Barua, and Colin Raffel. 2021.
+\newblock {mT5}: A massively multilingual pre-trained text-to-text transformer.
+\newblock In \emph{Proceedings of the 2021 Conference of the North American
+  Chapter of the Association for Computational Linguistics: Human Language
+  Technologies}, pages 483--498.
+
+\bibitem[{Yang et~al.(2024)Yang, Yang, Hui, Zheng, Yu, Zhou, Li, Li, Liu, Huang
+  et~al.}]{yang2024qwen2}
+An~Yang, Baosong Yang, Binyuan Hui, Bo~Zheng, Bowen Yu, Chang Zhou, Chengpeng
+  Li, Chengyuan Li, Dayiheng Liu, Fei Huang, and 1 others. 2024.
+\newblock Qwen2 technical report.
+\newblock \emph{arXiv preprint arXiv:2407.10671}.
+
+\bibitem[{Zhang et~al.(2025)Zhang, Suganthan, Liu, Philippov, Dua, Hora, Black,
+  Martins, Sanseviero, Pathak, Hardin, Visin, Zhang, Kenealy, Yin, Lacombe,
+  Joulin, Warkentin, and Roberts}]{zhang2025t5gemma2}
+Biao Zhang, Paul Suganthan, Gael Liu, Ilya Philippov, Sahil Dua, Ben Hora, Kat
+  Black, Gus Martins, Omar Sanseviero, Shreya Pathak, Cassidy Hardin, Francesco
+  Visin, Jiageng Zhang, Kathleen Kenealy, Qin Yin, Olivier Lacombe, Armand
+  Joulin, Tris Warkentin, and Adam Roberts. 2025.
+\newblock {T5Gemma} 2: Seeing, reading, and understanding longer.
+\newblock \emph{arXiv preprint arXiv:2512.14856}.
+
+\bibitem[{Zhao et~al.(2026)Zhao, Xie, Wang, Li, Xie, and
+  Sun}]{zhao2026mtpdistill}
+Guoliang Zhao, Ruobing Xie, An~Wang, Shuaipeng Li, Huaibing Xie, and Xingwu
+  Sun. 2026.
+\newblock Self-distillation for multi-token prediction.
+\newblock \emph{arXiv preprint arXiv:2603.23911}.
+
+\end{thebibliography}

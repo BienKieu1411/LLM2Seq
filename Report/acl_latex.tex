@@ -1,0 +1,370 @@
+\documentclass[11pt]{article}
+
+% ACL style
+\usepackage[preprint]{acl}
+
+% Fonts
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{times}
+\usepackage{inconsolata}
+
+% Packages
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage[normalem]{ulem}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{amsmath}
+
+\graphicspath{{../llm2seq/figures/}{llm2seq/figures/}}
+
+\title{From Decoder-Only to Encoder-Decoder: Repurposing LLMs for Abstractive Summarization}
+
+\author{
+Giang-Bien Kieu \\
+Hanoi University of Science and Technology\\
+HUST, Vietnam\\
+\texttt{bienkieugiang@gmail.com}
+\And
+Xuan-Dung Doan\\
+Viettel Artificial Intelligence Center\\
+Viettel Group, Vietnam\\
+\texttt{dungdx4@viettel.com.vn}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Decoder-only large language models are strong generators, but they are not a natural fit for long-input summarization.
+They read and write through one causal stream.
+This makes them expensive when the input is long and the output must stay faithful.
+We present LLM2Seq, an encoder-decoder framework for abstractive summarization.
+LLM2Seq reuses a decoder-only LLM as a bidirectional encoder, connects it to a lightweight Transformer decoder through a gated residual adaptor, and optionally adds multi-token prediction (MTP) for faster decoding.
+We evaluate on WikiLingua with 3,901 test examples.
+Using a Qwen encoder, LLM2Seq reaches 54.01 ROUGE-1, 20.83 ROUGE-2, and 31.83 ROUGE-L.
+This is close to a larger T5Gemma-2-1B-1B LoRA baseline on ROUGE-1, while producing shorter summaries.
+MTP with verified decoding gives a 1.17x measured token-per-second speedup for the Qwen variant with only small ROUGE changes.
+The result shows that decoder-only LLMs can be reused for summarization, but decoding speedup depends on system overhead, not only on accepted tokens per step.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+
+Summarization is easy to state.
+A system reads a long document and writes a shorter one.
+The hard part is deciding what to keep.
+The model must compress the text, preserve facts, and generate fluent output.
+
+Decoder-only LLMs are now the dominant form of large language model \citep{brown2020language,dubey2024llama3,yang2024qwen2}.
+They scale well and generate strong text.
+But their causal structure is not ideal for sequence-to-sequence tasks.
+For summarization, the source document should be read first.
+Then the model should generate the summary.
+
+Encoder-decoder models follow this pattern naturally \citep{sutskever2014sequence,bahdanau2015neural,vaswani2017attention}.
+The encoder builds a source representation.
+The decoder generates from it using cross-attention.
+This design is used by T5, BART, and mT5 \citep{raffel2020t5,lewis2020bart,xue2021mt5}.
+The problem is that many strong recent LLMs are decoder-only.
+If we want their representations inside an encoder-decoder model, we need to repurpose them.
+
+LLM2Seq starts from that idea.
+It uses an LLM2Vec-style encoder \citep{behnamghader2024llm2vec}.
+It then adds a gated residual adaptor and a lightweight decoder.
+The adaptor is important.
+It must turn the encoder memory into something the decoder can use without losing source information.
+
+The project is a summarization study.
+We train and evaluate on WikiLingua \citep{ladhak2020wikilingua}.
+We compare LLM2Seq with Llama and Qwen encoders against a T5Gemma-2-1B-1B LoRA baseline \citep{zhang2025t5gemma2}.
+We also test MTP with self-distillation for faster decoding.
+
+Our main findings are:
+\begin{itemize}
+    \item LLM2Seq with a Qwen encoder is much stronger than the Llama encoder on WikiLingua.
+    \item T5Gemma gives the best ROUGE-2 and ROUGE-L, but it produces much longer summaries.
+    \item Verified MTP keeps quality nearly stable for Qwen and gives 1.17x measured decoding speedup.
+    \item MTP does not guarantee speedup. The Llama variant accepts more tokens per step but still becomes slower because verification overhead dominates.
+\end{itemize}
+
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Encoder-decoder summarization.}
+Sequence-to-sequence learning first used recurrent encoders and decoders \citep{sutskever2014sequence}.
+Attention improved this by letting the decoder focus on source states \citep{bahdanau2015neural}.
+The Transformer made self-attention the standard architecture \citep{vaswani2017attention}.
+T5 frames every task as text-to-text generation \citep{raffel2020t5}.
+BART uses denoising pretraining and works well for generation and summarization \citep{lewis2020bart}.
+mT5 extends this recipe to multilingual data \citep{xue2021mt5}.
+
+\paragraph{Decoder-only LLMs as encoders.}
+LLM2Vec shows that a decoder-only LLM can become a strong bidirectional text encoder \citep{behnamghader2024llm2vec}.
+GRIT also shows that generative models can learn useful representations for retrieval and embedding tasks \citep{muennighoff2024grit}.
+LaMaTE applies a related idea to machine translation, using LLMs as encoders for seq2seq generation \citep{luo2025lamate}.
+T5Gemma adapts Gemma-style models into encoder-decoder models \citep{zhang2025t5gemma2}.
+LLM2Seq follows the same direction, but focuses on abstractive summarization.
+
+\paragraph{Efficient decoding.}
+Speculative decoding drafts tokens and verifies them with a target model \citep{leviathan2023speculative}.
+Blockwise parallel decoding predicts multiple future tokens in parallel \citep{stern2018blockwise}.
+Medusa adds extra heads to accelerate LLM inference \citep{cai2024medusa}.
+Multi-token prediction trains models to predict future tokens directly \citep{gloeckle2024mtp}.
+MTP-D improves MTP heads with self-distillation \citep{zhao2026mtpdistill}.
+The distillation part follows the broader idea of transferring information from a teacher distribution to a student model \citep{hinton2015distilling}.
+Recent systems such as DeepSeek-V3 also use MTP-style modules for efficient generation \citep{deepseekai2024deepseekv3}.
+
+\section{Method}
+\label{sec:method}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{image.png}
+\caption{LLM2Seq turns a decoder-only LLM into the encoder side of a summarization system. A gated adaptor connects the encoder memory to a small decoder.}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{LLM2Vec Encoder}
+
+The encoder is a decoder-only LLM adapted for bidirectional encoding.
+This follows LLM2Vec \citep{behnamghader2024llm2vec}.
+The encoder reads the source article and produces contextual token states.
+In the Llama version, the encoder is \texttt{LLM2Vec-Sheared-LLaMA-mntp}.
+In the Qwen version, the encoder is \texttt{Qwen3-Embedding-0.6B}.
+
+The WikiLingua setting uses long inputs.
+The main configs use 3,072 source tokens and 384 target tokens.
+This makes full fine-tuning expensive.
+Phase 2 therefore uses LoRA on the encoder \citep{hu2022lora}.
+
+\subsection{Gated Residual Adaptor}
+
+The adaptor is the bridge between encoder and decoder.
+It has five parts.
+
+First, token-wise layer fusion combines selected encoder layers.
+This is useful because shallow and deep Transformer layers store different information \citep{wang2019deeptransformer}.
+Second, a gated residual projection maps the encoder dimension into the decoder dimension.
+Third, a salience gate filters token-level noise.
+Fourth, an EncStack refines the memory before cross-attention.
+Fifth, 16 learned global memory tokens are prepended to the encoder memory.
+
+This design keeps the bridge expressive.
+A single projection is simple, but it can throw away source information.
+For summarization, that loss is costly.
+
+\subsection{Lightweight Decoder}
+
+The decoder is an 8-layer Transformer decoder.
+It has hidden size 1024, 16 heads, and a 4096-dimensional feed-forward layer.
+It uses masked self-attention for target tokens and cross-attention over the adapted source memory.
+The decoder is smaller than the encoder.
+This lets the encoder do most of the reading work while the decoder focuses on generation.
+
+\subsection{MTP and Self-Distillation}
+
+Phase 3 adds cascaded MTP heads.
+We use $K=4$ draft heads.
+The main decoder path is frozen.
+Only the MTP module is trained.
+The loss is:
+\[
+\mathcal{L}
+= \lambda_{CE}\mathcal{L}_{CE}
++ \lambda_{KL}\mathcal{L}_{KL}.
+\]
+The current setup uses $\lambda_{CE}=0.6$ and $\lambda_{KL}=0.2$.
+The KL term starts at 20\% of training and ramps until 50\%.
+This gives the draft heads time to learn hard labels before matching the teacher distribution.
+The MTP head weights are $[1.0, 0.8, 0.5, 0.25]$.
+
+At inference time, MTP proposes several tokens.
+The main head verifies them.
+Accepted tokens are emitted together.
+If too few tokens are accepted, MTP can lose to normal autoregressive decoding because verification adds overhead.
+
+\subsection{Training Stages}
+
+LLM2Seq is trained in three stages.
+Phase 1 freezes the encoder and trains the adaptor, decoder, and LM head.
+Phase 2 resumes from Phase 1 and trains encoder LoRA, adaptor, decoder, and LM head.
+Phase 3 resumes from Phase 2, freezes the main summarizer, and trains only the MTP blocks.
+
+This order is deliberate.
+The MTP teacher should be stable before the draft heads learn from it.
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Dataset}
+
+We evaluate on WikiLingua, a multilingual abstractive summarization dataset built from WikiHow articles \citep{ladhak2020wikilingua}.
+The project uses the English split.
+After preprocessing, there are 13,999 training examples, 1,680 validation examples, and 3,901 test examples.
+One empty test row is removed.
+
+\subsection{Baselines}
+
+We compare three systems:
+\begin{itemize}
+    \item \textbf{LLM2Seq-Llama}: LLM2Vec-Sheared-LLaMA encoder plus LLM2Seq decoder.
+    \item \textbf{LLM2Seq-Qwen}: Qwen3-Embedding-0.6B encoder plus LLM2Seq decoder.
+    \item \textbf{T5Gemma}: T5Gemma-2-1B-1B fine-tuned with LoRA.
+\end{itemize}
+
+All systems use greedy decoding.
+The generation configs use no sampling, a repetition penalty, and a no-repeat trigram constraint.
+
+\subsection{Metrics}
+
+We use ROUGE for summarization quality \citep{lin2004rouge}.
+We also report BLEU with standard reporting practice in mind \citep{post2018call}, chrF, mean prediction length, too-long rate, and measured decoding speed.
+For speed, we report generated tokens per second and mean latency from the project evaluation logs.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Main Summarization Results}
+
+Table~\ref{tab:main-results} shows the main WikiLingua test results.
+Qwen is much better than Llama inside the same LLM2Seq design.
+T5Gemma is strongest on ROUGE-2 and ROUGE-L, but it is also much more verbose.
+
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{lrrrrrrr}
+\toprule
+Model & R-1 & R-2 & R-L & BLEU & chrF & Pred. words & Too-long \\
+\midrule
+LLM2Seq-Llama & 48.36 & 15.54 & 29.05 & 3.43 & 15.45 & 29.10 & 5.46 \\
+LLM2Seq-Qwen & 54.01 & 20.83 & 31.83 & 7.58 & 24.66 & 58.31 & 35.79 \\
+T5Gemma-2-1B-1B & \textbf{54.24} & \textbf{27.42} & \textbf{33.89} & \textbf{8.84} & \textbf{33.60} & 90.89 & 68.03 \\
+\bottomrule
+\end{tabular}
+\caption{WikiLingua test results. Scores are from the project result files. Too-long is a percentage.}
+\label{tab:main-results}
+\end{table*}
+
+The comparison tells a clear story.
+The Llama encoder under-generates.
+Its mean summary length is only 29.10 words, while the reference mean is 51.86.
+The Qwen encoder produces longer and more useful summaries.
+It raises ROUGE-1 by 5.65 points and ROUGE-L by 2.77 points over Llama.
+T5Gemma gives the best overlap scores, but its summaries are much longer than the references.
+
+\subsection{Decoding Speed}
+
+Table~\ref{tab:speed} shows throughput for the base autoregressive model.
+T5Gemma is fastest in this evaluation setup.
+LLM2Seq-Qwen is slower than T5Gemma but uses a smaller encoder-side model and produces shorter summaries.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrr}
+\toprule
+Model & tok/s & Mean latency \\
+\midrule
+LLM2Seq-Llama & 114.74 & 0.697s \\
+LLM2Seq-Qwen & 95.87 & 0.779s \\
+T5Gemma-2-1B-1B & \textbf{257.70} & \textbf{0.412s} \\
+\bottomrule
+\end{tabular}
+\caption{Autoregressive decoding speed on the WikiLingua test set.}
+\label{tab:speed}
+\end{table}
+
+\subsection{MTP Results}
+
+MTP is tested with verified decoding.
+The goal is to reduce the number of serial decoding steps.
+Table~\ref{tab:mtp-results} shows that MTP behaves differently for Llama and Qwen.
+
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+Model & Mode & tok/s & Speedup & Tokens/step & R-1 & R-L \\
+\midrule
+Llama & AR & 114.74 & 1.00x & 1.00 & 48.36 & 29.05 \\
+Llama & MTP & 73.14 & 0.64x & 2.45 & 48.36 & 29.05 \\
+Qwen & AR & 95.87 & 1.00x & 1.00 & 54.01 & 31.83 \\
+Qwen & MTP & \textbf{111.71} & \textbf{1.17x} & 2.30 & 53.90 & 31.64 \\
+\bottomrule
+\end{tabular}
+\caption{Verified MTP results. AR means autoregressive decoding.}
+\label{tab:mtp-results}
+\end{table*}
+
+For Llama, MTP accepts more tokens per step but still slows down.
+This is a negative result.
+The verifier costs more than the saved steps.
+
+For Qwen, MTP gives a real speedup.
+The measured token-per-second speedup is 1.17x.
+Mean latency improves from 0.779s to 0.662s.
+P95 latency improves from 1.142s to 0.922s.
+Quality changes are small: ROUGE-1 drops by 0.11 and ROUGE-L drops by 0.19.
+
+\subsection{Adaptor Analysis}
+
+The full adaptor is used in all reported LLM2Seq runs.
+It includes layer fusion, gated residual projection, salience gating, EncStack, and global memory tokens.
+The current project snapshot does not include separate completed metrics for removing each component.
+We therefore treat the adaptor ablation as future controlled work, not as a claimed result.
+
+Even without per-component ablation, the main comparison is useful.
+With the same adaptor and decoder design, changing the encoder from Llama to Qwen gives a large improvement.
+This suggests that the encoder representation is a major driver of summarization quality.
+
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{Why Qwen helps.}
+The Qwen encoder likely gives cleaner sentence-level and document-level states for WikiLingua.
+The adaptor can only pass on information that exists in the encoder.
+When the encoder is stronger for this data, the decoder receives better memory.
+This is why the Qwen variant closes much of the gap to T5Gemma.
+
+\paragraph{Why T5Gemma still wins some metrics.}
+T5Gemma is a native encoder-decoder model.
+It also has a larger 1B-1B backbone.
+It produces longer summaries, which helps overlap metrics such as ROUGE-2.
+But the long output is not always a pure win.
+Its too-long rate is 68.03\%, while LLM2Seq-Qwen is 35.79\%.
+
+\paragraph{Why MTP speedup is limited.}
+MTP reduces the number of decoding steps.
+For Qwen, it emits 2.30 tokens per step on average.
+But the measured speedup is only 1.17x.
+The gap comes from verifier overhead and Python-level control flow.
+This matches the general lesson from speculative decoding: fewer steps are useful only when verification is cheap \citep{leviathan2023speculative}.
+Future work should move verification into a fused kernel, \texttt{torch.compile}, or a runtime such as vLLM.
+Quantization methods such as SmoothQuant may also help deployment under memory limits \citep{xiao2023smoothquant}.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+LLM2Seq shows that decoder-only LLMs can be reused for abstractive summarization in an encoder-decoder system.
+The Qwen encoder version is close to T5Gemma on ROUGE-1 and produces more compact summaries.
+MTP gives a measured speedup for Qwen with small quality loss, but it fails for Llama under the same idea.
+
+The main lesson is practical.
+Architecture matters, but implementation cost also matters.
+For summarization, a good encoder and a careful adaptor are needed first.
+MTP should come later, after the main summarizer is stable and the verifier is efficient.
+
+\section*{Limitations}
+
+This report uses the completed metrics available in the project result files.
+It does not claim a full per-component adaptor ablation because those logs are not present in the current snapshot.
+The MTP speed numbers also measure the current Python implementation, not a fused serving runtime.
+
+\bibliography{custom}
+
+\end{document}
