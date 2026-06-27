@@ -20,21 +20,22 @@
 \citation{sutskever2014sequence,bahdanau2015neural,vaswani2017attention}
 \citation{raffel2020t5,lewis2020bart,xue2021mt5}
 \citation{behnamghader2024llm2vec}
-\citation{ladhak2020wikilingua}
+\citation{luo2025lamate}
 \citation{zhang2025t5gemma2}
+\citation{li2026contextcompression}
+\HyPL@Entry{0<</S/D>>}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
+\newlabel{sec:introduction}{{1}{1}{Introduction}{section.1}{}}
 \citation{sutskever2014sequence}
 \citation{bahdanau2015neural}
 \citation{vaswani2017attention}
 \citation{raffel2020t5}
 \citation{lewis2020bart}
 \citation{xue2021mt5}
-\HyPL@Entry{0<</S/D>>}
-\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
-\newlabel{sec:introduction}{{1}{1}{Introduction}{section.1}{}}
 \citation{behnamghader2024llm2vec}
 \citation{muennighoff2024grit}
 \citation{luo2025lamate}
-\citation{zhang2025t5gemma2}
+\citation{li2026contextcompression}
 \citation{leviathan2023speculative}
 \citation{stern2018blockwise}
 \citation{cai2024medusa}
@@ -42,55 +43,52 @@
 \citation{zhao2026mtpdistill}
 \citation{hinton2015distilling}
 \citation{deepseekai2024deepseekv3}
-\citation{behnamghader2024llm2vec}
-\citation{hu2022lora}
-\citation{wang2019deeptransformer}
 \@writefile{toc}{\contentsline {section}{\numberline {2}Related Work}{2}{section.2}\protected@file@percent }
 \newlabel{sec:related}{{2}{2}{Related Work}{section.2}{}}
-\@writefile{toc}{\contentsline {paragraph}{Encoder-decoder summarization.}{2}{section*.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Decoder-only LLMs as encoders.}{2}{section*.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Efficient decoding.}{2}{section*.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {3}Method}{2}{section.3}\protected@file@percent }
-\newlabel{sec:method}{{3}{2}{Method}{section.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}LLM2Vec Encoder}{2}{subsection.3.1}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces LLM2Seq turns a decoder-only LLM into the encoder side of a summarization system. A gated adaptor connects the encoder memory to a small decoder.\relax }}{2}{figure.caption.4}\protected@file@percent }
-\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
-\newlabel{fig:architecture}{{1}{2}{LLM2Seq turns a decoder-only LLM into the encoder side of a summarization system. A gated adaptor connects the encoder memory to a small decoder.\relax }{figure.caption.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Gated Residual Adaptor}{2}{subsection.3.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Lightweight Decoder}{2}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Encoder-decoder generation.}{2}{section*.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Repurposing LLMs as encoders.}{2}{section*.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Latent context compression.}{2}{section*.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Efficient decoding.}{2}{section*.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}LLM2Seq and Context Compression}{2}{section.3}\protected@file@percent }
+\newlabel{sec:lclm-relation}{{3}{2}{LLM2Seq and Context Compression}{section.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Method}{2}{section.4}\protected@file@percent }
+\newlabel{sec:method}{{4}{2}{Method}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}LLM Encoder}{2}{subsection.4.1}\protected@file@percent }
+\citation{hu2022lora}
+\citation{wang2019deeptransformer}
 \citation{ladhak2020wikilingua}
+\citation{zhang2025t5gemma2}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces LLM2Seq is not designed to beat LCLM at general context compression. It studies a task-specific point in the same encoder-decoder memory design space.\relax }}{3}{table.caption.5}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{tab:lclm-compare}{{1}{3}{LLM2Seq is not designed to beat LCLM at general context compression. It studies a task-specific point in the same encoder-decoder memory design space.\relax }{table.caption.5}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces LLM2Seq converts a decoder-only model into a source encoder and connects it to a lightweight decoder through a gated residual adaptor.\relax }}{3}{figure.caption.6}\protected@file@percent }
+\newlabel{fig:architecture}{{1}{3}{LLM2Seq converts a decoder-only model into a source encoder and connects it to a lightweight decoder through a gated residual adaptor.\relax }{figure.caption.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Gated Residual Adaptor}{3}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Lightweight Decoder}{3}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}MTP with Verified Decoding}{3}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Experiments}{3}{section.5}\protected@file@percent }
+\newlabel{sec:experiments}{{5}{3}{Experiments}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Dataset and Baselines}{3}{subsection.5.1}\protected@file@percent }
 \citation{lin2004rouge}
 \citation{post2018call}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}MTP and Self-Distillation}{3}{subsection.3.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Training Stages}{3}{subsection.3.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {4}Experiments}{3}{section.4}\protected@file@percent }
-\newlabel{sec:experiments}{{4}{3}{Experiments}{section.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Dataset}{3}{subsection.4.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Baselines}{3}{subsection.4.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Metrics}{3}{subsection.4.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {5}Results}{3}{section.5}\protected@file@percent }
-\newlabel{sec:results}{{5}{3}{Results}{section.5}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Main Summarization Results}{3}{subsection.5.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Decoding Speed}{3}{subsection.5.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}MTP Results}{3}{subsection.5.3}\protected@file@percent }
-\citation{leviathan2023speculative}
 \citation{xiao2023smoothquant}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Metrics}{4}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Results}{4}{section.6}\protected@file@percent }
+\newlabel{sec:results}{{6}{4}{Results}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Quality and Length}{4}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Autoregressive Speed}{4}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}MTP: Accepted Tokens Are Not Throughput}{4}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Discussion}{4}{section.7}\protected@file@percent }
+\newlabel{sec:discussion}{{7}{4}{Discussion}{section.7}{}}
+\@writefile{toc}{\contentsline {paragraph}{What LLM2Seq contributes.}{4}{section*.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Why Qwen matters.}{4}{section*.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Why T5Gemma is still strong.}{4}{section*.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Why adaptor claims must stay conservative.}{4}{section*.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Why MTP speedup is limited.}{4}{section*.14}\protected@file@percent }
 \bibdata{custom}
 \bibcite{bahdanau2015neural}{{1}{2015}{{Bahdanau et~al.}}{{Bahdanau, Cho, and Bengio}}}
 \bibcite{behnamghader2024llm2vec}{{2}{2024}{{BehnamGhader et~al.}}{{BehnamGhader, Adlakha, Mosbach, Bahdanau, Chapados, and Reddy}}}
 \bibcite{brown2020language}{{3}{2020}{{Brown et~al.}}{{Brown, Mann, Ryder, Subbiah, Kaplan, Dhariwal, Neelakantan, Shyam, Sastry, Askell et~al.}}}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces WikiLingua test results. Scores are from the project result files. Too-long is a percentage.\relax }}{4}{table.caption.5}\protected@file@percent }
-\newlabel{tab:main-results}{{1}{4}{WikiLingua test results. Scores are from the project result files. Too-long is a percentage.\relax }{table.caption.5}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Autoregressive decoding speed on the WikiLingua test set.\relax }}{4}{table.caption.6}\protected@file@percent }
-\newlabel{tab:speed}{{2}{4}{Autoregressive decoding speed on the WikiLingua test set.\relax }{table.caption.6}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Adaptor Analysis}{4}{subsection.5.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {6}Discussion}{4}{section.6}\protected@file@percent }
-\newlabel{sec:discussion}{{6}{4}{Discussion}{section.6}{}}
-\@writefile{toc}{\contentsline {paragraph}{Why Qwen helps.}{4}{section*.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Why T5Gemma still wins some metrics.}{4}{section*.9}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Why MTP speedup is limited.}{4}{section*.10}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {7}Conclusion}{4}{section.7}\protected@file@percent }
-\newlabel{sec:conclusion}{{7}{4}{Conclusion}{section.7}{}}
 \bibcite{cai2024medusa}{{4}{2024}{{Cai et~al.}}{{Cai, Li, Geng, Peng, Lee, Chen, and Dao}}}
 \bibcite{deepseekai2024deepseekv3}{{5}{2024}{{DeepSeek-AI}}{{}}}
 \bibcite{dubey2024llama3}{{6}{2024}{{Dubey et~al.}}{{Dubey, Jauhri, Pandey, Kadian, Al-Dahle, Letman, Mathur, Schelten, Yang, Fan et~al.}}}
@@ -100,20 +98,27 @@
 \bibcite{ladhak2020wikilingua}{{10}{2020}{{Ladhak et~al.}}{{Ladhak, Durmus, Cardie, and McKeown}}}
 \bibcite{leviathan2023speculative}{{11}{2023}{{Leviathan et~al.}}{{Leviathan, Kalman, and Matias}}}
 \bibcite{lewis2020bart}{{12}{2020}{{Lewis et~al.}}{{Lewis, Liu, Goyal, Ghazvininejad, Mohamed, Levy, Stoyanov, and Zettlemoyer}}}
-\bibcite{lin2004rouge}{{13}{2004}{{Lin}}{{}}}
-\bibcite{luo2025lamate}{{14}{2025}{{Luo et~al.}}{{Luo, Zheng, Mu, Li, Zhang, Gao, Xu, Feng, Liu, Xiao, and Zhu}}}
-\bibcite{muennighoff2024grit}{{15}{2024}{{Muennighoff et~al.}}{{Muennighoff, Su, Wang, Yang, Wei, Yu, Singh, and Kiela}}}
-\bibcite{post2018call}{{16}{2018}{{Post}}{{}}}
-\bibcite{raffel2020t5}{{17}{2020}{{Raffel et~al.}}{{Raffel, Shazeer, Roberts, Lee, Narang, Matena, Zhou, Li, and Liu}}}
-\bibcite{stern2018blockwise}{{18}{2018}{{Stern et~al.}}{{Stern, Shazeer, and Uszkoreit}}}
-\bibcite{sutskever2014sequence}{{19}{2014}{{Sutskever et~al.}}{{Sutskever, Vinyals, and Le}}}
-\bibcite{vaswani2017attention}{{20}{2017}{{Vaswani et~al.}}{{Vaswani, Shazeer, Parmar, Uszkoreit, Jones, Gomez, Kaiser, and Polosukhin}}}
-\bibcite{wang2019deeptransformer}{{21}{2019}{{Wang et~al.}}{{Wang, Li, Xiao, Zhu, Li, Wong, and Chao}}}
-\bibcite{xiao2023smoothquant}{{22}{2023}{{Xiao et~al.}}{{Xiao, Lin, Seznec, Wu, Demouth, and Han}}}
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Verified MTP results. AR means autoregressive decoding.\relax }}{5}{table.caption.7}\protected@file@percent }
-\newlabel{tab:mtp-results}{{3}{5}{Verified MTP results. AR means autoregressive decoding.\relax }{table.caption.7}{}}
-\bibcite{xue2021mt5}{{23}{2021}{{Xue et~al.}}{{Xue, Constant, Roberts, Kale, Al-Rfou, Siddhant, Barua, and Raffel}}}
-\bibcite{yang2024qwen2}{{24}{2024}{{Yang et~al.}}{{Yang, Yang, Hui, Zheng, Yu, Zhou, Li, Li, Liu, Huang et~al.}}}
-\bibcite{zhang2025t5gemma2}{{25}{2025}{{Zhang et~al.}}{{Zhang, Suganthan, Liu, Philippov, Dua, Hora, Black, Martins, Sanseviero, Pathak, Hardin, Visin, Zhang, Kenealy, Yin, Lacombe, Joulin, Warkentin, and Roberts}}}
-\bibcite{zhao2026mtpdistill}{{26}{2026}{{Zhao et~al.}}{{Zhao, Xie, Wang, Li, Xie, and Sun}}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces WikiLingua test results. Too-long is a percentage. T5Gemma has the best overlap scores, but it generates much longer summaries.\relax }}{5}{table.caption.7}\protected@file@percent }
+\newlabel{tab:main-results}{{2}{5}{WikiLingua test results. Too-long is a percentage. T5Gemma has the best overlap scores, but it generates much longer summaries.\relax }{table.caption.7}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Autoregressive decoding speed on WikiLingua.\relax }}{5}{table.caption.8}\protected@file@percent }
+\newlabel{tab:speed}{{3}{5}{Autoregressive decoding speed on WikiLingua.\relax }{table.caption.8}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{5}{section.8}\protected@file@percent }
+\newlabel{sec:conclusion}{{8}{5}{Conclusion}{section.8}{}}
+\bibcite{li2026contextcompression}{{13}{2026}{{Li et~al.}}{{Li, McLeish, Chen, Kalra, Chen, Gazizov, Morisetty, Kailkhura, Menon, Liu, Bartoldson, Goldstein, Lotfi, Goldblum, and Izmailov}}}
+\bibcite{lin2004rouge}{{14}{2004}{{Lin}}{{}}}
+\bibcite{luo2025lamate}{{15}{2025}{{Luo et~al.}}{{Luo, Zheng, Mu, Li, Zhang, Gao, Xu, Feng, Liu, Xiao, and Zhu}}}
+\bibcite{muennighoff2024grit}{{16}{2024}{{Muennighoff et~al.}}{{Muennighoff, Su, Wang, Yang, Wei, Yu, Singh, and Kiela}}}
+\bibcite{post2018call}{{17}{2018}{{Post}}{{}}}
+\bibcite{raffel2020t5}{{18}{2020}{{Raffel et~al.}}{{Raffel, Shazeer, Roberts, Lee, Narang, Matena, Zhou, Li, and Liu}}}
+\bibcite{stern2018blockwise}{{19}{2018}{{Stern et~al.}}{{Stern, Shazeer, and Uszkoreit}}}
+\bibcite{sutskever2014sequence}{{20}{2014}{{Sutskever et~al.}}{{Sutskever, Vinyals, and Le}}}
+\bibcite{vaswani2017attention}{{21}{2017}{{Vaswani et~al.}}{{Vaswani, Shazeer, Parmar, Uszkoreit, Jones, Gomez, Kaiser, and Polosukhin}}}
+\bibcite{wang2019deeptransformer}{{22}{2019}{{Wang et~al.}}{{Wang, Li, Xiao, Zhu, Li, Wong, and Chao}}}
+\bibcite{xiao2023smoothquant}{{23}{2023}{{Xiao et~al.}}{{Xiao, Lin, Seznec, Wu, Demouth, and Han}}}
+\bibcite{xue2021mt5}{{24}{2021}{{Xue et~al.}}{{Xue, Constant, Roberts, Kale, Al-Rfou, Siddhant, Barua, and Raffel}}}
+\bibcite{yang2024qwen2}{{25}{2024}{{Yang et~al.}}{{Yang, Yang, Hui, Zheng, Yu, Zhou, Li, Li, Liu, Huang et~al.}}}
+\bibcite{zhang2025t5gemma2}{{26}{2025}{{Zhang et~al.}}{{Zhang, Suganthan, Liu, Philippov, Dua, Hora, Black, Martins, Sanseviero, Pathak, Hardin, Visin, Zhang, Kenealy, Yin, Lacombe, Joulin, Warkentin, and Roberts}}}
+\bibcite{zhao2026mtpdistill}{{27}{2026}{{Zhao et~al.}}{{Zhao, Xie, Wang, Li, Xie, and Sun}}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Verified MTP results. AR means autoregressive decoding. MTP improves tokens per step for both encoders, but real throughput improves only for Qwen.\relax }}{6}{table.caption.9}\protected@file@percent }
+\newlabel{tab:mtp-results}{{4}{6}{Verified MTP results. AR means autoregressive decoding. MTP improves tokens per step for both encoders, but real throughput improves only for Qwen.\relax }{table.caption.9}{}}
 \gdef \@abspage@last{6}

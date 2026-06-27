@@ -1,0 +1,15 @@
+.decode-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.decode-toggle__label {
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+}
+
+.decode-toggle__hint {
+  margin-top: 0.15rem;
+}

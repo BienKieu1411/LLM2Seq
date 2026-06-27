@@ -1,0 +1,44 @@
+.text-input {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.text-input__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.text-input__label {
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+}
+
+.text-input__actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.text-input__textarea {
+  min-height: 180px;
+  max-height: 400px;
+  line-height: 1.7;
+  font-size: 0.95rem;
+}
+
+.text-input__footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+  .text-input__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

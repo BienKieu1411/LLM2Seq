@@ -1,4 +1,4 @@
-\begin{thebibliography}{26}
+\begin{thebibliography}{27}
 \providecommand{\natexlab}[1]{#1}
 
 \bibitem[{Bahdanau et~al.(2015)Bahdanau, Cho, and Bengio}]{bahdanau2015neural}
@@ -85,6 +85,16 @@ Mike Lewis, Yinhan Liu, Naman Goyal, Marjan Ghazvininejad, Abdelrahman Mohamed,
   language generation, translation, and comprehension.
 \newblock In \emph{Proceedings of the 58th Annual Meeting of the Association
   for Computational Linguistics}, pages 7871--7880.
+
+\bibitem[{Li et~al.(2026)Li, McLeish, Chen, Kalra, Chen, Gazizov, Morisetty,
+  Kailkhura, Menon, Liu, Bartoldson, Goldstein, Lotfi, Goldblum, and
+  Izmailov}]{li2026contextcompression}
+Ang Li, Sean McLeish, Haozhe Chen, Nimit Kalra, Zaiqian Chen, Artem Gazizov,
+  Venkata Anoop Suhas~Kumar Morisetty, Bhavya Kailkhura, Harshitha Menon,
+  Zhuang Liu, Brian~R. Bartoldson, Tom Goldstein, Sanae Lotfi, Micah Goldblum,
+  and Pavel Izmailov. 2026.
+\newblock End-to-end context compression at scale.
+\newblock \emph{arXiv preprint arXiv:2606.09659}.
 
 \bibitem[{Lin(2004)}]{lin2004rouge}
 Chin-Yew Lin. 2004.

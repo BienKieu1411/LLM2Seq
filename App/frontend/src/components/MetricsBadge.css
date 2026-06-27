@@ -1,0 +1,30 @@
+.metrics-badge {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.82rem;
+  gap: 0.5rem;
+}
+
+.metrics-badge__content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.metrics-badge__label {
+  font-family: var(--font-main);
+  font-weight: 500;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.8;
+}
+
+.metrics-badge__value {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.metrics-badge__icon {
+  font-size: 1.1rem;
+}

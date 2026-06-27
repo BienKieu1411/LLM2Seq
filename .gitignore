@@ -39,3 +39,7 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+node_modules/
+
+__pycache__/
