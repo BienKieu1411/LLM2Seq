@@ -77,7 +77,7 @@ The demo can also run with Docker Compose:
 
 ```bash
 export HF_TOKEN=your_huggingface_token
-docker compose up --build
+docker compose -f deploy/docker/docker-compose.yml up --build
 ```
 
 Open:
@@ -88,8 +88,8 @@ http://localhost:5173
 
 Docker Compose builds:
 
-- `llm2seq-backend:local` from `App/backend/Dockerfile`;
-- `llm2seq-frontend:local` from `App/frontend/Dockerfile`.
+- `llm2seq-backend:local` from `deploy/docker/backend.Dockerfile`;
+- `llm2seq-frontend:local` from `deploy/docker/frontend.Dockerfile`.
 
 The frontend container serves the React app with Nginx and proxies `/api/*` to the backend.
 
@@ -97,6 +97,7 @@ For Kubernetes deployment, see:
 
 ```text
 deploy/README.md
+deploy/docker/
 deploy/k8s/
 ```
 

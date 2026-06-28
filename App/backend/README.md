@@ -37,8 +37,8 @@ The first startup can take time because the encoder and checkpoints are download
 From the repository root:
 
 ```bash
-docker build -f App/backend/Dockerfile -t llm2seq-backend:local .
+docker build -f deploy/docker/backend.Dockerfile -t llm2seq-backend:local .
 docker run --rm -p 8000:8000 -e HF_TOKEN=$HF_TOKEN llm2seq-backend:local
 ```
 
-For the full backend/frontend demo, use the root `docker-compose.yml`.
+For the full backend/frontend demo, use `deploy/docker/docker-compose.yml`.

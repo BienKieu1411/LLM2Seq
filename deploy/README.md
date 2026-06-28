@@ -13,7 +13,7 @@ From the repository root:
 
 ```bash
 export HF_TOKEN=your_huggingface_token
-docker compose up --build
+docker compose -f deploy/docker/docker-compose.yml up --build
 ```
 
 Open:
@@ -30,7 +30,7 @@ http://localhost:8000
 
 The first startup can be slow because the backend downloads the encoder and checkpoint files from Hugging Face. The downloaded files are cached in the `hf-cache` Docker volume.
 
-If you deploy on a GPU host, add the GPU runtime setting supported by your Docker installation, for example `gpus: all` under the backend service in `docker-compose.yml`.
+If you deploy on a GPU host, add the GPU runtime setting supported by your Docker installation, for example `gpus: all` under the backend service in `deploy/docker/docker-compose.yml`.
 
 ## Kubernetes
 
@@ -43,8 +43,8 @@ deploy/k8s/
 Before applying them, build and push images:
 
 ```bash
-docker build -f App/backend/Dockerfile -t YOUR_REGISTRY/llm2seq-backend:latest .
-docker build -f App/frontend/Dockerfile -t YOUR_REGISTRY/llm2seq-frontend:latest .
+docker build -f deploy/docker/backend.Dockerfile -t YOUR_REGISTRY/llm2seq-backend:latest .
+docker build -f deploy/docker/frontend.Dockerfile -t YOUR_REGISTRY/llm2seq-frontend:latest .
 docker push YOUR_REGISTRY/llm2seq-backend:latest
 docker push YOUR_REGISTRY/llm2seq-frontend:latest
 ```
