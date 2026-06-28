@@ -31,7 +31,12 @@ exclude = [
 [tool.ruff.lint]
 # Enable Pyflakes (F), pycodestyle (E, W), and isort (I)
 select = ["E", "F", "W", "I"]
-ignore = []
+# Bỏ qua các lỗi lặt vặt của code cũ:
+# E501: Dòng quá dài
+# E741: Tên biến dễ nhầm lẫn (như 'l')
+# E701: Viết nhiều lệnh trên cùng 1 dòng (như `if condition: continue`)
+# F841, F401: Biến/thư viện được import nhưng chưa dùng (để tránh xóa nhầm code đang debug)
+ignore = ["E501", "E741", "E701", "F841", "F401"]
 
 # Allow fix for all enabled rules (when `--fix` is used)
 fixable = ["ALL"]
