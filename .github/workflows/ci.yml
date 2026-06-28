@@ -26,15 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: "18"
-        cache: 'npm'
-        cache-dependency-path: 'App/frontend/package-lock.json'
-    - name: Install Frontend Dependencies
+    - name: Setup oxlint
+      uses: oxc-project/setup-oxlint@v1
+    - name: Run oxlint
       working-directory: ./App/frontend
-      run: npm ci || npm install
-    - name: Run Frontend Lint
-      working-directory: ./App/frontend
-      run: npx oxlint@latest
+      run: oxlint
