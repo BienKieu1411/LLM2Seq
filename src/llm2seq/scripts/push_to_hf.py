@@ -100,7 +100,7 @@ def main() -> None:
     )
     parser.add_argument("--folder", action="append", required=True, help="Folder to upload. Can be repeated.")
     parser.add_argument("--repo_type", default="model", choices=["model", "dataset", "space"])
-    parser.add_argument("--commit_message", default="Upload LLM2Seq LLM2Seq artifacts")
+    parser.add_argument("--commit_message", default="Upload LLM2Seq artifacts")
     parser.add_argument("--path_in_repo_prefix", default="")
     parser.add_argument(
         "--include_resume_checkpoints",

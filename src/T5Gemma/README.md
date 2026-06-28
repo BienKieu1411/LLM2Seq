@@ -1,7 +1,7 @@
-# T5Gemma 2 WikiLingua LoRA Baseline
+# T5Gemma WikiLingua LoRA Baseline
 
 Baseline fine-tuning for WikiLingua summarization with a T5Gemma encoder-decoder
-model on a single 45GB 45GB GPU.
+model.
 
 This folder is standalone. Upload the whole `T5Gemma/` directory to the server;
 do not rely on files outside this directory.
@@ -26,6 +26,7 @@ license for the model on Hugging Face and put your token in `env.txt`.
 
 ```text
 T5Gemma/
+  configs/wikilingua_lora_3072.yaml
   configs/vlsp_lora.yaml
   scripts/prepare_wikilingua_json.py
   scripts/train_lora.py
@@ -99,19 +100,19 @@ T5Gemma/eval_outputs/full_test/eval_run_info.json
 
 Evaluation outputs are pushed to Hugging Face too when enabled in the config.
 
-## 45GB 45GB Defaults
+## WikiLingua Defaults
 
 The default config uses:
 
 ```text
-source length: 512 tokens
-target length: 512 tokens
-epochs:        4
+source length: 3072 tokens
+target length: 384 tokens
+epochs:        6
 LoRA r/alpha:  16 / 32
-train batch:   4
-grad accum:    4
-effective bs:  16
-lr:            1e-4
+train batch:   16
+grad accum:    2
+effective bs:  32
+lr:            2e-4
 precision:     bf16
 ```
 

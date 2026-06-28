@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: llm2seq
+  labels:
+    app: llm2seq
+    component: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm2seq
+      component: frontend
+  template:
+    metadata:
+      labels:
+        app: llm2seq
+        component: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: YOUR_REGISTRY/llm2seq-frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: llm2seq
+  labels:
+    app: llm2seq
+    component: frontend
+spec:
+  selector:
+    app: llm2seq
+    component: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

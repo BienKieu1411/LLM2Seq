@@ -112,7 +112,7 @@ if [[ -n "${REPO_ID}" ]]; then
     --repo_id "${REPO_ID}" \
     "${PUSH_FOLDERS[@]}" \
     --path_in_repo_prefix "${STAMP}" \
-    --commit_message "Upload LLM2Seq LLM2Seq run ${STAMP}"
+    --commit_message "Upload LLM2Seq run ${STAMP}"
 else
   echo "HF_REPO_ID is empty; skipping Hugging Face upload."
 fi

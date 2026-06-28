@@ -1,0 +1,28 @@
+.git
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+.env
+env.txt
+node_modules/
+dist/
+build/
+
+# Local experiment artifacts
+runs/
+outputs/
+*.pt
+*.bin
+*.jsonl
+src/llm2seq/results/*/*/predictions.jsonl
+src/T5Gemma/results/*/predictions.jsonl
+
+# Report build artifacts are not needed inside application images.
+Report/*.aux
+Report/*.bbl
+Report/*.blg
+Report/*.fdb_latexmk
+Report/*.log
+Report/*.out
+Paper/

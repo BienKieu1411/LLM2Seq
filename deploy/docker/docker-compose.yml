@@ -1,0 +1,35 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: App/backend/Dockerfile
+    image: llm2seq-backend:local
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /cache/huggingface
+      TRANSFORMERS_CACHE: /cache/huggingface
+    volumes:
+      - hf-cache:/cache/huggingface
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: App/frontend/Dockerfile
+      args:
+        VITE_API_BASE: ""
+    image: llm2seq-frontend:local
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  hf-cache:

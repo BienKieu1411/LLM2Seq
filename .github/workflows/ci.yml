@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  lint-backend:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.9"
+    - name: Install Ruff
+      run: pip install ruff
+    - name: Run Ruff Linter
+      run: ruff check .
+    - name: Run Ruff Formatter Check
+      run: ruff format --check .
+
+  lint-frontend:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "18"
+        cache: 'npm'
+        cache-dependency-path: 'App/frontend/package-lock.json'
+    - name: Install Frontend Dependencies
+      working-directory: ./App/frontend
+      run: npm ci || npm install
+    - name: Run Frontend Lint
+      working-directory: ./App/frontend
+      run: npm run lint

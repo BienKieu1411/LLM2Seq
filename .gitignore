@@ -41,5 +41,6 @@ Thumbs.db
 .ipynb_checkpoints/
 
 node_modules/
+dist/
 
 __pycache__/

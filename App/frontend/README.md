@@ -1,16 +1,63 @@
-# React + Vite
+# LLM2Seq Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React/Vite frontend for the LLM2Seq summarization demo.
 
-Currently, two official plugins are available:
+The app provides:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- source text input with a WikiLingua sample loader;
+- decoding mode switch between autoregressive and verified MTP;
+- maximum-token control;
+- generated summary display;
+- latency, token count, throughput, and MTP runtime statistics.
 
-## React Compiler
+## Local Development
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Install dependencies:
 
-## Expanding the Oxlint configuration
+```bash
+cd App/frontend
+npm install
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+Run the frontend:
+
+```bash
+npm run dev
+```
+
+By default, the frontend calls:
+
+```text
+http://localhost:8000
+```
+
+To point it to a different backend:
+
+```bash
+VITE_API_BASE=http://localhost:9000 npm run dev
+```
+
+## Production Build
+
+```bash
+npm run build
+```
+
+The production Docker image builds the frontend with an empty API base:
+
+```text
+VITE_API_BASE=
+```
+
+The app then calls same-origin `/api/*`, and Nginx proxies those requests to the backend container.
+
+## UI Theme
+
+The interface uses a light neo-brutalist academic-tool style: cream background,
+white panels, dark borders, hard shadows, and flat accent colors.
+
+The detailed recreation spec is:
+
+```text
+App/frontend/UI_THEME_SPEC.md
+```

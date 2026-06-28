@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { cleanWikiText } from "../utils/textCleaner";
 import "./TextInput.css";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
 export default function TextInput({ value, onChange, disabled }) {
   const [charCount, setCharCount] = useState(0);

@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: llm2seq
+  labels:
+    app: llm2seq
+    component: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm2seq
+      component: backend
+  template:
+    metadata:
+      labels:
+        app: llm2seq
+        component: backend
+    spec:
+      containers:
+        - name: backend
+          image: YOUR_REGISTRY/llm2seq-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+                  optional: true
+            - name: HF_HOME
+              value: /cache/huggingface
+            - name: TRANSFORMERS_CACHE
+              value: /cache/huggingface
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /cache/huggingface
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 180
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 240
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 10
+          resources:
+            requests:
+              cpu: "2"
+              memory: 8Gi
+            limits:
+              cpu: "8"
+              memory: 24Gi
+              # Enable this line on GPU clusters with the NVIDIA device plugin.
+              # nvidia.com/gpu: "1"
+      volumes:
+        - name: hf-cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: llm2seq
+  labels:
+    app: llm2seq
+    component: backend
+spec:
+  selector:
+    app: llm2seq
+    component: backend
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000

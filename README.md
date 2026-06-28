@@ -12,6 +12,7 @@ This repository contains the model code, training/evaluation scripts, ACL-style 
 - `App/frontend/`: React/Vite frontend for the demo app.
 - `Report/`: ACL-style LaTeX report, bibliography, figures, and compiled PDF.
 - `Paper/`: reference papers used while writing the report.
+- `deploy/`: Docker and Kubernetes deployment files for the demo app.
 
 The experimental results and analysis are documented in the report, so this README focuses on setup and repository usage.
 
@@ -69,6 +70,35 @@ Default URLs:
 - Frontend web app: `http://localhost:5173`
 
 Stop both servers with `Ctrl+C`.
+
+## Docker Deployment
+
+The demo can also run with Docker Compose:
+
+```bash
+export HF_TOKEN=your_huggingface_token
+docker compose up --build
+```
+
+Open:
+
+```text
+http://localhost:5173
+```
+
+Docker Compose builds:
+
+- `llm2seq-backend:local` from `App/backend/Dockerfile`;
+- `llm2seq-frontend:local` from `App/frontend/Dockerfile`.
+
+The frontend container serves the React app with Nginx and proxies `/api/*` to the backend.
+
+For Kubernetes deployment, see:
+
+```text
+deploy/README.md
+deploy/k8s/
+```
 
 ### Run Separately
 

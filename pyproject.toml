@@ -1,0 +1,48 @@
+[project]
+name = "LLM2Seq"
+version = "0.1.0"
+description = "Vietnamese Abstractive Summarization Project"
+requires-python = ">=3.9"
+
+[tool.ruff]
+# Set the maximum line length to 120.
+line-length = 120
+
+# Assume Python 3.9
+target-version = "py39"
+
+exclude = [
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    ".vscode",
+    "node_modules",
+    "venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "tmp",
+    "outputs",
+    "runs"
+]
+
+[tool.ruff.lint]
+# Enable Pyflakes (F), pycodestyle (E, W), and isort (I)
+select = ["E", "F", "W", "I"]
+ignore = []
+
+# Allow fix for all enabled rules (when `--fix` is used)
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.format]
+# Like Black, use double quotes for strings.
+quote-style = "double"
+# Like Black, indent with spaces, rather than tabs.
+indent-style = "space"
+# Like Black, respect magic trailing commas.
+skip-magic-trailing-comma = false
+# Like Black, automatically detect the appropriate line ending.
+line-ending = "auto"
