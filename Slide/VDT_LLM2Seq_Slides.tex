@@ -66,7 +66,7 @@
   \titlepage
   \vspace{-0.8em}
   \begin{center}
-    \small Tóm tắt trừu tượng tiếng Việt với token-level memory và verified MTP
+    \small Tóm tắt sinh tiếng Việt với token-level memory và verified MTP
   \end{center}
 \end{frame}
 
@@ -89,7 +89,7 @@
     \begin{column}{0.31\textwidth}
       \begin{block}{Hướng làm}
         \begin{minipage}[t][1.35cm][t]{\linewidth}
-        \raggedright LLM đọc nguồn. Adapter nối sang decoder để sinh tóm tắt.
+        \raggedright LLM source encoder đọc nguồn. Adapter nối sang decoder.
         \end{minipage}
       \end{block}
     \end{column}
@@ -131,7 +131,7 @@
     \begin{tikzpicture}[node distance=0.55cm, every node/.style={font=\small}]
       \node[draw,rounded corners,fill=LLMBlue,minimum width=3cm,minimum height=0.75cm] (src) {Văn bản nguồn};
       \node[draw,rounded corners,fill=LLMOrange,right=1.1cm of src,minimum width=2.7cm,minimum height=0.75cm] (bottleneck) {Biểu diễn nén};
-      \node[draw,rounded corners,fill=LLMGreen,right=1.1cm of bottleneck,minimum width=2.7cm,minimum height=0.75cm] (summary) {Tóm tắt};
+      \node[draw,rounded corners,fill=LLMGreen,right=1.1cm of bottleneck,minimum width=2.7cm,minimum height=0.75cm] (summary) {Suy luận};
       \draw[-{Latex[length=2mm]},thick] (src) -- (bottleneck);
       \draw[-{Latex[length=2mm]},thick] (bottleneck) -- (summary);
     \end{tikzpicture}
@@ -140,7 +140,7 @@
 
 \begin{frame}{LLM2Seq: tổng quan kiến trúc}
   \centering
-  \includegraphics[width=0.94\textwidth,height=0.76\textheight,keepaspectratio]{architecture.pdf}
+  \includegraphics[width=0.98\textwidth,height=0.78\textheight,keepaspectratio]{architecture_crop.pdf}
 
   \smallnote{Source encoder từ LLM $\rightarrow$ adapter tạo memory $\rightarrow$ decoder nhẹ $\rightarrow$ verified MTP.}
 \end{frame}
@@ -274,7 +274,7 @@
     \normalsize\alert{Câu hỏi chính: chất lượng tóm tắt, kiểm soát độ dài và tốc độ suy luận thực tế.}
 
     \smallskip
-    \small Tốc độ chỉ được so sánh khi cùng mô hình và cùng thiết lập batch.
+    \small Llama--Qwen được so sánh khi cùng batch. AR--MTP được so sánh trong cùng model và cùng batch.
   \end{center}
 \end{frame}
 
@@ -288,7 +288,7 @@
       \small\alert{LLM2Seq-Qwen}: đạt R-1 54.01 và BERT-F1 73.42.
     \end{column}
     \begin{column}{0.48\textwidth}
-      \small\alert{T5Gemma}: tốt hơn ở R-2/R-L, nhưng sinh dài hơn đáng kể.
+      \small\alert{T5Gemma}: cao hơn ở R-2, R-L và BERT-F1, nhưng sinh dài hơn đáng kể.
     \end{column}
   \end{columns}
 \end{frame}
@@ -298,7 +298,7 @@
   \includegraphics[width=0.90\textwidth,height=0.67\textheight,keepaspectratio]{length_behavior.pdf}
 
   \vfill
-  \small\alert{Cách đọc}: Llama quá ngắn, Qwen gần độ dài tham chiếu hơn, còn T5Gemma đầy đủ hơn nhưng thường sinh dài.
+  \small\alert{Cách đọc}: Llama quá ngắn. Qwen gần độ dài tham chiếu hơn. T5Gemma đầy đủ hơn, nhưng thường sinh dài.
 \end{frame}
 
 \begin{frame}{MTP: nhiều token mỗi bước, tăng tốc vừa phải}
@@ -313,7 +313,8 @@
           \item AR: 95.87 tok/s
           \item MTP: 111.71 tok/s
           \item Tăng tốc: 1.17x
-          \item Sinh: 2.30 token/bước
+          \item Sinh ra: 2.30 token/bước
+          \item Draft được nhận: 0.44 token/bước
         \end{itemize}
       \end{block}
       \smallnote{Số token được sinh mỗi bước không đồng nghĩa trực tiếp với thời gian chạy thực tế.}
@@ -361,7 +362,7 @@
   \end{columns}
 \end{frame}
 
-\begin{frame}{LLM2Seq cho thấy điều gì?}
+\begin{frame}{Thảo luận và hạn chế}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{0.48\textwidth}
       \begin{block}{Điểm làm được}
@@ -375,9 +376,9 @@
     \begin{column}{0.48\textwidth}
       \begin{block}{Hạn chế hiện tại}
         \begin{itemize}
-          \item Chưa có ablation đầy đủ.
-          \item Chưa có đánh giá factuality bằng con người.
-          \item Chi phí triển khai MTP còn cao.
+          \item Chưa có adapter ablation đầy đủ.
+          \item Chưa có đánh giá factuality bằng người.
+          \item MTP còn tốn chi phí kiểm chứng và cache.
         \end{itemize}
       \end{block}
     \end{column}
@@ -385,46 +386,41 @@
 
   \vfill
   \begin{center}
-    \normalsize\alert{Kết quả chính là chứng minh tính khả thi, không phải khẳng định vượt trội tuyệt đối.}
-
-    \smallskip
-    \small Báo cáo không khẳng định thắng toàn diện T5Gemma hay các mô hình encoder-decoder chuyên biệt.
+    \normalsize\alert{Hướng làm khả thi, nhưng chưa khẳng định vượt T5Gemma trên mọi mặt.}
   \end{center}
 \end{frame}
 
-\begin{frame}{Kết luận chính}
-  \begin{columns}[T,onlytextwidth]
-    \begin{column}{0.32\textwidth}
-      \metric{Kiến trúc}{LLM đọc nguồn\\adapter nối sang decoder}
-    \end{column}
-    \begin{column}{0.32\textwidth}
-      \metric{Chất lượng}{Qwen gần R-1\\tóm tắt gọn hơn}
-    \end{column}
-    \begin{column}{0.32\textwidth}
-      \metric{Tốc độ}{verified MTP\\đạt 1.17x}
-    \end{column}
-  \end{columns}
-
-  \vspace{0.6em}
+\begin{frame}{Thông điệp chính}
+  \vspace{0.3em}
   \begin{itemize}
-    \item LLM2Seq dùng source encoder từ LLM để tạo source memory cho decoder.
-    \item Token-level memory giúp decoder vẫn thấy chi tiết trong văn bản nguồn.
-    \item Verified MTP tăng tốc được, nhưng chi phí kiểm chứng và cache làm mức tăng tốc còn giới hạn.
+    \item LLM2Seq dùng LLM source encoder để tạo memory cho decoder.
+    \item Qwen cho chất lượng tốt hơn Llama và độ dài gần tham chiếu hơn.
+    \item Verified MTP đạt 1.17x, nhưng bị giới hạn bởi bước kiểm chứng.
   \end{itemize}
 
   \vfill
-  \begin{center}
-    \large\alert{Thông điệp chính: kiến trúc khả thi; ablation và đánh giá factuality là bước tiếp theo.}
-  \end{center}
+  \begin{block}{Bước tiếp theo}
+    Adapter ablation, factuality evaluation, và tối ưu verified decoding.
+  \end{block}
 \end{frame}
 
 \begin{frame}{Hỏi đáp}
-  \begin{center}
-    \includegraphics[width=0.48\textwidth,height=0.55\textheight,keepaspectratio]{thank_image.pdf}
+  \centering
+  \vspace{0.2em}
+  \includegraphics[width=0.70\textwidth,height=0.52\textheight,keepaspectratio]{qa_end_image.pdf}
 
-    \vspace{0.9em}
-    \large\href{https://github.com/BienKieu1411/LLM2Seq}{github.com/BienKieu1411/LLM2Seq}
-  \end{center}
+  \vspace{0.25em}
+  {\Large\bfseries Cảm ơn đã lắng nghe!}
+
+  \begin{tikzpicture}[remember picture,overlay]
+    \node[anchor=south east,align=right,xshift=-1.98cm,yshift=0.85cm] at (current page.south east) {
+      \scriptsize GitHub:\\[-0.1em]
+      \scriptsize\href{https://github.com/BienKieu1411/LLM2Seq}{github.com/BienKieu1411/LLM2Seq}
+    };
+    \node[anchor=south east,xshift=-0.45cm,yshift=0.54cm] at (current page.south east) {
+      \href{https://github.com/BienKieu1411/LLM2Seq}{\includegraphics[width=1.25cm]{github_qr.pdf}}
+    };
+  \end{tikzpicture}
 \end{frame}
 
 \end{document}
