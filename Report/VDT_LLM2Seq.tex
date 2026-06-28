@@ -69,7 +69,7 @@
 \begin{abstract}
 Abstractive summarization is a sequence-to-sequence task.
 A model reads a document and writes a shorter text.
-Modern LLM checkpoints are good at generation and representation learning.
+Modern Large Language Model (LLM) checkpoints are good at generation and representation learning.
 However, many of them do not provide a direct encoder-decoder interface for summarization.
 Encoder-decoder models fit this task because the encoder reads the source and the decoder writes the summary.
 
@@ -94,29 +94,33 @@ They also show that MTP speedups should be measured by real throughput, not only
 
 \subsection{Motivation}
 
-Abstractive summarization naturally follows a sequence-to-sequence formulation.
-The task requires modeling the source document before generating a shorter target text.
-Encoder-decoder models match this shape because the encoder reads the source and the decoder writes the target \citep{sutskever2014sequence,bahdanau2015neural,vaswani2017attention}.
-Decoder-only LLMs are different.
-They are strong generators, but they mix the source and target into one left-to-right sequence \citep{brown2020language,dubey2024llama3,yang2024qwen2}.
-This makes them easy to prompt, but it does not explicitly separate source understanding from summary generation.
+Abstractive summarization is rooted in a sequence-to-sequence framework.
+The model must first represent the source document, then generate a concise target summary \citep{sutskever2014sequence,bahdanau2015neural,vaswani2017attention}.
+Encoder-decoder architectures match this task structure by separating source comprehension from target generation.
+In contrast, many modern LLMs use decoder-only architectures \citep{brown2020language,dubey2024llama3,yang2024qwen2}.
+They are strong autoregressive generators, but they place the source context and target sequence inside one left-to-right causal stream.
+This structural entanglement makes prompting simple, but it does not provide an explicit boundary between source representation, information filtering, and summary generation.
 
 \subsection{Problem Statement}
 
-This report asks whether pretrained LLM-based source encoders can be reused inside an encoder-decoder summarizer.
-The task is Vietnamese abstractive summarization on WikiLingua \citep{ladhak2020wikilingua}.
-Given a source document $x$, the model must produce a summary $y$.
-The goal is to reuse LLM source representations, keep an encoder-decoder interface, and improve decoding speed when possible.
+This report investigates whether pretrained LLM layers and embedding models can be repurposed as source encoders inside an explicit encoder-decoder summarizer.
+We study Vietnamese abstractive summarization on WikiLingua \citep{ladhak2020wikilingua}.
+Given a source document $x$, the model must produce a salient summary $y$.
+The goal is to reuse rich LLM source representations, preserve a clear cross-attention interface between encoding and decoding, and reduce decoder-side latency when possible.
 
 \subsection{Gap with Existing Work}
 
-Pretrained encoder-decoder models such as T5, BART, and mT5 remain strong summarization baselines \citep{raffel2020t5,lewis2020bart,xue2021mt5}.
-However, they are not a direct way to reuse representations from recent LLM checkpoints.
-Recent work shows that decoder-only models can serve as encoders \citep{behnamghader2024llm2vec,luo2025lamate}, but summarization still needs a bridge from source-side LLM states to decoder cross-attention.
-Context compression models such as LCLMs compress long prompts into shorter latent sequences \citep{li2026contextcompression}.
-That is a related but different goal.
-Our goal is not general prompt compression.
-Our goal is task-specific summarization with token-level source memory.
+Pretrained encoder-decoder models such as T5, BART, and mT5 remain strong paradigms for conditional text generation \citep{raffel2020t5,lewis2020bart,xue2021mt5}.
+However, they do not directly reuse representations from recent LLM checkpoints.
+Conversely, recent work shows that causal models can be converted into useful text encoders \citep{behnamghader2024llm2vec,luo2025lamate}.
+Yet using these source states for summarization still requires an explicit and stable bridge to decoder cross-attention.
+
+At the same time, end-to-end context compression methods such as LCLMs reduce inference cost by compressing long prompts into short latent sequences \citep{li2026contextcompression}.
+This is useful for general long-context inference, but it is not the same objective as source-grounded summarization.
+Abstractive summarization often depends on granular local evidence, including named entities, numbers, constraints, and ordered procedural steps.
+If the document representation is compressed into a coarse latent bottleneck too early, the decoder can lose access to the local information needed to decide what belongs in the summary.
+This leaves a gap for an architecture that can reuse LLM representations without sacrificing token-level source fidelity.
+LLM2Seq addresses this gap by keeping token-level cross-attention memory, preserving fine-grained source states while explicitly separating the encoding and decoding pathways.
 
 \subsection{Contributions}
 
@@ -166,13 +170,13 @@ LCLMs optimize compression ratio, memory, time-to-first-token, and long-context 
 LLM2Seq uses an encoder-decoder memory interface, but it does not compress the source with a fixed ratio.
 It keeps token-level memory because summaries often depend on local source evidence.
 
-\subsection{Efficient Decoding and Multi-Token Prediction}
+\subsection{Efficient Decoding and MTP}
 
 Autoregressive decoding emits one token per step.
 Speculative decoding drafts tokens and verifies them with a target model \citep{leviathan2023speculative}.
 Blockwise decoding predicts several future tokens in parallel \citep{stern2018blockwise}.
 Medusa adds extra decoding heads \citep{cai2024medusa}.
-Multi-token prediction trains heads to predict future tokens directly \citep{gloeckle2024mtp}.
+MTP methods train heads to predict future tokens directly \citep{gloeckle2024mtp}.
 MTP-D adds self-distillation to improve these heads \citep{zhao2026mtpdistill}, following knowledge distillation \citep{hinton2015distilling}.
 
 \subsection{Positioning of LLM2Seq}
@@ -208,7 +212,7 @@ Best use case & Long redundant context & Source-grounded summarization \\
 
 \begin{figure*}[t]
 \centering
-\includegraphics[width=0.98\textwidth]{figures/architecture.png}
+\includegraphics[width=0.98\textwidth]{figures/architecture.pdf}
 \caption{LLM2Seq repurposes a pretrained LLM source encoder, maps its hidden states through a gated residual memory adapter, and uses a lightweight cross-attentive decoder for summarization. The lower blocks show self-distilled MTP training and verified MTP decoding.}
 \label{fig:architecture}
 \end{figure*}
@@ -422,7 +426,7 @@ p_{\psi}(y_t\mid y_{<t},M)=\operatorname{softmax}(o_t).
 The decoder is intentionally smaller than the encoder.
 This keeps generation cheaper while still allowing the encoder to carry strong source representations.
 
-\subsection{Self-Distilled Multi-Token Prediction}
+\subsection{Self-Distilled MTP}
 
 After Phase 2, the main summarizer is frozen.
 Phase 3 adds $K=4$ cascaded MTP heads \citep{gloeckle2024mtp,zhao2026mtpdistill,deepseekai2024deepseekv3}.
@@ -651,12 +655,12 @@ Phase 2 runs for 6 epochs with batch size 16, gradient accumulation 2, encoder l
 Phase 3 freezes the encoder, adapter, and decoder, then trains only the MTP heads for 6 epochs with batch size 20, gradient accumulation 4, learning rate $5\cdot10^{-4}$, warmup ratio 0.05, and weight decay 0.01.
 Checkpoints are selected by validation loss.
 For generation, all models use a minimum of 32 new tokens and repetition penalty 1.15.
-T5Gemma is trained for 4 epochs with LoRA, batch size 16, gradient accumulation 2, learning rate $10^{-4}$, warmup ratio 0.03, weight decay 0.01, cosine schedule, and fused AdamW.
+T5Gemma is trained for 6 epochs with LoRA, batch size 16, gradient accumulation 2, learning rate $2\cdot10^{-4}$, warmup ratio 0.03, weight decay 0.01, cosine schedule, and fused AdamW.
 Appendix~\ref{app:hparams} summarizes the training and decoding configuration.
 
 \subsection{Evaluation Metrics}
 
-We report ROUGE \citep{lin2004rouge}, length statistics, and speed.
+We report ROUGE \citep{lin2004rouge}, BERTScore \citep{zhang2020bertscore}, length statistics, and speed.
 ROUGE-1 and ROUGE-2 use unigram and bigram overlap.
 Let $\hat{y}$ be the generated summary and $y$ be the reference.
 For $n\in\{1,2\}$, let $C_n(\hat{y},y)$ be the clipped count of overlapping $n$-grams:
@@ -686,6 +690,24 @@ Decoded strings are evaluated directly.
 Length statistics use whitespace-separated tokens from \texttt{text.split()}, which we call words for readability.
 We do not apply Vietnamese word segmentation such as VnCoreNLP or underthesea.
 This choice is reported explicitly because Vietnamese word segmentation can affect n-gram overlap and length statistics.
+BERTScore is computed between each generated summary and its reference using \texttt{bert-base-multilingual-cased}.
+We report BERTScore F1 as a percentage.
+BERTScore first encodes the generated summary and the reference into contextual token embeddings.
+Let $\hat{E}$ be the generated-token embeddings and $E$ be the reference-token embeddings.
+For each generated token, BERTScore finds the most similar reference token by cosine similarity:
+\begin{equation}
+P_B=\frac{1}{|\hat{E}|}\sum_{\hat{e}\in\hat{E}}\max_{e\in E}\cos(\hat{e},e).
+\end{equation}
+For each reference token, it also finds the most similar generated token:
+\begin{equation}
+R_B=\frac{1}{|E|}\sum_{e\in E}\max_{\hat{e}\in\hat{E}}\cos(e,\hat{e}).
+\end{equation}
+The reported BERTScore is the F1 score:
+\begin{equation}
+\operatorname{BERTScore}\text{-}F1
+=\frac{2P_BR_B}{P_B+R_B}.
+\end{equation}
+BERTScore gives a semantic similarity signal that is less brittle than n-gram overlap, but it is still not a factuality or hallucination detector.
 For speed, we report generated tokens per second and mean latency.
 We compare speed only when the batch setting is the same.
 When comparing AR and MTP speed, we use paired comparison logs under the same model and batch setting.
@@ -706,7 +728,7 @@ They cover summarization quality, encoder configuration, and decoding speed.
 \subsection{RQ1: Viability of LLM-based Source Encoders}
 
 Table~\ref{tab:main-results} reports the main WikiLingua test results.
-The Qwen-based LLM2Seq system achieves 54.01 ROUGE-1, 20.83 ROUGE-2, and 31.83 ROUGE-L.
+The Qwen-based LLM2Seq system achieves 54.01 ROUGE-1, 20.83 ROUGE-2, 31.83 ROUGE-L, and 73.42 BERTScore F1.
 This shows that a pretrained LLM-based source encoder can provide useful cross-attention memory for an encoder-decoder summarizer.
 The Llama-based system also produces valid summaries, but its lower ROUGE scores and much shorter outputs indicate that not every source encoder configuration transfers equally well.
 
@@ -716,23 +738,21 @@ Overall, the Qwen-based result gives positive evidence for RQ1.
 It shows that an LLM-based source encoder can support encoder-decoder summarization.
 However, the result also depends on the encoder configuration and output length.
 
-\begin{table}[ht]
+\begin{table*}[t]
 \centering
 \small
-\resizebox{\columnwidth}{!}{%
-\begin{tabular}{lrrrrr}
+\begin{tabular}{lrrrrrrrr}
 \toprule
-Model & R-1 & R-2 & R-L & Avg. Words & Too Long (\%) \\
+Model & R-1 & R-2 & R-L & BERT-P & BERT-R & BERT-F1 & Avg. Words & Too Long (\%) \\
 \midrule
-Llama & 48.36 & 15.54 & 29.05 & 29.10 & 5.46 \\
-Qwen & 54.01 & 20.83 & 31.83 & 58.31 & 35.79 \\
-T5Gemma & \textbf{54.24} & \textbf{27.42} & \textbf{33.89} & 90.89 & 68.03 \\
+Llama & 48.36 & 15.54 & 29.05 & \textbf{74.08} & 72.11 & 73.02 & 29.10 & 5.46 \\
+Qwen & 54.01 & 20.83 & 31.83 & 72.87 & 74.11 & 73.42 & 58.31 & 35.79 \\
+T5Gemma & \textbf{54.24} & \textbf{27.42} & \textbf{33.89} & 71.99 & \textbf{78.40} & \textbf{74.98} & 90.89 & 68.03 \\
 \bottomrule
-\end{tabular}%
-}
-\caption{WikiLingua test results. ROUGE values are F1 percentages. \textbf{Avg. Words} is the average number of words in the generated summaries. \textbf{Too Long (\%)} is the percentage of generated summaries that exceed their reference length. For comparison, reference summaries have an average of 51.86 words.}
+\end{tabular}
+\caption{WikiLingua test results. ROUGE and BERTScore values are percentages. BERT-P, BERT-R, and BERT-F1 are BERTScore precision, recall, and F1 with \texttt{bert-base-multilingual-cased}. \textbf{Avg. Words} is the average number of words in the generated summaries. \textbf{Too Long (\%)} is the percentage of generated summaries that exceed their reference length. For comparison, reference summaries have an average of 51.86 words.}
 \label{tab:main-results}
-\end{table}
+\end{table*}
 
 \subsection{RQ2: Effect of Encoder Configuration}
 
@@ -775,16 +795,16 @@ This gives a measured speedup of 1.17x and reduces mean latency from 0.779s to 0
 \begin{table*}[t]
 \centering
 \small
-\begin{tabular}{llrrrrrrrr}
+\begin{tabular}{llrrrrrrrrr}
 \toprule
-Model & Mode & tok/s & Spd. & Lat. & Emit & Draft & R-1 & R-2 & R-L \\
+Model & Mode & tok/s & Spd. & Lat. & Emit & Draft & R-1 & R-2 & R-L & BERT-F1 \\
 \midrule
-Llama & AR & 114.74 & 1.00x & 0.697 & 1.00 & 0.00 & 48.36 & 15.54 & 29.05 \\
-Qwen & AR & 95.87 & 1.00x & 0.779 & 1.00 & 0.00 & 54.01 & 20.83 & 31.83 \\
-Qwen & MTP & \textbf{111.71} & \textbf{1.17x} & \textbf{0.662} & 2.30 & 0.44 & 53.90 & 20.81 & 31.64 \\
+Llama & AR & 114.74 & 1.00x & 0.697 & 1.00 & 0.00 & 48.36 & 15.54 & 29.05 & 73.02 \\
+Qwen & AR & 95.87 & 1.00x & 0.779 & 1.00 & 0.00 & 54.01 & 20.83 & 31.83 & 73.42 \\
+Qwen & MTP & \textbf{111.71} & \textbf{1.17x} & \textbf{0.662} & 2.30 & 0.44 & 53.90 & 20.81 & 31.64 & 73.26 \\
 \bottomrule
 \end{tabular}
-\caption{Autoregressive and self-distilled verified MTP decoding results. AR means autoregressive decoding. Lat. is mean latency in seconds. Emit is emitted tokens per decoding step. Draft is accepted draft tokens per step, excluding the main token and verifier correction.}
+\caption{Autoregressive and self-distilled verified MTP decoding results. AR means autoregressive decoding. Lat. is mean latency in seconds. Emit is emitted tokens per decoding step. Draft is accepted draft tokens per step, excluding the main token and verifier correction. BERT-F1 is BERTScore F1.}
 \label{tab:mtp-results}
 \end{table*}
 
@@ -793,6 +813,21 @@ This suggests that accepted or emitted tokens alone are not enough to evaluate M
 The verifier also costs time.
 Cache handling and tensor control flow also add overhead.
 For this reason, we report both speed and quality for AR and MTP.
+Although verified MTP is designed to stay constrained by the main decoder path, the current AR and MTP evaluation paths can still show small metric differences because they use separate cache handling, stopping behavior, and decoding-control code.
+We therefore report quality scores for both modes instead of assuming exact output equivalence.
+
+Figure~\ref{fig:mtp-latency} shows a derived latency accounting for the Qwen system.
+Under an idealized assumption that each MTP decoding step has the same cost as an autoregressive step, emitting 2.30 tokens per step would reduce the mean latency from 0.779s to about 0.339s.
+In practice, the observed MTP latency is 0.662s, leaving about 0.323s as residual overhead.
+This is not kernel-level profiling.
+It is a conservative accounting from the evaluation logs, and it suggests that verification, cache management, tensor control flow, and Python overhead are likely bottlenecks.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{mtp_latency_accounting.pdf}
+\caption{Derived latency accounting for Qwen autoregressive decoding and verified MTP. The ideal MTP component divides AR latency by the observed emitted tokens per decoding step. The residual is the gap between observed MTP latency and this ideal value.}
+\label{fig:mtp-latency}
+\end{figure}
 
 Therefore, RQ3 is answered positively for the Qwen-based system: verified MTP gives a real throughput improvement.
 At the same time, the result is modest, so MTP speed depends on implementation details.
@@ -919,11 +954,13 @@ This limits how strongly we can attribute the observed differences to the encode
 
 \subsection{Metric Validity}
 
-The main automatic metric is ROUGE \citep{lin2004rouge}, which measures lexical overlap with the reference summary.
-ROUGE does not fully capture factual consistency, fluency, coherence, or usefulness.
-This matters because a model can obtain reasonable ROUGE scores while still producing wrong or unnatural phrases, as shown in the qualitative examples.
+The main automatic metrics are ROUGE and BERTScore.
+ROUGE measures lexical overlap with the reference summary, while BERTScore adds a reference-based semantic similarity signal.
+Neither metric fully captures factual consistency, fluency, coherence, or usefulness.
+This matters because a model can obtain reasonable automatic scores while still producing wrong or unnatural phrases, as shown in the qualitative examples.
 For Vietnamese, whitespace tokenization is also a source of variation because one semantic word can contain multiple whitespace-separated syllables.
-Therefore, the reported ROUGE and length statistics should be read together with qualitative inspection rather than as complete measures of summary quality.
+Therefore, the reported ROUGE, BERTScore, and length statistics should be read together with qualitative inspection rather than as complete measures of summary quality.
+Future work should add factuality-focused evaluation, such as human judgment or LLM-as-a-judge scoring for faithfulness to the source.
 
 \subsection{Implementation Validity}
 
@@ -1100,12 +1137,12 @@ In verified MTP mode it additionally reports accepted-token statistics.
 \centering
 \begin{minipage}{0.49\textwidth}
 \centering
-\framedemoimage{figures/demo_autoregressive_cropped.png}
+\framedemoimage{figures/demo_autoregressive_cropped.pdf}
 \end{minipage}
 \hfill
 \begin{minipage}{0.49\textwidth}
 \centering
-\framedemoimage{figures/demo_mtp_cropped.png}
+\framedemoimage{figures/demo_mtp_cropped.pdf}
 \end{minipage}
 \caption{LLM2Seq web demo on the same WikiLingua sample. Left: standard autoregressive decoding. Right: verified MTP decoding.}
 \label{fig:demo}

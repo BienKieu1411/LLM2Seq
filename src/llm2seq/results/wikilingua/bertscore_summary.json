@@ -1,0 +1,44 @@
+{
+  "metric": "BERTScore",
+  "model_type": "bert-base-multilingual-cased",
+  "device": "mps",
+  "rescale_with_baseline": false,
+  "scoring_direction": "prediction_vs_reference",
+  "systems": {
+    "llama_ar": {
+      "num_examples": 3901,
+      "precision": 74.0794,
+      "recall": 72.1137,
+      "f1": 73.0223,
+      "predictions_file": "src/llm2seq/results/wikilingua/llama/eval_base/predictions.jsonl"
+    },
+    "llama_mtp": {
+      "num_examples": 3901,
+      "precision": 74.0794,
+      "recall": 72.1137,
+      "f1": 73.0223,
+      "predictions_file": "src/llm2seq/results/wikilingua/llama/eval_mtp/predictions.jsonl"
+    },
+    "qwen_ar": {
+      "num_examples": 3901,
+      "precision": 72.8653,
+      "recall": 74.1139,
+      "f1": 73.4231,
+      "predictions_file": "src/llm2seq/results/wikilingua/qwen/eval_base/predictions.jsonl"
+    },
+    "qwen_mtp": {
+      "num_examples": 3901,
+      "precision": 72.7072,
+      "recall": 73.961,
+      "f1": 73.264,
+      "predictions_file": "src/llm2seq/results/wikilingua/qwen/eval_mtp/predictions.jsonl"
+    },
+    "t5gemma": {
+      "num_examples": 3901,
+      "precision": 71.9857,
+      "recall": 78.3987,
+      "f1": 74.984,
+      "predictions_file": "src/T5Gemma/results/wikilingua/predictions.jsonl"
+    }
+  }
+}

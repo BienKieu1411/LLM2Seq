@@ -1,4 +1,4 @@
-\begin{thebibliography}{26}
+\begin{thebibliography}{28}
 \providecommand{\natexlab}[1]{#1}
 
 \bibitem[{Bahdanau et~al.(2015)Bahdanau, Cho, and Bengio}]{bahdanau2015neural}
@@ -176,15 +176,31 @@ An~Yang, Baosong Yang, Binyuan Hui, Bo~Zheng, Bowen Yu, Chang Zhou, Chengpeng
 \newblock Qwen2 technical report.
 \newblock \emph{arXiv preprint arXiv:2407.10671}.
 
-\bibitem[{Zhang et~al.(2025)Zhang, Suganthan, Liu, Philippov, Dua, Hora, Black,
-  Martins, Sanseviero, Pathak, Hardin, Visin, Zhang, Kenealy, Yin, Lacombe,
-  Joulin, Warkentin, and Roberts}]{zhang2025t5gemma2}
+\bibitem[{Zhang et~al.(2025{\natexlab{a}})Zhang, Suganthan, Liu, Philippov,
+  Dua, Hora, Black, Martins, Sanseviero, Pathak, Hardin, Visin, Zhang, Kenealy,
+  Yin, Lacombe, Joulin, Warkentin, and Roberts}]{zhang2025t5gemma2}
 Biao Zhang, Paul Suganthan, Gael Liu, Ilya Philippov, Sahil Dua, Ben Hora, Kat
   Black, Gus Martins, Omar Sanseviero, Shreya Pathak, Cassidy Hardin, Francesco
   Visin, Jiageng Zhang, Kathleen Kenealy, Qin Yin, Olivier Lacombe, Armand
-  Joulin, Tris Warkentin, and Adam Roberts. 2025.
+  Joulin, Tris Warkentin, and Adam Roberts. 2025{\natexlab{a}}.
 \newblock {T5Gemma} 2: Seeing, reading, and understanding longer.
 \newblock \emph{arXiv preprint arXiv:2512.14856}.
+
+\bibitem[{Zhang et~al.(2020)Zhang, Kishore, Wu, Weinberger, and
+  Artzi}]{zhang2020bertscore}
+Tianyi Zhang, Varsha Kishore, Felix Wu, Kilian~Q. Weinberger, and Yoav Artzi.
+  2020.
+\newblock {BERTScore}: Evaluating text generation with {BERT}.
+\newblock In \emph{International Conference on Learning Representations}.
+
+\bibitem[{Zhang et~al.(2025{\natexlab{b}})Zhang, Li, Long, Zhang, Lin, Yang,
+  Xie, Yang, Liu, Lin, Huang, and Zhou}]{zhang2025qwen3embedding}
+Yanzhao Zhang, Mingxin Li, Dingkun Long, Xin Zhang, Huan Lin, Baosong Yang,
+  Pengjun Xie, An~Yang, Dayiheng Liu, Junyang Lin, Fei Huang, and Jingren Zhou.
+  2025{\natexlab{b}}.
+\newblock {Qwen3 Embedding}: Advancing text embedding and reranking through
+  foundation models.
+\newblock \emph{arXiv preprint arXiv:2506.05176}.
 
 \bibitem[{Zhao et~al.(2026)Zhao, Xie, Wang, Li, Xie, and
   Sun}]{zhao2026mtpdistill}

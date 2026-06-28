@@ -21,6 +21,6 @@ There are currently (2025) two files:
 - https://aclanthology.org/anthology-2.bib
 
 You can download these directly from Overleaf from New File -> From External URL,
-and then adding them to the \bibliography line in acl_latex.tex:
+and then adding them to the \bibliography line in VDT_LLM2Seq.tex:
 
     \bibliography{custom,anthology-1,anthology-2}

@@ -152,15 +152,15 @@ src/llm2seq/src/inference/
 The ACL-style report is in:
 
 ```text
-Report/acl_latex.tex
-Report/acl_latex.pdf
+Report/VDT_LLM2Seq.tex
+Report/VDT_LLM2Seq.pdf
 ```
 
 To compile the report from `Report/` with a local LaTeX setup:
 
 ```bash
 cd Report
-tectonic acl_latex.tex --keep-logs --keep-intermediates
+tectonic VDT_LLM2Seq.tex --keep-logs --keep-intermediates
 ```
 
 The bibliography file is:
@@ -193,4 +193,3 @@ Each example contains source sentences and target summary sentences. Preprocessi
 - The demo backend currently loads the Qwen-based LLM2Seq checkpoint from Hugging Face.
 - The app supports two decode modes: `autoregressive` and `mtp_verified`.
 - Quantitative results should be read from the report rather than this README.
-
