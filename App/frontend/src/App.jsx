@@ -132,7 +132,7 @@ export default function App() {
                 <input
                   id="max-tokens"
                   type="range"
-                  min={32}
+                  min={64}
                   max={512}
                   step={16}
                   value={maxTokens}

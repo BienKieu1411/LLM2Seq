@@ -415,34 +415,36 @@ LaTeX Font Info:    Overwriting math alphabet `\mathfrak' in version `bold'
 (Font)                  U/euf/m/n --> U/euf/b/n on input line 106.
 )) (xurl.sty
 Package: xurl 2022/01/09 v 0.10 modify URL breaks
-) (acl_latex.aux)
+)
+\demoimageboxheight=\skip59
+ (acl_latex.aux)
 \openout1 = `acl_latex.aux'.
 
-LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 55.
-LaTeX Font Info:    ... okay on input line 55.
-LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 55.
-LaTeX Font Info:    ... okay on input line 55.
-LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 55.
-LaTeX Font Info:    ... okay on input line 55.
-LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 55.
-LaTeX Font Info:    ... okay on input line 55.
-LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 55.
-LaTeX Font Info:    Trying to load font information for TS1+cmr on input line 5
-5.
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 68.
+LaTeX Font Info:    ... okay on input line 68.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 68.
+LaTeX Font Info:    ... okay on input line 68.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 68.
+LaTeX Font Info:    ... okay on input line 68.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 68.
+LaTeX Font Info:    ... okay on input line 68.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 68.
+LaTeX Font Info:    Trying to load font information for TS1+cmr on input line 6
+8.
  (ts1cmr.fd
 File: ts1cmr.fd 2019/12/16 v2.5j Standard LaTeX font definitions
 )
-LaTeX Font Info:    ... okay on input line 55.
-LaTeX Font Info:    Checking defaults for TU/lmr/m/n on input line 55.
-LaTeX Font Info:    ... okay on input line 55.
-LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 55.
-LaTeX Font Info:    ... okay on input line 55.
-LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 55.
-LaTeX Font Info:    ... okay on input line 55.
-LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 55.
-LaTeX Font Info:    ... okay on input line 55.
-LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 55.
-LaTeX Font Info:    ... okay on input line 55.
+LaTeX Font Info:    ... okay on input line 68.
+LaTeX Font Info:    Checking defaults for TU/lmr/m/n on input line 68.
+LaTeX Font Info:    ... okay on input line 68.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 68.
+LaTeX Font Info:    ... okay on input line 68.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 68.
+LaTeX Font Info:    ... okay on input line 68.
+LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 68.
+LaTeX Font Info:    ... okay on input line 68.
+LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 68.
+LaTeX Font Info:    ... okay on input line 68.
 
 *geometry* driver: auto-detecting
 *geometry* detected driver: xetex
@@ -481,7 +483,7 @@ LaTeX Font Info:    ... okay on input line 55.
 Package caption Info: Begin \AtBeginDocument code.
 Package caption Info: hyperref package is loaded.
 Package caption Info: End \AtBeginDocument code.
-Package hyperref Info: Link coloring ON on input line 55.
+Package hyperref Info: Link coloring ON on input line 68.
 (nameref.sty
 Package: nameref 2021-04-02 v2.47 Cross-referencing by name of section
  (refcount.sty
@@ -491,9 +493,9 @@ Package: gettitlestring 2019/12/15 v1.6 Cleanup title references (HO)
 )
 \c@section@level=\count309
 )
-LaTeX Info: Redefining \ref on input line 55.
-LaTeX Info: Redefining \pageref on input line 55.
-LaTeX Info: Redefining \nameref on input line 55.
+LaTeX Info: Redefining \ref on input line 68.
+LaTeX Info: Redefining \pageref on input line 68.
+LaTeX Info: Redefining \nameref on input line 68.
  (acl_latex.out)
 (acl_latex.out)
 \@outlinefile=\write3
@@ -505,190 +507,220 @@ Package fontspec Info: Adjusting the maths setup (use [no-math] to avoid
 
 \symlegacymaths=\mathgroup6
 LaTeX Font Info:    Overwriting symbol font `legacymaths' in version `bold'
-(Font)                  OT1/cmr/m/n --> OT1/cmr/bx/n on input line 55.
-LaTeX Font Info:    Redeclaring math accent \acute on input line 55.
-LaTeX Font Info:    Redeclaring math accent \grave on input line 55.
-LaTeX Font Info:    Redeclaring math accent \ddot on input line 55.
-LaTeX Font Info:    Redeclaring math accent \tilde on input line 55.
-LaTeX Font Info:    Redeclaring math accent \bar on input line 55.
-LaTeX Font Info:    Redeclaring math accent \breve on input line 55.
-LaTeX Font Info:    Redeclaring math accent \check on input line 55.
-LaTeX Font Info:    Redeclaring math accent \hat on input line 55.
-LaTeX Font Info:    Redeclaring math accent \dot on input line 55.
-LaTeX Font Info:    Redeclaring math accent \mathring on input line 55.
-LaTeX Font Info:    Redeclaring math symbol \Gamma on input line 55.
-LaTeX Font Info:    Redeclaring math symbol \Delta on input line 55.
-LaTeX Font Info:    Redeclaring math symbol \Theta on input line 55.
-LaTeX Font Info:    Redeclaring math symbol \Lambda on input line 55.
-LaTeX Font Info:    Redeclaring math symbol \Xi on input line 55.
-LaTeX Font Info:    Redeclaring math symbol \Pi on input line 55.
-LaTeX Font Info:    Redeclaring math symbol \Sigma on input line 55.
-LaTeX Font Info:    Redeclaring math symbol \Upsilon on input line 55.
-LaTeX Font Info:    Redeclaring math symbol \Phi on input line 55.
-LaTeX Font Info:    Redeclaring math symbol \Psi on input line 55.
-LaTeX Font Info:    Redeclaring math symbol \Omega on input line 55.
-LaTeX Font Info:    Redeclaring math symbol \mathdollar on input line 55.
-LaTeX Font Info:    Redeclaring symbol font `operators' on input line 55.
+(Font)                  OT1/cmr/m/n --> OT1/cmr/bx/n on input line 68.
+LaTeX Font Info:    Redeclaring math accent \acute on input line 68.
+LaTeX Font Info:    Redeclaring math accent \grave on input line 68.
+LaTeX Font Info:    Redeclaring math accent \ddot on input line 68.
+LaTeX Font Info:    Redeclaring math accent \tilde on input line 68.
+LaTeX Font Info:    Redeclaring math accent \bar on input line 68.
+LaTeX Font Info:    Redeclaring math accent \breve on input line 68.
+LaTeX Font Info:    Redeclaring math accent \check on input line 68.
+LaTeX Font Info:    Redeclaring math accent \hat on input line 68.
+LaTeX Font Info:    Redeclaring math accent \dot on input line 68.
+LaTeX Font Info:    Redeclaring math accent \mathring on input line 68.
+LaTeX Font Info:    Redeclaring math symbol \Gamma on input line 68.
+LaTeX Font Info:    Redeclaring math symbol \Delta on input line 68.
+LaTeX Font Info:    Redeclaring math symbol \Theta on input line 68.
+LaTeX Font Info:    Redeclaring math symbol \Lambda on input line 68.
+LaTeX Font Info:    Redeclaring math symbol \Xi on input line 68.
+LaTeX Font Info:    Redeclaring math symbol \Pi on input line 68.
+LaTeX Font Info:    Redeclaring math symbol \Sigma on input line 68.
+LaTeX Font Info:    Redeclaring math symbol \Upsilon on input line 68.
+LaTeX Font Info:    Redeclaring math symbol \Phi on input line 68.
+LaTeX Font Info:    Redeclaring math symbol \Psi on input line 68.
+LaTeX Font Info:    Redeclaring math symbol \Omega on input line 68.
+LaTeX Font Info:    Redeclaring math symbol \mathdollar on input line 68.
+LaTeX Font Info:    Redeclaring symbol font `operators' on input line 68.
 LaTeX Font Info:    Encoding `OT1' has changed to `TU' for symbol font
-(Font)              `operators' in the math version `normal' on input line 55.
+(Font)              `operators' in the math version `normal' on input line 68.
 LaTeX Font Info:    Overwriting symbol font `operators' in version `normal'
-(Font)                  OT1/cmr/m/n --> TU/TimesNewRoman(0)/m/n on input line 5
-5.
+(Font)                  OT1/cmr/m/n --> TU/TimesNewRoman(0)/m/n on input line 6
+8.
 LaTeX Font Info:    Encoding `OT1' has changed to `TU' for symbol font
-(Font)              `operators' in the math version `bold' on input line 55.
+(Font)              `operators' in the math version `bold' on input line 68.
 LaTeX Font Info:    Overwriting symbol font `operators' in version `bold'
 (Font)                  OT1/cmr/bx/n --> TU/TimesNewRoman(0)/m/n on input line 
-55.
+68.
 LaTeX Font Info:    Overwriting symbol font `operators' in version `normal'
 (Font)                  TU/TimesNewRoman(0)/m/n --> TU/TimesNewRoman(0)/m/n on 
-input line 55.
+input line 68.
 LaTeX Font Info:    Overwriting math alphabet `\mathit' in version `normal'
 (Font)                  OT1/cmr/m/it --> TU/TimesNewRoman(0)/m/it on input line
- 55.
+ 68.
 LaTeX Font Info:    Overwriting math alphabet `\mathbf' in version `normal'
 (Font)                  OT1/cmr/bx/n --> TU/TimesNewRoman(0)/b/n on input line 
-55.
+68.
 LaTeX Font Info:    Overwriting math alphabet `\mathsf' in version `normal'
-(Font)                  OT1/cmss/m/n --> TU/lmss/m/n on input line 55.
+(Font)                  OT1/cmss/m/n --> TU/lmss/m/n on input line 68.
 LaTeX Font Info:    Overwriting math alphabet `\mathtt' in version `normal'
-(Font)                  OT1/cmtt/m/n --> TU/CourierNew(0)/m/n on input line 55.
+(Font)                  OT1/cmtt/m/n --> TU/CourierNew(0)/m/n on input line 68.
 
 LaTeX Font Info:    Overwriting symbol font `operators' in version `bold'
 (Font)                  TU/TimesNewRoman(0)/m/n --> TU/TimesNewRoman(0)/b/n on 
-input line 55.
+input line 68.
 LaTeX Font Info:    Overwriting math alphabet `\mathit' in version `bold'
 (Font)                  OT1/cmr/bx/it --> TU/TimesNewRoman(0)/b/it on input lin
-e 55.
+e 68.
 LaTeX Font Info:    Overwriting math alphabet `\mathsf' in version `bold'
-(Font)                  OT1/cmss/bx/n --> TU/lmss/b/n on input line 55.
+(Font)                  OT1/cmss/bx/n --> TU/lmss/b/n on input line 68.
 LaTeX Font Info:    Overwriting math alphabet `\mathtt' in version `bold'
-(Font)                  OT1/cmtt/m/n --> TU/CourierNew(0)/b/n on input line 55.
+(Font)                  OT1/cmtt/m/n --> TU/CourierNew(0)/b/n on input line 68.
 
-LaTeX Font Info:    Trying to load font information for U+msa on input line 56.
+LaTeX Font Info:    Trying to load font information for U+msa on input line 69.
 
  (umsa.fd
 File: umsa.fd 2013/01/14 v3.01 AMS symbols A
 )
-LaTeX Font Info:    Trying to load font information for U+msb on input line 56.
+LaTeX Font Info:    Trying to load font information for U+msb on input line 69.
 
  (umsb.fd
 File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 )
-Underfull \hbox (badness 1377) in paragraph at lines 59--70
+Underfull \hbox (badness 1377) in paragraph at lines 72--83
 \TU/TimesNewRoman(0)/m/n/10 inside an encoder-decoder summarizer. A
  []
 
 
-Underfull \hbox (badness 2469) in paragraph at lines 79--85
+Underfull \hbox (badness 1253) in paragraph at lines 72--83
+\TU/TimesNewRoman(0)/m/n/10 self-distilled Multi-Token Prediction (MTP)
+ []
+
+
+Underfull \hbox (badness 1189) in paragraph at lines 72--83
+\TU/TimesNewRoman(0)/m/n/10 ([][]Gloeckle et al.[][], [][]2024[][]; [][]Zhao et
+ al.[][], [][]2026[][]).
+ []
+
+
+Underfull \hbox (badness 2469) in paragraph at lines 92--98
 \TU/TimesNewRoman(0)/m/n/10.95 Abstractive summarization naturally follows a
  []
 
 
-Underfull \hbox (badness 1178) in paragraph at lines 95--102
+Underfull \hbox (badness 1178) in paragraph at lines 108--115
 \TU/TimesNewRoman(0)/m/n/10.95 BART, and mT5 remain strong summarization
  []
 
 
-Underfull \hbox (badness 3792) in paragraph at lines 95--102
+Underfull \hbox (badness 3792) in paragraph at lines 108--115
 [][]\TU/TimesNewRoman(0)/m/n/10.95 Xue et al.[][], [][]2021[][]). However, they
  are not
  []
 
 
-Underfull \hbox (badness 2443) in paragraph at lines 95--102
+Underfull \hbox (badness 2443) in paragraph at lines 108--115
 \TU/TimesNewRoman(0)/m/n/10.95 cent LLM checkpoints. Recent work shows
  []
 
 
-Underfull \hbox (badness 1412) in paragraph at lines 108--109
-\TU/TimesNewRoman(0)/m/n/10.95 for Vietnamese abstractive summarization,
- []
+Underfull \vbox (badness 1888) has occurred while \output is active []
 
-[1
+ [1
 
 
 
 ]
-Underfull \hbox (badness 6910) in paragraph at lines 109--110
+Underfull \hbox (badness 1412) in paragraph at lines 121--122
+\TU/TimesNewRoman(0)/m/n/10.95 for Vietnamese abstractive summarization,
+ []
+
+
+Underfull \hbox (badness 6910) in paragraph at lines 122--123
 []\TU/TimesNewRoman(0)/m/n/10.95 We introduce a gated residual memory
  []
 
 
-Underfull \hbox (badness 2644) in paragraph at lines 110--111
-\TU/TimesNewRoman(0)/m/n/10.95 summarizer is trained, keeping the main
+Underfull \hbox (badness 6047) in paragraph at lines 123--124
+[]\TU/TimesNewRoman(0)/m/n/10.95 We train self-distilled MTP heads after
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 116--121
+Underfull \hbox (badness 7221) in paragraph at lines 123--124
+\TU/TimesNewRoman(0)/m/n/10.95 the summarizer is trained, keeping the
+ []
+
+
+Underfull \hbox (badness 2418) in paragraph at lines 123--124
+\TU/TimesNewRoman(0)/m/n/10.95 main encoder-adapter-decoder path frozen
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 129--134
 \TU/TimesNewRoman(0)/m/n/10.95 Section [][]2[][] reviews encoder-decoder summa-
 
  []
 
 
-Underfull \hbox (badness 2253) in paragraph at lines 116--121
+Underfull \hbox (badness 2253) in paragraph at lines 129--134
 \TU/TimesNewRoman(0)/m/n/10.95 rization, decoder-only LLM encoders, context
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 116--121
+Underfull \hbox (badness 10000) in paragraph at lines 129--134
 \TU/TimesNewRoman(0)/m/n/10.95 presents LLM2Seq and the MTP decoding
  []
 
 
-Underfull \hbox (badness 1038) in paragraph at lines 127--132
+Underfull \hbox (badness 1038) in paragraph at lines 140--145
 \TU/TimesNewRoman(0)/m/n/10.95 Encoder-decoder models separate reading from
  []
 
 
-Underfull \hbox (badness 1237) in paragraph at lines 135--143
+Underfull \hbox (badness 1237) in paragraph at lines 148--156
 \TU/TimesNewRoman(0)/m/n/10.95 for generation but not for bidirectional source
  []
 
 
-Underfull \hbox (badness 1048) in paragraph at lines 135--143
+Underfull \hbox (badness 1048) in paragraph at lines 148--156
 \TU/TimesNewRoman(0)/m/n/10.95 encoding. LLM2Vec shows that decoder-only
  []
 
 
-Underfull \hbox (badness 1199) in paragraph at lines 146--150
+Underfull \hbox (badness 1199) in paragraph at lines 159--163
 \TU/TimesNewRoman(0)/m/n/10.95 inference ([][]Li et al.[][], [][]2026[][]). LCL
 Ms optimize
  []
 
 
-Underfull \hbox (badness 1077) in paragraph at lines 146--150
+Underfull \hbox (badness 1077) in paragraph at lines 159--163
 \TU/TimesNewRoman(0)/m/n/10.95 compression ratio, memory, time-to-first-token,
  []
 
 File: figures/architecture.png Graphic file (type bmp)
 <figures/architecture.png>
 [2]
-Underfull \hbox (badness 1648) in paragraph at lines 234--241
-\TU/TimesNewRoman(0)/m/n/10.95 source encoder is used; our instantiations are
+Underfull \hbox (badness 2875) in paragraph at lines 247--254
+\TU/TimesNewRoman(0)/m/n/10.95 Figure [][]1[][] shows the full system. LLM2Seq
  []
 
 
-Underfull \hbox (badness 1590) in paragraph at lines 234--241
-\TU/TimesNewRoman(0)/m/n/10.95 a decoder-only-derived LLM2Vec encoder and
+Underfull \hbox (badness 2600) in paragraph at lines 247--254
+\TU/TimesNewRoman(0)/m/n/10.95 are a decoder-only-derived LLM2Vec encoder
  []
 
 
-Underfull \hbox (badness 1348) in paragraph at lines 234--241
-\TU/TimesNewRoman(0)/m/n/10.95 residual memory adapter reshapes the encoder
+Underfull \hbox (badness 1990) in paragraph at lines 247--254
+\TU/TimesNewRoman(0)/m/n/10.95 et al.[][], [][]2024[][]; [][]Yang et al.[][], [
+][]2024[][]). Second, a
  []
 
 
-Underfull \hbox (badness 1014) in paragraph at lines 234--241
-\TU/TimesNewRoman(0)/m/n/10.95 masked self-attention and cross-attention. Af-
+Underfull \hbox (badness 2057) in paragraph at lines 247--254
+\TU/TimesNewRoman(0)/m/n/10.95 coder states into decoder memory. Third, a
  []
 
-[3]
-Underfull \hbox (badness 10000) in paragraph at lines 259--264
+
+Underfull \hbox (badness 1874) in paragraph at lines 247--254
+\TU/TimesNewRoman(0)/m/n/10.95 lightweight Transformer decoder generates the
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 272--277
 \TU/TimesNewRoman(0)/m/n/10.95 In our setting, the selected layers are
  []
 
 
-Underfull \hbox (badness 7576) in paragraph at lines 259--264
+Underfull \hbox (badness 7576) in paragraph at lines 272--277
 \OT1/cmr/m/n/10.95 [\OMS/cmsy/m/n/10.95 ^^@\OT1/cmr/m/n/10.95 1\OML/cmm/m/it/10
 .95 ; \OMS/cmsy/m/n/10.95 ^^@\OT1/cmr/m/n/10.95 4\OML/cmm/m/it/10.95 ; \OMS/cms
 y/m/n/10.95 ^^@\OT1/cmr/m/n/10.95 8\OML/cmm/m/it/10.95 ; \OMS/cmsy/m/n/10.95 ^^
@@ -697,205 +729,236 @@ y/m/n/10.95 ^^@\OT1/cmr/m/n/10.95 8\OML/cmm/m/it/10.95 ; \OMS/cmsy/m/n/10.95 ^^
  []
 
 
-Underfull \hbox (badness 1168) in paragraph at lines 266--271
+Underfull \hbox (badness 1168) in paragraph at lines 279--284
 \TU/TimesNewRoman(0)/m/n/10.95 the low-rank matrices are updated for the en-
  []
 
-
-Underfull \hbox (badness 1360) in paragraph at lines 315--316
+[3]
+Underfull \hbox (badness 1360) in paragraph at lines 328--329
 []\TU/TimesNewRoman(0)/m/n/10.95 A token salience gate then estimates which
  []
 
-
-Underfull \hbox (badness 3536) in paragraph at lines 347--350
+[4]
+Underfull \hbox (badness 3536) in paragraph at lines 360--363
 \TU/TimesNewRoman(0)/m/n/10.95 The global tokens give the decoder a small
  []
 
-[4]
-Underfull \hbox (badness 1661) in paragraph at lines 358--361
-\TU/TimesNewRoman(0)/m/n/10.95 It uses RoPE in causal self-attention. For a
+
+Underfull \hbox (badness 1394) in paragraph at lines 418--422
+\TU/TimesNewRoman(0)/m/n/10.95 Phase 3 adds $\OML/cmm/m/it/10.95 K \OT1/cmr/m/n
+/10.95 = 4$ \TU/TimesNewRoman(0)/m/n/10.95 cascaded MTP heads
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 418--422
+\TU/TimesNewRoman(0)/m/n/10.95 ([][]Gloeckle et al.[][], [][]2024[][]; [][]Zhao
+ et al.[][], [][]2026[][];
+ []
+
+
+Underfull \hbox (badness 6477) in paragraph at lines 424--427
+\TU/TimesNewRoman(0)/m/n/10.95 Each MTP depth predicts one future token
  []
 
 [5]
-Underfull \hbox (badness 1127) in paragraph at lines 515--516
-[]\TU/TimesNewRoman(0)/m/n/10.95 Encode the source once and cache cross-
+Underfull \hbox (badness 1577) in paragraph at lines 483--488
+\OT1/cmr/m/n/10.95 0\OML/cmm/m/it/10.95 :\OT1/cmr/m/n/10.95 6$\TU/TimesNewRoman
+(0)/m/n/10.95 , $\OML/cmm/m/it/10.95 ^^U[] \OT1/cmr/m/n/10.95 = 0\OML/cmm/m/it/
+10.95 :\OT1/cmr/m/n/10.95 2$\TU/TimesNewRoman(0)/m/n/10.95 , $\OML/cmm/m/it/10.
+95 ^^\ \OT1/cmr/m/n/10.95 = 1\OML/cmm/m/it/10.95 :\OT1/cmr/m/n/10.95 5$\TU/Time
+sNewRoman(0)/m/n/10.95 , $\OML/cmm/m/it/10.95 J \OT1/cmr/m/n/10.95 = 2048$\TU/T
+imesNewRoman(0)/m/n/10.95 ,
  []
 
 
-Underfull \hbox (badness 4279) in paragraph at lines 568--571
+Underfull \hbox (badness 1127) in paragraph at lines 528--529
+[]\TU/TimesNewRoman(0)/m/n/10.95 Encode the source once and cache cross-
+ []
+
+[6]
+Underfull \hbox (badness 4279) in paragraph at lines 581--584
 \TU/TimesNewRoman(0)/m/n/10.95 This explains why accepted tokens and real
  []
 
 
-Underfull \hbox (badness 1147) in paragraph at lines 578--584
+Underfull \hbox (badness 1147) in paragraph at lines 591--597
 \TU/TimesNewRoman(0)/m/n/10.95 are Vietnamese. The original WikiLingua re-
  []
 
-[6]
-Underfull \hbox (badness 10000) in paragraph at lines 605--610
-\TU/TimesNewRoman(0)/m/n/10.95 uses the LLM2Vec-Sheared-LLaMA encoder.
+
+Underfull \hbox (badness 10000) in paragraph at lines 618--623
+\TU/TimesNewRoman(0)/m/n/10.95 uses the LLM2Vec-Sheared-LLaMA encoder
  []
 
 
-Underfull \hbox (badness 1796) in paragraph at lines 605--610
-\TU/TimesNewRoman(0)/b/n/10.95 LLM2Seq-Qwen \TU/TimesNewRoman(0)/m/n/10.95 uses
- the Qwen3-Embedding-
- []
-
-
-Underfull \hbox (badness 2134) in paragraph at lines 605--610
+Underfull \hbox (badness 2134) in paragraph at lines 618--623
 \TU/TimesNewRoman(0)/m/n/10.95 lightweight decoder design. \TU/TimesNewRoman(0)
 /b/n/10.95 T5Gemma \TU/TimesNewRoman(0)/m/n/10.95 is a
  []
 
-
-Underfull \hbox (badness 2318) in paragraph at lines 657--667
-\TU/TimesNewRoman(0)/m/n/10.95 coded strings are evaluated directly. Length
- []
-
-
-Underfull \hbox (badness 1137) in paragraph at lines 657--667
-\TU/TimesNewRoman(0)/m/n/10.95 statistics use whitespace-separated tokens from
- []
-
-
-Underfull \hbox (badness 2547) in paragraph at lines 657--667
-\TU/TimesNewRoman(0)/m/n/10.95 namese word segmentation can affect n-gram
- []
-
 [7]
-Underfull \hbox (badness 3199) in paragraph at lines 679--684
-\TU/TimesNewRoman(0)/m/n/10.95 that LLM-based source encoders can support
+Underfull \hbox (badness 1466) in paragraph at lines 670--680
+\TU/TimesNewRoman(0)/m/n/10.95 mentation using \TU/CourierNew(0)/m/n/10.95 use_
+stemmer=False \TU/TimesNewRoman(0)/m/n/10.95 ([][]Lin[][],
  []
 
 
-Underfull \hbox (badness 5431) in paragraph at lines 679--684
-\TU/TimesNewRoman(0)/m/n/10.95 based LLM2Seq setting. Because the two
+Underfull \hbox (badness 1527) in paragraph at lines 692--697
+\TU/TimesNewRoman(0)/m/n/10.95 et al.[][], [][]2025[][]; [][]Lin[][], [][]2004[
+][]). LLM2Seq-Qwen is
  []
 
 
-Underfull \hbox (badness 1168) in paragraph at lines 755--761
+Underfull \hbox (badness 3746) in paragraph at lines 692--697
+\TU/TimesNewRoman(0)/m/n/10.95 close on ROUGE-1 and much stronger than
+ []
+
+
+Underfull \hbox (badness 2205) in paragraph at lines 692--697
+\TU/TimesNewRoman(0)/m/n/10.95 decoder summarization under the Qwen-based
+ []
+
+
+Underfull \hbox (badness 1168) in paragraph at lines 745--750
+\TU/TimesNewRoman(0)/m/n/10.95 creases tokens per decoding step for both en-
+ []
+
+[8]
+Underfull \hbox (badness 1168) in paragraph at lines 768--774
 []\TU/TimesNewRoman(0)/m/n/10.95 The key result is not the accepted-token or
  []
 
 
-Underfull \hbox (badness 1596) in paragraph at lines 755--761
-\TU/TimesNewRoman(0)/m/n/10.95 tensor control flow, and implementation over-
- []
+Underfull \vbox (badness 1281) has occurred while \output is active []
 
-[8]
-Underfull \hbox (badness 1337) in paragraph at lines 783--789
+
+Underfull \hbox (badness 1337) in paragraph at lines 796--802
 \TU/TimesNewRoman(0)/m/n/10.95 The results reveal three error patterns. First,
  []
 
 
-Underfull \hbox (badness 2573) in paragraph at lines 783--789
+Underfull \hbox (badness 2573) in paragraph at lines 796--802
 \TU/TimesNewRoman(0)/m/n/10.95 LLM2Seq-Llama under-generates, which hurts
  []
 
 
-Underfull \hbox (badness 5460) in paragraph at lines 783--789
+Underfull \hbox (badness 5460) in paragraph at lines 796--802
 \TU/TimesNewRoman(0)/m/n/10.95 recall and leads to lower ROUGE. Second,
  []
 
 
-Underfull \hbox (badness 2698) in paragraph at lines 783--789
+Underfull \hbox (badness 2698) in paragraph at lines 796--802
 \TU/TimesNewRoman(0)/m/n/10.95 T5Gemma often generates much longer sum-
  []
 
 
-Underfull \hbox (badness 6641) in paragraph at lines 795--798
+Underfull \hbox (badness 2096) in paragraph at lines 796--802
+\TU/TimesNewRoman(0)/m/n/10.95 verified MTP can preserve quality while still
+ []
+
+
+Underfull \hbox (badness 6641) in paragraph at lines 808--811
 \TU/TimesNewRoman(0)/m/n/10.95 We implement a web interface for running
  []
 
-
-Underfull \hbox (badness 7667) in paragraph at lines 832--836
+[9]
+Underfull \hbox (badness 7667) in paragraph at lines 845--849
 \TU/TimesNewRoman(0)/m/n/10.95 The Qwen-based LLM2Seq variant achieves
  []
 
-[9]
-Underfull \hbox (badness 1728) in paragraph at lines 868--870
+
+Underfull \hbox (badness 1728) in paragraph at lines 881--883
 \TU/TimesNewRoman(0)/m/n/10.95 T5Gemma is a strong baseline, but its avail-
  []
 
-
-Underfull \hbox (badness 4366) in paragraph at lines 892--898
+[10]
+Underfull \hbox (badness 4366) in paragraph at lines 905--911
 \TU/TimesNewRoman(0)/m/n/10.95 LLM2Seq studies how to build an encoder-
  []
 
-[10] (acl_latex.bbl
+(acl_latex.bbl
 Underfull \hbox (badness 1048) in paragraph at lines 12--16
 []\TU/TimesNewRoman(0)/m/n/10 Parishad BehnamGhader, Vaibhav Adlakha, Marius
  []
 
-
-Underfull \hbox (badness 7221) in paragraph at lines 80--86
+[11]
+Underfull \hbox (badness 7221) in paragraph at lines 85--91
 []\TU/TimesNewRoman(0)/m/n/10 Mike Lewis, Yinhan Liu, Naman Goyal, Mar-
  []
 
 
-Underfull \hbox (badness 1902) in paragraph at lines 80--86
+Underfull \hbox (badness 1902) in paragraph at lines 85--91
 \TU/TimesNewRoman(0)/m/n/10 Levy, Veselin Stoyanov, and Luke Zettlemoyer.
  []
 
 
-Underfull \hbox (badness 2990) in paragraph at lines 90--96
+Underfull \hbox (badness 2990) in paragraph at lines 95--101
 \TU/TimesNewRoman(0)/m/n/10 Zaiqian Chen, Artem Gazizov, Venkata Anoop
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 90--96
+Underfull \hbox (badness 10000) in paragraph at lines 95--101
 \TU/TimesNewRoman(0)/m/n/10 Suhas Kumar Morisetty, Bhavya Kailkhura,
  []
 
 
-Underfull \hbox (badness 1596) in paragraph at lines 104--110
+Underfull \hbox (badness 1596) in paragraph at lines 109--115
 []\TU/TimesNewRoman(0)/m/n/10 Yingfeng Luo, Tong Zheng, Yongyu Mu, Bei Li,
  []
 
-[11]
-Underfull \hbox (badness 5832) in paragraph at lines 146--152
+
+Underfull \hbox (badness 5832) in paragraph at lines 156--162
 []\TU/TimesNewRoman(0)/m/n/10 Guangxuan Xiao, Ji Lin, Mickael Seznec, Hao
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 146--152
+Underfull \hbox (badness 10000) in paragraph at lines 156--162
 \TU/TimesNewRoman(0)/m/n/10 Wu, Julien Demouth, and Song Han. 2023.
  []
 
 
-Underfull \hbox (badness 1946) in paragraph at lines 155--161
+Underfull \hbox (badness 1946) in paragraph at lines 165--171
 []\TU/TimesNewRoman(0)/m/n/10 Linting Xue, Noah Constant, Adam Roberts, Mi-
  []
 
 
-Underfull \hbox (badness 4981) in paragraph at lines 164--168
+Underfull \hbox (badness 4981) in paragraph at lines 174--178
 \TU/TimesNewRoman(0)/m/n/10 Li, Dayiheng Liu, Fei Huang, and 1 others.
  []
 
 
-Underfull \hbox (badness 5036) in paragraph at lines 181--185
+Underfull \hbox (badness 5036) in paragraph at lines 191--195
 \TU/TimesNewRoman(0)/m/n/10 distillation for multi-token prediction.  \TU/Times
 NewRoman(0)/m/it/10 arXiv
  []
 
-)
-Underfull \hbox (badness 2460) in paragraph at lines 939--940
+[12])
+Underfull \hbox (badness 2460) in paragraph at lines 952--953
 []\TU/TimesNewRoman(0)/m/n/10.95 LoRA: encoder adapters are used during
  []
 
 
-Underfull \hbox (badness 1931) in paragraph at lines 954--957
+Underfull \hbox (badness 1033) in paragraph at lines 953--954
+\TU/TimesNewRoman(0)/m/n/10.95 head weights $\OT1/cmr/m/n/10.95 [1\OML/cmm/m/it
+/10.95 :\OT1/cmr/m/n/10.95 0\OML/cmm/m/it/10.95 ; \OT1/cmr/m/n/10.95 0\OML/cmm/
+m/it/10.95 :\OT1/cmr/m/n/10.95 8\OML/cmm/m/it/10.95 ; \OT1/cmr/m/n/10.95 0\OML/
+cmm/m/it/10.95 :\OT1/cmr/m/n/10.95 5\OML/cmm/m/it/10.95 ; \OT1/cmr/m/n/10.95 0\
+OML/cmm/m/it/10.95 :\OT1/cmr/m/n/10.95 25]$ \TU/TimesNewRoman(0)/m/n/10.95 ([][
+]Gloeckle
+ []
+
+
+Underfull \hbox (badness 1931) in paragraph at lines 967--970
 \TU/TimesNewRoman(0)/m/n/10.95 The following example comes from test item
  []
 
 
-Underfull \hbox (badness 1931) in paragraph at lines 995--998
+Underfull \hbox (badness 1931) in paragraph at lines 1008--1011
 \TU/TimesNewRoman(0)/m/n/10.95 The following example comes from test item
  []
 
-[12]
-Underfull \hbox (badness 1354) in paragraph at lines 1033--1036
+[13]
+Underfull \hbox (badness 1354) in paragraph at lines 1046--1049
 \TU/TimesNewRoman(0)/m/n/10.95 also shows why automatic overlap and length
  []
 
@@ -904,22 +967,22 @@ File: figures/demo_autoregressive_cropped.png Graphic file (type bmp)
 File: figures/demo_mtp_cropped.png Graphic file (type bmp)
 <figures/demo_mtp_cropped.png>
 
-Underfull \hbox (badness 1852) in paragraph at lines 1061--1063
+Underfull \hbox (badness 1852) in paragraph at lines 1074--1076
 \TU/TimesNewRoman(0)/m/n/10.95 Stack memory refinement, and learned global
  []
 
 
-Underfull \hbox (badness 2401) in paragraph at lines 1080--1083
+Underfull \hbox (badness 2401) in paragraph at lines 1094--1097
 \TU/TimesNewRoman(0)/m/n/10.95 WikiLingua examples contain source sentence
  []
 
 
-Underfull \hbox (badness 1158) in paragraph at lines 1080--1083
-\TU/TimesNewRoman(0)/m/n/10.95 joins target sentences into one summary para-
+Underfull \hbox (badness 2237) in paragraph at lines 1094--1097
+\TU/TimesNewRoman(0)/m/n/10.95 Preprocessing joins source sentences into one
  []
 
-[13] [14] (acl_latex.aux)
+[14] [15] (acl_latex.aux)
 Package rerunfilecheck Info: File `acl_latex.out' has not changed.
 (rerunfilecheck)             Checksum: E5560250E7BDD2DE135AE6E60AC475A2;11730.
  )
-Output written on acl_latex.xdv (14 pages, 489536 bytes).
+Output written on acl_latex.xdv (15 pages, 559544 bytes).

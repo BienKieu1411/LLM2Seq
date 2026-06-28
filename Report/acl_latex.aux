@@ -16,8 +16,11 @@
 \global\let\hyper@last\relax 
 \gdef\HyperFirstAtBeginDocument#1{#1}
 \providecommand*\HyPL@Entry[1]{}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{ladhak2020wikilingua}
 \citation{sutskever2014sequence,bahdanau2015neural,vaswani2017attention}
 \citation{brown2020language,dubey2024llama3,yang2024qwen2}
+\citation{ladhak2020wikilingua}
 \citation{raffel2020t5,lewis2020bart,xue2021mt5}
 \citation{behnamghader2024llm2vec,luo2025lamate}
 \citation{li2026contextcompression}
@@ -27,7 +30,7 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Motivation}{1}{subsection.1.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Problem Statement}{1}{subsection.1.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {1.3}Gap with Existing Work}{1}{subsection.1.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {1.4}Contributions}{1}{subsection.1.4}\protected@file@percent }
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
 \citation{sutskever2014sequence,bahdanau2015neural}
 \citation{vaswani2017attention}
 \citation{raffel2020t5,lewis2020bart,xue2021mt5}
@@ -42,6 +45,11 @@
 \citation{gloeckle2024mtp}
 \citation{zhao2026mtpdistill}
 \citation{hinton2015distilling}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{li2026contextcompression}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.4}Contributions}{2}{subsection.1.4}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {1.5}Report Organization}{2}{subsection.1.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {2}Background and Related Work}{2}{section.2}\protected@file@percent }
 \newlabel{sec:related}{{2}{2}{Background and Related Work}{section.2}{}}
@@ -50,26 +58,52 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Context Compression and LCLM}{2}{subsection.2.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Efficient Decoding and Multi-Token Prediction}{2}{subsection.2.4}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.5}Positioning of LLM2Seq}{2}{subsection.2.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {3}LLM2Seq Method}{2}{section.3}\protected@file@percent }
-\newlabel{sec:method}{{3}{2}{LLM2Seq Method}{section.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Problem Formulation}{2}{subsection.3.1}\protected@file@percent }
+\citation{behnamghader2024llm2vec,yang2024qwen2}
+\citation{vaswani2017attention}
+\citation{gloeckle2024mtp,zhao2026mtpdistill,leviathan2023speculative}
+\citation{behnamghader2024llm2vec}
+\citation{yang2024qwen2}
+\citation{hu2022lora}
 \@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Conceptual positioning of LLM2Seq against LCLM-style end-to-end context compression. The comparison is about modeling goals and inference mechanisms, not an empirical LCLM baseline.\relax }}{3}{table.caption.1}\protected@file@percent }
 \providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
 \newlabel{tab:lclm-position}{{1}{3}{Conceptual positioning of LLM2Seq against LCLM-style end-to-end context compression. The comparison is about modeling goals and inference mechanisms, not an empirical LCLM baseline.\relax }{table.caption.1}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces LLM2Seq repurposes a pretrained LLM source encoder, maps its hidden states through a gated residual memory adapter, and uses a lightweight cross-attentive decoder for summarization. The lower blocks show self-distilled MTP training and verified MTP decoding.\relax }}{3}{figure.caption.2}\protected@file@percent }
-\newlabel{fig:architecture}{{1}{3}{LLM2Seq repurposes a pretrained LLM source encoder, maps its hidden states through a gated residual memory adapter, and uses a lightweight cross-attentive decoder for summarization. The lower blocks show self-distilled MTP training and verified MTP decoding.\relax }{figure.caption.2}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {3}LLM2Seq Method}{3}{section.3}\protected@file@percent }
+\newlabel{sec:method}{{3}{3}{LLM2Seq Method}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Problem Formulation}{3}{subsection.3.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Overall Architecture}{3}{subsection.3.2}\protected@file@percent }
-\citation{hu2022lora}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Repurposed LLM Source Encoder}{4}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Repurposed LLM Source Encoder}{3}{subsection.3.3}\protected@file@percent }
+\citation{vaswani2017attention}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces LLM2Seq repurposes a pretrained LLM source encoder, maps its hidden states through a gated residual memory adapter, and uses a lightweight cross-attentive decoder for summarization. The lower blocks show self-distilled MTP training and verified MTP decoding \citep  {gloeckle2024mtp,zhao2026mtpdistill}.\relax }}{4}{figure.caption.2}\protected@file@percent }
+\newlabel{fig:architecture}{{1}{4}{LLM2Seq repurposes a pretrained LLM source encoder, maps its hidden states through a gated residual memory adapter, and uses a lightweight cross-attentive decoder for summarization. The lower blocks show self-distilled MTP training and verified MTP decoding \citep {gloeckle2024mtp,zhao2026mtpdistill}.\relax }{figure.caption.2}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Gated Residual Memory Adapter}{4}{subsection.3.4}\protected@file@percent }
+\citation{vaswani2017attention}
+\citation{su2021roformer}
+\citation{gloeckle2024mtp,zhao2026mtpdistill,deepseekai2024deepseekv3}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{gloeckle2024mtp}
+\citation{zhao2026mtpdistill,hinton2015distilling}
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Lightweight Cross-Attentive Decoder}{5}{subsection.3.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Self-Distilled Multi-Token Prediction}{5}{subsection.3.6}\protected@file@percent }
-\citation{ladhak2020wikilingua}
+\citation{zhao2026mtpdistill}
+\citation{leviathan2023speculative}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{leviathan2023speculative,gloeckle2024mtp,zhao2026mtpdistill}
+\citation{hu2022lora}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.7}Verified MTP Decoding Algorithm}{6}{subsection.3.7}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.8}Training Procedure}{6}{subsection.3.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.9}Complexity and Inference Cost}{6}{subsection.3.9}\protected@file@percent }
-\citation{zhang2025t5gemma2}
-\citation{lin2004rouge}
+\citation{leviathan2023speculative,gloeckle2024mtp,zhao2026mtpdistill}
+\citation{ladhak2020wikilingua}
+\citation{behnamghader2024llm2vec}
+\citation{yang2024qwen2}
+\citation{zhang2025t5gemma2,hu2022lora}
+\citation{hu2022lora}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{hu2022lora}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{zhang2025t5gemma2,hu2022lora}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.9}Complexity and Inference Cost}{7}{subsection.3.9}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {4}Experimental Setup}{7}{section.4}\protected@file@percent }
 \newlabel{sec:setup}{{4}{7}{Experimental Setup}{section.4}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Dataset and Preprocessing}{7}{subsection.4.1}\protected@file@percent }
@@ -77,8 +111,17 @@
 \newlabel{tab:data-split}{{2}{7}{Vietnamese WikiLingua split used in this report.\relax }{table.caption.3}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Compared Systems and Baselines}{7}{subsection.4.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Implementation Details}{7}{subsection.4.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Evaluation Metrics}{7}{subsection.4.4}\protected@file@percent }
-\citation{li2026contextcompression}
+\citation{lin2004rouge}
+\citation{lin2004rouge}
+\citation{lin2004rouge}
+\citation{lin2004rouge}
+\citation{zhang2025t5gemma2,lin2004rouge}
+\citation{zhang2025t5gemma2,lin2004rouge}
+\citation{zhang2025t5gemma2}
+\citation{ladhak2020wikilingua}
+\citation{ladhak2020wikilingua}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Evaluation Metrics}{8}{subsection.4.4}\protected@file@percent }
 \@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces WikiLingua test results. ROUGE values are F1 percentages. Pred. is mean predicted words. Long is too-long rate in percent. Reference summaries average 51.86 words.\relax }}{8}{table.caption.4}\protected@file@percent }
 \newlabel{tab:main-results}{{3}{8}{WikiLingua test results. ROUGE values are F1 percentages. Pred. is mean predicted words. Long is too-long rate in percent. Reference summaries average 51.86 words.\relax }{table.caption.4}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Research Questions}{8}{subsection.4.5}\protected@file@percent }
@@ -86,13 +129,23 @@
 \newlabel{sec:results}{{5}{8}{Results and Analysis}{section.5}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Main Summarization Results}{8}{subsection.5.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Length and Conciseness Analysis}{8}{subsection.5.2}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Autoregressive decoding speed for LLM2Seq variants on WikiLingua under the same batch setting.\relax }}{8}{table.caption.5}\protected@file@percent }
-\newlabel{tab:speed}{{4}{8}{Autoregressive decoding speed for LLM2Seq variants on WikiLingua under the same batch setting.\relax }{table.caption.5}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Autoregressive Inference Speed}{8}{subsection.5.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}MTP Analysis: Accepted Tokens vs Throughput}{8}{subsection.5.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}Comparison with End-to-End Context Compression}{8}{subsection.5.5}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Self-distilled verified MTP results. AR means autoregressive decoding. Lat. is mean latency in seconds. Emit is emitted tokens per decoding step. Draft is accepted draft tokens per step, excluding the main token and verifier correction.\relax }}{9}{table.caption.6}\protected@file@percent }
-\newlabel{tab:mtp-results}{{5}{9}{Self-distilled verified MTP results. AR means autoregressive decoding. Lat. is mean latency in seconds. Emit is emitted tokens per decoding step. Draft is accepted draft tokens per step, excluding the main token and verifier correction.\relax }{table.caption.6}{}}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{leviathan2023speculative,gloeckle2024mtp,zhao2026mtpdistill}
+\citation{li2026contextcompression}
+\citation{ladhak2020wikilingua}
+\citation{ladhak2020wikilingua}
+\citation{zhang2025t5gemma2}
+\citation{zhang2025t5gemma2}
+\citation{leviathan2023speculative,gloeckle2024mtp,zhao2026mtpdistill}
+\citation{vaswani2017attention}
+\citation{leviathan2023speculative,gloeckle2024mtp,zhao2026mtpdistill}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Autoregressive decoding speed for LLM2Seq variants on WikiLingua under the same batch setting \citep  {ladhak2020wikilingua}.\relax }}{9}{table.caption.5}\protected@file@percent }
+\newlabel{tab:speed}{{4}{9}{Autoregressive decoding speed for LLM2Seq variants on WikiLingua under the same batch setting \citep {ladhak2020wikilingua}.\relax }{table.caption.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}MTP Analysis: Accepted Tokens vs Throughput}{9}{subsection.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}Comparison with End-to-End Context Compression}{9}{subsection.5.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.6}Qualitative Example}{9}{subsection.5.6}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.7}Error Analysis}{9}{subsection.5.7}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {6}System Demonstration}{9}{section.6}\protected@file@percent }
@@ -100,13 +153,23 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Web Interface}{9}{subsection.6.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Standard Autoregressive Decoding Mode}{9}{subsection.6.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Verified MTP Decoding Mode}{9}{subsection.6.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Reported Runtime Statistics}{9}{subsection.6.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Scope of the Demonstration}{9}{subsection.6.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {7}Discussion}{9}{section.7}\protected@file@percent }
-\newlabel{sec:discussion}{{7}{9}{Discussion}{section.7}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}What LLM2Seq Demonstrates}{9}{subsection.7.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Why Source Encoder Configuration Matters}{9}{subsection.7.2}\protected@file@percent }
+\citation{ladhak2020wikilingua}
+\citation{behnamghader2024llm2vec,luo2025lamate}
+\citation{lin2004rouge}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{li2026contextcompression}
 \citation{xiao2023smoothquant}
+\citation{ladhak2020wikilingua}
+\citation{zhang2025t5gemma2}
+\citation{lin2004rouge}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Self-distilled verified MTP results \citep  {gloeckle2024mtp,zhao2026mtpdistill}. AR means autoregressive decoding. Lat. is mean latency in seconds. Emit is emitted tokens per decoding step. Draft is accepted draft tokens per step, excluding the main token and verifier correction.\relax }}{10}{table.caption.6}\protected@file@percent }
+\newlabel{tab:mtp-results}{{5}{10}{Self-distilled verified MTP results \citep {gloeckle2024mtp,zhao2026mtpdistill}. AR means autoregressive decoding. Lat. is mean latency in seconds. Emit is emitted tokens per decoding step. Draft is accepted draft tokens per step, excluding the main token and verifier correction.\relax }{table.caption.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Reported Runtime Statistics}{10}{subsection.6.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Scope of the Demonstration}{10}{subsection.6.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Discussion}{10}{section.7}\protected@file@percent }
+\newlabel{sec:discussion}{{7}{10}{Discussion}{section.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}What LLM2Seq Demonstrates}{10}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Why Source Encoder Configuration Matters}{10}{subsection.7.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Why MTP Speedup Is Limited}{10}{subsection.7.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {7.4}When Token-Level Memory Is Better Than Compression}{10}{subsection.7.4}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {7.5}Practical Deployment Considerations}{10}{subsection.7.5}\protected@file@percent }
@@ -114,59 +177,77 @@
 \newlabel{sec:validity}{{8}{10}{Threats to Validity}{section.8}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Dataset Validity}{10}{subsection.8.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Baseline Validity}{10}{subsection.8.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Metric Validity}{10}{subsection.8.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Implementation Validity}{10}{subsection.8.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.5}Generalization Validity}{10}{subsection.8.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {9}Conclusion}{10}{section.9}\protected@file@percent }
-\newlabel{sec:conclusion}{{9}{10}{Conclusion}{section.9}{}}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{behnamghader2024llm2vec,luo2025lamate}
+\citation{ladhak2020wikilingua,zhang2025t5gemma2,lin2004rouge}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{li2026contextcompression}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
 \bibdata{custom}
 \bibcite{bahdanau2015neural}{{1}{2015}{{Bahdanau et~al.}}{{Bahdanau, Cho, and Bengio}}}
 \bibcite{behnamghader2024llm2vec}{{2}{2024}{{BehnamGhader et~al.}}{{BehnamGhader, Adlakha, Mosbach, Bahdanau, Chapados, and Reddy}}}
 \bibcite{brown2020language}{{3}{2020}{{Brown et~al.}}{{Brown, Mann, Ryder, Subbiah, Kaplan, Dhariwal, Neelakantan, Shyam, Sastry, Askell et~al.}}}
 \bibcite{cai2024medusa}{{4}{2024}{{Cai et~al.}}{{Cai, Li, Geng, Peng, Lee, Chen, and Dao}}}
-\bibcite{dubey2024llama3}{{5}{2024}{{Dubey et~al.}}{{Dubey, Jauhri, Pandey, Kadian, Al-Dahle, Letman, Mathur, Schelten, Yang, Fan et~al.}}}
-\bibcite{gloeckle2024mtp}{{6}{2024}{{Gloeckle et~al.}}{{Gloeckle, Idrissi, Roziere, Lopez-Paz, and Synnaeve}}}
-\bibcite{hinton2015distilling}{{7}{2015}{{Hinton et~al.}}{{Hinton, Vinyals, and Dean}}}
-\bibcite{hu2022lora}{{8}{2022}{{Hu et~al.}}{{Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and Chen}}}
-\bibcite{ladhak2020wikilingua}{{9}{2020}{{Ladhak et~al.}}{{Ladhak, Durmus, Cardie, and McKeown}}}
-\bibcite{leviathan2023speculative}{{10}{2023}{{Leviathan et~al.}}{{Leviathan, Kalman, and Matias}}}
-\bibcite{lewis2020bart}{{11}{2020}{{Lewis et~al.}}{{Lewis, Liu, Goyal, Ghazvininejad, Mohamed, Levy, Stoyanov, and Zettlemoyer}}}
-\bibcite{li2026contextcompression}{{12}{2026}{{Li et~al.}}{{Li, McLeish, Chen, Kalra, Chen, Gazizov, Morisetty, Kailkhura, Menon, Liu, Bartoldson, Goldstein, Lotfi, Goldblum, and Izmailov}}}
-\bibcite{lin2004rouge}{{13}{2004}{{Lin}}{{}}}
-\bibcite{luo2025lamate}{{14}{2025}{{Luo et~al.}}{{Luo, Zheng, Mu, Li, Zhang, Gao, Xu, Feng, Liu, Xiao, and Zhu}}}
-\bibcite{muennighoff2024grit}{{15}{2024}{{Muennighoff et~al.}}{{Muennighoff, Su, Wang, Yang, Wei, Yu, Singh, and Kiela}}}
-\bibcite{raffel2020t5}{{16}{2020}{{Raffel et~al.}}{{Raffel, Shazeer, Roberts, Lee, Narang, Matena, Zhou, Li, and Liu}}}
-\bibcite{stern2018blockwise}{{17}{2018}{{Stern et~al.}}{{Stern, Shazeer, and Uszkoreit}}}
-\bibcite{sutskever2014sequence}{{18}{2014}{{Sutskever et~al.}}{{Sutskever, Vinyals, and Le}}}
-\bibcite{vaswani2017attention}{{19}{2017}{{Vaswani et~al.}}{{Vaswani, Shazeer, Parmar, Uszkoreit, Jones, Gomez, Kaiser, and Polosukhin}}}
-\bibcite{xiao2023smoothquant}{{20}{2023}{{Xiao et~al.}}{{Xiao, Lin, Seznec, Wu, Demouth, and Han}}}
-\bibcite{xue2021mt5}{{21}{2021}{{Xue et~al.}}{{Xue, Constant, Roberts, Kale, Al-Rfou, Siddhant, Barua, and Raffel}}}
-\bibcite{yang2024qwen2}{{22}{2024}{{Yang et~al.}}{{Yang, Yang, Hui, Zheng, Yu, Zhou, Li, Li, Liu, Huang et~al.}}}
-\bibcite{zhang2025t5gemma2}{{23}{2025}{{Zhang et~al.}}{{Zhang, Suganthan, Liu, Philippov, Dua, Hora, Black, Martins, Sanseviero, Pathak, Hardin, Visin, Zhang, Kenealy, Yin, Lacombe, Joulin, Warkentin, and Roberts}}}
-\bibcite{zhao2026mtpdistill}{{24}{2026}{{Zhao et~al.}}{{Zhao, Xie, Wang, Li, Xie, and Sun}}}
-\@writefile{toc}{\contentsline {section}{\numberline {A}Summary of Hyperparameters}{12}{appendix.A}\protected@file@percent }
-\newlabel{app:hparams}{{A}{12}{Summary of Hyperparameters}{appendix.A}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {B}Additional Experimental Results}{12}{appendix.B}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {C}Additional Qualitative Examples}{12}{appendix.C}\protected@file@percent }
-\newlabel{app:qualitative}{{C}{12}{Additional Qualitative Examples}{appendix.C}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {C.1}Representative Case}{12}{subsection.C.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Source (excerpt).}{12}{section*.13}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Reference.}{12}{section*.14}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{LLM2Seq-Qwen.}{12}{section*.15}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{T5Gemma.}{12}{section*.16}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Comment.}{12}{section*.17}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {C.2}Failure Case}{12}{subsection.C.2}\protected@file@percent }
+\bibcite{deepseekai2024deepseekv3}{{5}{2024}{{DeepSeek-AI}}{{}}}
+\bibcite{dubey2024llama3}{{6}{2024}{{Dubey et~al.}}{{Dubey, Jauhri, Pandey, Kadian, Al-Dahle, Letman, Mathur, Schelten, Yang, Fan et~al.}}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Metric Validity}{11}{subsection.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Implementation Validity}{11}{subsection.8.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.5}Generalization Validity}{11}{subsection.8.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Conclusion}{11}{section.9}\protected@file@percent }
+\newlabel{sec:conclusion}{{9}{11}{Conclusion}{section.9}{}}
+\bibcite{gloeckle2024mtp}{{7}{2024}{{Gloeckle et~al.}}{{Gloeckle, Idrissi, Roziere, Lopez-Paz, and Synnaeve}}}
+\bibcite{hinton2015distilling}{{8}{2015}{{Hinton et~al.}}{{Hinton, Vinyals, and Dean}}}
+\bibcite{hu2022lora}{{9}{2022}{{Hu et~al.}}{{Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and Chen}}}
+\bibcite{ladhak2020wikilingua}{{10}{2020}{{Ladhak et~al.}}{{Ladhak, Durmus, Cardie, and McKeown}}}
+\bibcite{leviathan2023speculative}{{11}{2023}{{Leviathan et~al.}}{{Leviathan, Kalman, and Matias}}}
+\bibcite{lewis2020bart}{{12}{2020}{{Lewis et~al.}}{{Lewis, Liu, Goyal, Ghazvininejad, Mohamed, Levy, Stoyanov, and Zettlemoyer}}}
+\bibcite{li2026contextcompression}{{13}{2026}{{Li et~al.}}{{Li, McLeish, Chen, Kalra, Chen, Gazizov, Morisetty, Kailkhura, Menon, Liu, Bartoldson, Goldstein, Lotfi, Goldblum, and Izmailov}}}
+\bibcite{lin2004rouge}{{14}{2004}{{Lin}}{{}}}
+\bibcite{luo2025lamate}{{15}{2025}{{Luo et~al.}}{{Luo, Zheng, Mu, Li, Zhang, Gao, Xu, Feng, Liu, Xiao, and Zhu}}}
+\bibcite{muennighoff2024grit}{{16}{2024}{{Muennighoff et~al.}}{{Muennighoff, Su, Wang, Yang, Wei, Yu, Singh, and Kiela}}}
+\bibcite{raffel2020t5}{{17}{2020}{{Raffel et~al.}}{{Raffel, Shazeer, Roberts, Lee, Narang, Matena, Zhou, Li, and Liu}}}
+\bibcite{stern2018blockwise}{{18}{2018}{{Stern et~al.}}{{Stern, Shazeer, and Uszkoreit}}}
+\bibcite{su2021roformer}{{19}{2021}{{Su et~al.}}{{Su, Lu, Pan, Wen, and Liu}}}
+\bibcite{sutskever2014sequence}{{20}{2014}{{Sutskever et~al.}}{{Sutskever, Vinyals, and Le}}}
+\bibcite{vaswani2017attention}{{21}{2017}{{Vaswani et~al.}}{{Vaswani, Shazeer, Parmar, Uszkoreit, Jones, Gomez, Kaiser, and Polosukhin}}}
+\bibcite{xiao2023smoothquant}{{22}{2023}{{Xiao et~al.}}{{Xiao, Lin, Seznec, Wu, Demouth, and Han}}}
+\bibcite{xue2021mt5}{{23}{2021}{{Xue et~al.}}{{Xue, Constant, Roberts, Kale, Al-Rfou, Siddhant, Barua, and Raffel}}}
+\bibcite{yang2024qwen2}{{24}{2024}{{Yang et~al.}}{{Yang, Yang, Hui, Zheng, Yu, Zhou, Li, Li, Liu, Huang et~al.}}}
+\bibcite{zhang2025t5gemma2}{{25}{2025}{{Zhang et~al.}}{{Zhang, Suganthan, Liu, Philippov, Dua, Hora, Black, Martins, Sanseviero, Pathak, Hardin, Visin, Zhang, Kenealy, Yin, Lacombe, Joulin, Warkentin, and Roberts}}}
+\bibcite{zhao2026mtpdistill}{{26}{2026}{{Zhao et~al.}}{{Zhao, Xie, Wang, Li, Xie, and Sun}}}
+\citation{hu2022lora}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Summary of Hyperparameters}{13}{appendix.A}\protected@file@percent }
+\newlabel{app:hparams}{{A}{13}{Summary of Hyperparameters}{appendix.A}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {B}Additional Experimental Results}{13}{appendix.B}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {C}Additional Qualitative Examples}{13}{appendix.C}\protected@file@percent }
+\newlabel{app:qualitative}{{C}{13}{Additional Qualitative Examples}{appendix.C}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {C.1}Representative Case}{13}{subsection.C.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Source (excerpt).}{13}{section*.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Reference.}{13}{section*.14}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{LLM2Seq-Qwen.}{13}{section*.15}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{T5Gemma.}{13}{section*.16}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Comment.}{13}{section*.17}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {C.2}Failure Case}{13}{subsection.C.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Source (excerpt).}{13}{section*.18}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Reference.}{13}{section*.19}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{LLM2Seq-Llama.}{13}{section*.20}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{LLM2Seq-Qwen.}{13}{section*.21}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{T5Gemma.}{13}{section*.22}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Comment.}{13}{section*.23}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {D}Demo Interface Details}{13}{appendix.D}\protected@file@percent }
-\newlabel{app:demo}{{D}{13}{Demo Interface Details}{appendix.D}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {E}Architecture Details}{13}{appendix.E}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {F}Verified MTP Decoding Pseudocode}{13}{appendix.F}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {G}Dataset Preprocessing Details}{13}{appendix.G}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces LLM2Seq web demo on the same WikiLingua sample. Left: standard autoregressive decoding. Right: verified MTP decoding.\relax }}{14}{figure.caption.24}\protected@file@percent }
-\newlabel{fig:demo}{{2}{14}{LLM2Seq web demo on the same WikiLingua sample. Left: standard autoregressive decoding. Right: verified MTP decoding.\relax }{figure.caption.24}{}}
-\gdef \@abspage@last{14}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{ladhak2020wikilingua}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{ladhak2020wikilingua}
+\citation{gloeckle2024mtp,zhao2026mtpdistill}
+\citation{leviathan2023speculative,gloeckle2024mtp,zhao2026mtpdistill}
+\citation{ladhak2020wikilingua}
+\@writefile{toc}{\contentsline {paragraph}{Comment.}{14}{section*.23}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {D}Demo Interface Details}{14}{appendix.D}\protected@file@percent }
+\newlabel{app:demo}{{D}{14}{Demo Interface Details}{appendix.D}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {E}Architecture Details}{14}{appendix.E}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {F}Verified MTP Decoding Pseudocode}{14}{appendix.F}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {G}Dataset Preprocessing Details}{14}{appendix.G}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces LLM2Seq web demo on the same WikiLingua sample \citep  {ladhak2020wikilingua}. Left: standard autoregressive decoding. Right: verified MTP decoding \citep  {gloeckle2024mtp,zhao2026mtpdistill}.\relax }}{15}{figure.caption.24}\protected@file@percent }
+\newlabel{fig:demo}{{2}{15}{LLM2Seq web demo on the same WikiLingua sample \citep {ladhak2020wikilingua}. Left: standard autoregressive decoding. Right: verified MTP decoding \citep {gloeckle2024mtp,zhao2026mtpdistill}.\relax }{figure.caption.24}{}}
+\gdef \@abspage@last{15}
