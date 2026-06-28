@@ -26,8 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Setup oxlint
-      uses: oxc-project/setup-oxlint@v1
     - name: Run oxlint
-      working-directory: ./App/frontend
-      run: oxlint
+      uses: oxc-project/oxlint-action@v1
+      with:
+        working-directory: App/frontend
