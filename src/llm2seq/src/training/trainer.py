@@ -27,17 +27,17 @@ from typing import Any, Dict, Optional
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
-from torch.amp import GradScaler, autocast
-
 import yaml
+from torch.amp import GradScaler, autocast
+from torch.utils.data import DataLoader
+
+from ..data.collator import Seq2SeqCollator
+from ..data.dataset import Seq2SeqDataset
+from ..inference.generate import autoregressive_generate
 
 # Local imports
 from ..models.llm2seq_model import LLM2Seq, LLM2SeqConfig
-from ..data.dataset import Seq2SeqDataset
-from ..data.collator import Seq2SeqCollator
 from .scheduler import build_optimizer_and_scheduler
-from ..inference.generate import autoregressive_generate
 
 logger = logging.getLogger(__name__)
 
@@ -68,20 +68,14 @@ def validate_no_base_encoder_weights(path: str | Path) -> None:
     if not isinstance(obj, dict) or "model_state_dict" not in obj:
         return
     state_dict = obj["model_state_dict"]
-    bad_keys = [
-        key for key in state_dict
-        if key.startswith("encoder.") and "lora_" not in key
-    ]
+    bad_keys = [key for key in state_dict if key.startswith("encoder.") and "lora_" not in key]
     if bad_keys:
         raise RuntimeError(
             f"BLOCKED: {path} contains {len(bad_keys)} base encoder weight(s) "
             f"that must not be uploaded.  Examples: {', '.join(bad_keys[:10])}"
         )
     if obj.get("stores_base_encoder_weights") is True:
-        raise RuntimeError(
-            f"BLOCKED: {path} is marked stores_base_encoder_weights=True; "
-            "refusing upload."
-        )
+        raise RuntimeError(f"BLOCKED: {path} is marked stores_base_encoder_weights=True; refusing upload.")
 
 
 class HuggingFaceRunPusher:
@@ -384,10 +378,7 @@ def load_model_state_checked(
     missing = list(incompatible.missing_keys)
     unexpected = list(incompatible.unexpected_keys)
     allowed_prefixes = get_allowed_missing_prefixes(stage, context)
-    bad_missing = [
-        key for key in missing
-        if not is_allowed_missing_key(key, allowed_prefixes, stage)
-    ]
+    bad_missing = [key for key in missing if not is_allowed_missing_key(key, allowed_prefixes, stage)]
 
     if bad_missing or unexpected:
         preview_missing = ", ".join(bad_missing[:20])
@@ -519,11 +510,7 @@ def write_checkpoint_manifest(raw_cfg: Dict[str, Any], output_dir: str) -> None:
         "remote_best": f"{path_in_repo}/best.pt" if path_in_repo else None,
         "remote_final": f"{path_in_repo}/final.pt" if path_in_repo else None,
         "remote_config": f"{path_in_repo}/config.yaml" if path_in_repo else None,
-        "base_remote_best": (
-            f"{PHASE_REMOTE_DIRS[base_stage]}/best.pt"
-            if base_stage in PHASE_REMOTE_DIRS
-            else None
-        ),
+        "base_remote_best": (f"{PHASE_REMOTE_DIRS[base_stage]}/best.pt" if base_stage in PHASE_REMOTE_DIRS else None),
         "stores_base_encoder_weights": False,
         "encoder_checkpoint_policy": "load base encoder from encoder_name; save only encoder LoRA adapter tensors",
         "notes": (
@@ -596,6 +583,7 @@ def train(
 
     # Tokenizer (from encoder model)
     from transformers import AutoTokenizer
+
     tokenizer = AutoTokenizer.from_pretrained(cfg.encoder_name, trust_remote_code=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -735,7 +723,7 @@ def train(
     if checkpoint_path:
         logger.info(f"Resuming from checkpoint: {checkpoint_path}")
         ckpt = torch.load(checkpoint_path, map_location="cpu")
-        
+
         # Merge base_state_dict into ckpt so load_model_state_checked doesn't complain about missing Phase 2 weights
         if base_state_dict is not None:
             for k, v in base_state_dict.items():
@@ -834,7 +822,9 @@ def train(
         )
         logger.info(
             "Gradual unfreezing enabled: decoder/adaptor frozen for first %d/%d steps (%.0f%%)",
-            gradual_unfreeze_step, max_steps, gradual_unfreeze_ratio * 100,
+            gradual_unfreeze_step,
+            max_steps,
+            gradual_unfreeze_ratio * 100,
         )
 
     set_training_mode(model, training_cfg)
@@ -902,11 +892,12 @@ def train(
                     gradual_unfreeze_applied = True
                     apply_gradual_unfreeze_policy(model, freeze_decoder=False)
                     remaining_steps = max_steps - global_step
-                    unfreeze_warmup = int(remaining_steps * float(training_cfg.get("gradual_unfreeze_warmup_ratio", 0.1)))
+                    unfreeze_warmup = int(
+                        remaining_steps * float(training_cfg.get("gradual_unfreeze_warmup_ratio", 0.1))
+                    )
                     # After unfreeze, use a gentler encoder LR (defaults to decoder_lr)
                     post_unfreeze_encoder_lr = float(
-                        training_cfg.get("gradual_unfreeze_encoder_lr",
-                                         training_cfg.get("decoder_lr", 5e-5))
+                        training_cfg.get("gradual_unfreeze_encoder_lr", training_cfg.get("decoder_lr", 5e-5))
                     )
                     optimizer, scheduler = build_optimizer_and_scheduler(
                         model=model,
@@ -923,9 +914,11 @@ def train(
                     logger.info(
                         "Gradual unfreeze triggered at step %d: decoder/adaptor now trainable. "
                         "New optimizer: encoder_lr=%.2e (was %.2e), %d warmup steps for %d remaining steps.",
-                        global_step, post_unfreeze_encoder_lr,
+                        global_step,
+                        post_unfreeze_encoder_lr,
                         float(training_cfg.get("encoder_lr", 1e-5)),
-                        unfreeze_warmup, remaining_steps,
+                        unfreeze_warmup,
+                        remaining_steps,
                     )
 
                 # Logging
@@ -980,12 +973,15 @@ def train(
                             cfg.mtp_self_distill_loss_weight = scheduled_mtp_kl_weight
                         logger.info(f"Step {global_step} | Eval Loss: {eval_loss:.4f}")
                         set_training_mode(model, training_cfg)
-    
+
                         # Save best
                         if eval_loss < best_eval_loss:
                             best_eval_loss = eval_loss
                             save_checkpoint(
-                                model, optimizer, global_step, best_eval_loss,
+                                model,
+                                optimizer,
+                                global_step,
+                                best_eval_loss,
                                 os.path.join(output_dir, "best.pt"),
                                 include_optimizer=False,
                                 raw_config=raw_cfg,
@@ -1001,7 +997,10 @@ def train(
                     if completed_epochs > 0:
                         epoch_ckpt_path = os.path.join(output_dir, f"epoch_{completed_epochs}.pt")
                         save_checkpoint(
-                            model, optimizer, global_step, eval_loss,
+                            model,
+                            optimizer,
+                            global_step,
+                            eval_loss,
                             epoch_ckpt_path,
                             include_optimizer=False,
                             raw_config=raw_cfg,
@@ -1010,12 +1009,14 @@ def train(
                         hf_pusher.upload_epoch_checkpoint(epoch_ckpt_path, completed_epochs, global_step)
                         cleanup_epoch_checkpoints(output_dir, hf_pusher.keep_local_epoch_checkpoints)
 
-
     # Save the absolute final model as best.pt regardless of eval loss
     final_ckpt_path = os.path.join(output_dir, "best.pt")
     logger.info("Saving final model state as %s", final_ckpt_path)
     save_checkpoint(
-        model, optimizer, global_step, best_eval_loss,
+        model,
+        optimizer,
+        global_step,
+        best_eval_loss,
         final_ckpt_path,
         include_optimizer=False,
         raw_config=raw_cfg,
@@ -1028,6 +1029,7 @@ def train(
 def _compute_rouge_scores(predictions: list[str], references: list[str]) -> dict[str, float]:
     """Compute ROUGE scores. Lazy-imports rouge_scorer to avoid loading it at trainer import time."""
     from rouge_score import rouge_scorer as _rs
+
     scorer = _rs.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=False)
     totals = {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
     for pred, ref in zip(predictions, references):
@@ -1163,8 +1165,7 @@ def save_checkpoint(
         checkpoint["optimizer_state_dict"] = optimizer.state_dict()
     torch.save(checkpoint, path)
     logger.info(
-        "Saved trainable-only checkpoint to %s (%d model tensors, "
-        "stores_base_encoder_weights=False)",
+        "Saved trainable-only checkpoint to %s (%d model tensors, stores_base_encoder_weights=False)",
         path,
         len(model_state_dict),
     )
@@ -1173,8 +1174,7 @@ def save_checkpoint(
         validate_no_base_encoder_weights(path)
     except RuntimeError:
         logger.critical(
-            "CRITICAL: checkpoint %s failed post-save validation! "
-            "Deleting the offending file.",
+            "CRITICAL: checkpoint %s failed post-save validation! Deleting the offending file.",
             path,
         )
         Path(path).unlink(missing_ok=True)
@@ -1196,7 +1196,12 @@ def get_compact_state_dict(model: nn.Module) -> Dict[str, torch.Tensor]:
     # de-duplicate. Save aliases when the underlying trainable tensor is saved,
     # so strict-ish reloads do not fail on harmless tied-key misses.
     tied_groups = [
-        {"decoder.embed_tokens.weight", "lm_head.weight", "mtp_module.embed_tokens.weight", "mtp_module.lm_head.weight"},
+        {
+            "decoder.embed_tokens.weight",
+            "lm_head.weight",
+            "mtp_module.embed_tokens.weight",
+            "mtp_module.lm_head.weight",
+        },
     ]
     for group in tied_groups:
         if names_to_save & group:
@@ -1212,10 +1217,7 @@ def get_compact_state_dict(model: nn.Module) -> Dict[str, torch.Tensor]:
             continue
         compact[name] = tensor.detach().cpu()
 
-    bad_encoder_keys = [
-        name for name in compact
-        if name.startswith("encoder.") and "lora_" not in name
-    ]
+    bad_encoder_keys = [name for name in compact if name.startswith("encoder.") and "lora_" not in name]
     if bad_encoder_keys:
         raise RuntimeError(
             "Checkpoint would contain base encoder weights, which is disabled. "

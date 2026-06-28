@@ -62,7 +62,7 @@ def compute_mtp_loss(
         # Shifted labels: position t should predict label at t+shift
         # mtp_logits[k] at position t predicts y_{t+shift}
         shifted_labels = labels[:, shift:].contiguous()  # [B, T-shift]
-        logits_k = mtp_logits[k][:, :seq_len - shift, :].contiguous()  # [B, T-shift, V]
+        logits_k = mtp_logits[k][:, : seq_len - shift, :].contiguous()  # [B, T-shift, V]
 
         loss_k = F.cross_entropy(
             logits_k.view(-1, logits_k.size(-1)),
@@ -136,7 +136,7 @@ def compute_mtp_self_distillation_loss(
             teacher_probs,
             reduction="none",
         ).sum(dim=-1)
-        kl = kl_per_token.masked_select(valid_mask).mean() * (temperature ** 2)
+        kl = kl_per_token.masked_select(valid_mask).mean() * (temperature**2)
 
         total_loss = total_loss + head_weights[k] * kl
         total_weight += head_weights[k]

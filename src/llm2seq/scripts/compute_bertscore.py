@@ -13,7 +13,6 @@ from pathlib import Path
 import torch
 from bert_score import score
 
-
 ROOT = Path(__file__).resolve().parents[3]
 
 SYSTEMS = {

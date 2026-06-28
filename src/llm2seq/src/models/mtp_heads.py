@@ -48,13 +48,15 @@ class ParallelMTPHeads(nn.Module):
         self.num_heads = num_heads
 
         # Each MTP head: LayerNorm + Linear
-        self.heads = nn.ModuleList([
-            nn.Sequential(
-                nn.LayerNorm(hidden_size),
-                nn.Linear(hidden_size, vocab_size, bias=False),
-            )
-            for _ in range(num_heads)
-        ])
+        self.heads = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.LayerNorm(hidden_size),
+                    nn.Linear(hidden_size, vocab_size, bias=False),
+                )
+                for _ in range(num_heads)
+            ]
+        )
 
         # Initialize
         self.apply(self._init_weights)
@@ -122,8 +124,10 @@ class ParallelMTPHeads(nn.Module):
             logits = head(decoder_states)  # [B, 1, vocab_size]
             probs = torch.softmax(logits, dim=-1)
             confidence, token_ids = probs.max(dim=-1)  # [B, 1]
-            results.append({
-                "token_ids": token_ids,
-                "confidence": confidence,
-            })
+            results.append(
+                {
+                    "token_ids": token_ids,
+                    "confidence": confidence,
+                }
+            )
         return results

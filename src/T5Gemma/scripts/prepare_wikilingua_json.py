@@ -80,7 +80,9 @@ def convert_split(
     skipped = 0
     with output_path.open("w", encoding="utf-8") as f:
         for idx, example in enumerate(records):
-            source = join_text(example.get("src") or example.get("source") or example.get("document"), list_sep=source_joiner)
+            source = join_text(
+                example.get("src") or example.get("source") or example.get("document"), list_sep=source_joiner
+            )
             target = join_text(
                 example.get("tgt") or example.get("target") or example.get("summary"),
                 list_sep=target_joiner,
@@ -159,4 +161,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

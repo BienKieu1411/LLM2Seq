@@ -16,11 +16,11 @@ from typing import Any, Dict, List, Optional
 import torch
 import torch.nn as nn
 
-from .encoder_wrapper import EncoderWrapper
 from .adaptor import Adaptor
 from .decoder import LightweightDecoder
-from .mtp_heads import ParallelMTPHeads
+from .encoder_wrapper import EncoderWrapper
 from .mtp_cascaded import CascadedMTP
+from .mtp_heads import ParallelMTPHeads
 
 
 class LLM2SeqConfig:
@@ -86,9 +86,7 @@ class LLM2SeqConfig:
         self.mtp_self_distill_loss_weight: float = mtp_cfg.get("self_distill_loss_weight", 0.5)
         self.mtp_self_distill_start_ratio: float = mtp_cfg.get("self_distill_start_ratio", 0.0)
         self.mtp_self_distill_warmup_ratio: float = mtp_cfg.get("self_distill_warmup_ratio", 0.0)
-        self.mtp_self_distill_head_weights: Optional[List[float]] = mtp_cfg.get(
-            "self_distill_head_weights", None
-        )
+        self.mtp_self_distill_head_weights: Optional[List[float]] = mtp_cfg.get("self_distill_head_weights", None)
         self.mtp_use_at_inference: bool = mtp_cfg.get("use_mtp_at_inference", False)
         self.mtp_inference_strategy: str = mtp_cfg.get("inference_strategy", "confidence_adaptive")
         self.mtp_confidence_threshold: float = mtp_cfg.get("confidence_threshold", 0.9)
@@ -328,8 +326,8 @@ class LLM2Seq(nn.Module):
         trainable = self.get_trainable_params()
         frozen = total - trainable
         lines = [
-            f"LLM2Seq Model Summary",
-            f"{'='*50}",
+            "LLM2Seq Model Summary",
+            f"{'=' * 50}",
             f"Encoder:          {self.cfg.encoder_name}",
             f"  Trainable:      {self.cfg.encoder_trainable}",
             f"Adaptor:          {self.cfg.adaptor_type}",
@@ -338,7 +336,7 @@ class LLM2Seq(nn.Module):
             f"  Salience Gate:  {self.cfg.use_salience_gate}",
             f"  EncStack:       {self.cfg.use_encstack}",
             f"  Global Tokens:  {self.cfg.num_global_memory_tokens if self.cfg.use_global_memory_tokens else 0}",
-            f"Decoder:",
+            "Decoder:",
             f"  Layers:         {self.cfg.dec_num_layers}",
             f"  Hidden Size:    {self.cfg.dec_hidden_size}",
             f"  Heads:          {self.cfg.dec_num_heads}",
@@ -346,10 +344,12 @@ class LLM2Seq(nn.Module):
         ]
         feature_lines = []
         if self.cfg.use_mtp:
-            feature_lines.extend([
-                f"  MTP:            True ({self.cfg.mtp_type})",
-                f"  MTP Train Only: {self.cfg.mtp_train_only}",
-            ])
+            feature_lines.extend(
+                [
+                    f"  MTP:            True ({self.cfg.mtp_type})",
+                    f"  MTP Train Only: {self.cfg.mtp_train_only}",
+                ]
+            )
             if self.cfg.mtp_self_distillation:
                 feature_lines.append("  MTP Self-Dist:  True")
         if self.cfg.use_distillation:
@@ -357,12 +357,14 @@ class LLM2Seq(nn.Module):
         if feature_lines:
             lines.append("Features:")
             lines.extend(feature_lines)
-        lines.extend([
-            f"{'='*50}",
-            f"Total params:     {total:,}",
-            f"Trainable params: {trainable:,}",
-            f"Frozen params:    {frozen:,}",
-        ])
+        lines.extend(
+            [
+                f"{'=' * 50}",
+                f"Total params:     {total:,}",
+                f"Trainable params: {trainable:,}",
+                f"Frozen params:    {frozen:,}",
+            ]
+        )
         if self.cfg.use_lora_for_encoder:
             lines.insert(4, "  LoRA:           True")
         return "\n".join(lines)

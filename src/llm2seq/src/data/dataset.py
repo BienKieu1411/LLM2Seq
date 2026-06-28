@@ -117,10 +117,12 @@ class Seq2SeqDataset(Dataset):
         if bos_token_id is None:
             bos_token_id = self.tokenizer.pad_token_id
 
-        decoder_input_ids = torch.cat([
-            torch.tensor([bos_token_id], dtype=target_ids.dtype),
-            target_ids[:-1],
-        ])
+        decoder_input_ids = torch.cat(
+            [
+                torch.tensor([bos_token_id], dtype=target_ids.dtype),
+                target_ids[:-1],
+            ]
+        )
 
         result = {
             "input_ids": source_encoding["input_ids"].squeeze(0),

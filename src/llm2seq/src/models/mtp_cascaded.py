@@ -107,7 +107,9 @@ class CascadedMTPBlock(nn.Module):
             h_attn = self.self_attn.out_proj(h_attn)
         else:
             h_attn, _ = self.self_attn(
-                h_norm, h_norm, h_norm,
+                h_norm,
+                h_norm,
+                h_norm,
                 attn_mask=causal_mask,
                 need_weights=False,
             )
@@ -156,15 +158,17 @@ class CascadedMTP(nn.Module):
         self.num_heads = num_heads
 
         # Cascaded blocks
-        self.blocks = nn.ModuleList([
-            CascadedMTPBlock(
-                hidden_size=hidden_size,
-                num_heads=attn_heads,
-                ffn_size=ffn_size,
-                dropout=dropout,
-            )
-            for _ in range(num_heads)
-        ])
+        self.blocks = nn.ModuleList(
+            [
+                CascadedMTPBlock(
+                    hidden_size=hidden_size,
+                    num_heads=attn_heads,
+                    ffn_size=ffn_size,
+                    dropout=dropout,
+                )
+                for _ in range(num_heads)
+            ]
+        )
 
         # Shared embedding for looking up future token representations
         if embedding_layer is not None:
@@ -271,11 +275,13 @@ class CascadedMTP(nn.Module):
             logits_k = self.lm_head(h_k)  # [B, 1, vocab_size]
             # Skip expensive softmax since we only need argmax for verified decoding
             token_ids = logits_k.argmax(dim=-1)
-            
-            drafts.append({
-                "token_ids": token_ids,
-                "confidence": None,  # Not used in verified mode
-            })
+
+            drafts.append(
+                {
+                    "token_ids": token_ids,
+                    "confidence": None,  # Not used in verified mode
+                }
+            )
 
             # Next depth uses this prediction
             h_prev = h_k

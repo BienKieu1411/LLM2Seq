@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
-from transformers import AutoModel, AutoConfig
+from transformers import AutoConfig, AutoModel
 
 
 class EncoderWrapper(nn.Module):
@@ -112,12 +112,9 @@ class EncoderWrapper(nn.Module):
     ) -> None:
         """Apply LoRA adapters to the encoder using peft."""
         try:
-            from peft import LoraConfig, get_peft_model, TaskType
+            from peft import LoraConfig, TaskType, get_peft_model
         except ImportError:
-            raise ImportError(
-                "peft is required for LoRA fine-tuning. "
-                "Install it with: pip install peft"
-            )
+            raise ImportError("peft is required for LoRA fine-tuning. Install it with: pip install peft")
 
         lora_config = LoraConfig(
             task_type=TaskType.FEATURE_EXTRACTION,

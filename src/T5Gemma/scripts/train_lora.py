@@ -32,7 +32,6 @@ from transformers import (
     TrainerState,
 )
 
-
 T5GEMMA_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -107,14 +106,14 @@ class SummarizationDataset(Dataset):
         )
         labels = self.tokenizer(
             text_target=row["target"],
-            max_length=self.max_target_length - 1, # Leave room for EOS
+            max_length=self.max_target_length - 1,  # Leave room for EOS
             truncation=True,
         )
         label_ids = labels["input_ids"]
         if self.tokenizer.eos_token_id is not None:
             if not label_ids or label_ids[-1] != self.tokenizer.eos_token_id:
                 label_ids.append(self.tokenizer.eos_token_id)
-                
+
         model_inputs["labels"] = label_ids
         return model_inputs
 
@@ -165,7 +164,9 @@ def resolve_lora_targets(model: torch.nn.Module, requested: List[str]) -> List[s
     ]
     selected = [name for name in candidates if module_suffix_present(model, name)]
     if not selected:
-        linear_suffixes = sorted({name.rsplit(".", 1)[-1] for name, mod in model.named_modules() if isinstance(mod, torch.nn.Linear)})
+        linear_suffixes = sorted(
+            {name.rsplit(".", 1)[-1] for name, mod in model.named_modules() if isinstance(mod, torch.nn.Linear)}
+        )
         raise RuntimeError(f"Could not infer LoRA targets. Linear module suffixes: {linear_suffixes[:80]}")
     logging.info("Auto-selected LoRA target modules: %s", ", ".join(selected))
     return selected
@@ -316,7 +317,7 @@ class AdapterCheckpointCallback(TrainerCallback):
         epoch_num = max(1, int(round(float(state.epoch or 0.0))))
         epoch_folder = self.output_dir / "epochs" / f"epoch_{epoch_num:03d}_adapter"
         self._save_adapter(model, epoch_folder, state, metrics, tag=f"epoch_{epoch_num:03d}")
-        
+
         keep_limit = int(self.cfg.get("huggingface", {}).get("keep_local_epoch_checkpoints", 1))
         if keep_limit > 0:
             epochs_dir = self.output_dir / "epochs"
@@ -324,6 +325,7 @@ class AdapterCheckpointCallback(TrainerCallback):
                 all_epochs = sorted([d for d in epochs_dir.iterdir() if d.is_dir() and d.name.startswith("epoch_")])
                 for d in all_epochs[:-keep_limit]:
                     import shutil
+
                     shutil.rmtree(d, ignore_errors=True)
                     logging.info("Deleted old epoch checkpoint to save space: %s", d)
         if self.hf["push_each_epoch"]:
@@ -366,7 +368,10 @@ def log_model_summary(model: torch.nn.Module, cfg: Dict[str, Any], train_size: i
     logging.info("Epochs:           %s", cfg["training"]["num_train_epochs"])
     logging.info("Batch size:       %s", cfg["training"]["per_device_train_batch_size"])
     logging.info("Grad accum:       %s", cfg["training"]["gradient_accumulation_steps"])
-    logging.info("Effective batch:  %s", int(cfg["training"]["per_device_train_batch_size"]) * int(cfg["training"]["gradient_accumulation_steps"]))
+    logging.info(
+        "Effective batch:  %s",
+        int(cfg["training"]["per_device_train_batch_size"]) * int(cfg["training"]["gradient_accumulation_steps"]),
+    )
     logging.info("Learning rate:    %s", cfg["training"]["learning_rate"])
     logging.info("LoRA r/alpha:     %s / %s", cfg["lora"]["r"], cfg["lora"]["alpha"])
     logging.info("Trainable params: %s", f"{trainable:,}")
@@ -501,6 +506,7 @@ def main() -> None:
     epochs_dir = output_dir / "epochs"
     if epochs_dir.exists():
         import shutil
+
         shutil.rmtree(epochs_dir, ignore_errors=True)
         logging.info("Deleted all epoch checkpoints after phase completion to save disk space.")
 

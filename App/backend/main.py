@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
+import random
 import sys
 import time
 from contextlib import asynccontextmanager
-import json
-import random
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -16,15 +16,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 BACKEND_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BACKEND_DIR.parents[1]  
+PROJECT_ROOT = BACKEND_DIR.parents[1]
 LLM2SEQ_ROOT = PROJECT_ROOT / "src" / "llm2seq"
 
 if str(LLM2SEQ_ROOT) not in sys.path:
     sys.path.insert(0, str(LLM2SEQ_ROOT))
 
-from src.models.llm2seq_model import LLM2Seq, LLM2SeqConfig  
-from src.inference.generate import autoregressive_generate  
-from src.inference.generate_mtp import mtp_generate  
+from src.inference.generate import autoregressive_generate
+from src.inference.generate_mtp import mtp_generate
+from src.models.llm2seq_model import LLM2Seq, LLM2SeqConfig
 
 _model: Optional[LLM2Seq] = None
 _tokenizer = None
@@ -33,6 +33,7 @@ _raw_cfg: Dict[str, Any] = {}
 _device: torch.device = torch.device("cpu")
 _model_ready = False
 
+
 def _download_checkpoint(repo_id: str, filename: str) -> Path:
 
     from huggingface_hub import hf_hub_download
@@ -40,6 +41,7 @@ def _download_checkpoint(repo_id: str, filename: str) -> Path:
     token = os.environ.get("HF_TOKEN")
     local_path = hf_hub_download(repo_id=repo_id, filename=filename, token=token)
     return Path(local_path)
+
 
 def _load_model(config_path: Path) -> None:
 
@@ -59,9 +61,7 @@ def _load_model(config_path: Path) -> None:
 
     from transformers import AutoTokenizer
 
-    _tokenizer = AutoTokenizer.from_pretrained(
-        _cfg.encoder_name, trust_remote_code=True
-    )
+    _tokenizer = AutoTokenizer.from_pretrained(_cfg.encoder_name, trust_remote_code=True)
     if _tokenizer.pad_token_id is None:
         _tokenizer.pad_token = _tokenizer.eos_token or _tokenizer.unk_token
 
@@ -73,26 +73,27 @@ def _load_model(config_path: Path) -> None:
     phase3_file = hf_cfg.get("phase3_file", "mtp_best.pt")
 
     if not repo_id:
-        raise RuntimeError(
-            "huggingface.repo_id is not set in config.yaml. "
-            "Cannot download checkpoints."
-        )
+        raise RuntimeError("huggingface.repo_id is not set in config.yaml. Cannot download checkpoints.")
 
     print(f"[LLM2Seq] Downloading Phase 2 checkpoint: {repo_id}/{phase2_file}")
     p2_path = _download_checkpoint(repo_id, phase2_file)
     p2_ckpt = torch.load(p2_path, map_location="cpu", weights_only=False)
     p2_state = p2_ckpt.get("model_state_dict", p2_ckpt)
     incomp = _model.load_state_dict(p2_state, strict=False)
-    print(f"[LLM2Seq] Phase 2 loaded. Missing keys: {len(incomp.missing_keys)}, "
-          f"Unexpected keys: {len(incomp.unexpected_keys)}")
+    print(
+        f"[LLM2Seq] Phase 2 loaded. Missing keys: {len(incomp.missing_keys)}, "
+        f"Unexpected keys: {len(incomp.unexpected_keys)}"
+    )
 
     print(f"[LLM2Seq] Downloading Phase 3 checkpoint: {repo_id}/{phase3_file}")
     p3_path = _download_checkpoint(repo_id, phase3_file)
     p3_ckpt = torch.load(p3_path, map_location="cpu", weights_only=False)
     p3_state = p3_ckpt.get("model_state_dict", p3_ckpt)
     incomp = _model.load_state_dict(p3_state, strict=False)
-    print(f"[LLM2Seq] Phase 3 loaded. Missing keys: {len(incomp.missing_keys)}, "
-          f"Unexpected keys: {len(incomp.unexpected_keys)}")
+    print(
+        f"[LLM2Seq] Phase 3 loaded. Missing keys: {len(incomp.missing_keys)}, "
+        f"Unexpected keys: {len(incomp.unexpected_keys)}"
+    )
 
     _model.to(_device)
     _model.eval()
@@ -100,6 +101,7 @@ def _load_model(config_path: Path) -> None:
 
     total_params = sum(p.numel() for p in _model.parameters())
     print(f"[LLM2Seq] Model ready — {total_params:,} parameters on {_device}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -109,6 +111,7 @@ async def lifespan(app: FastAPI):
     else:
         _load_model(config_path)
     yield
+
 
 app = FastAPI(
     title="LLM2Seq Demo API",
@@ -125,6 +128,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 class SummarizeRequest(BaseModel):
     text: str = Field(..., min_length=1, description="Source text to summarise")
     decode_mode: str = Field(
@@ -133,6 +137,7 @@ class SummarizeRequest(BaseModel):
     )
     max_new_tokens: int = Field(256, ge=16, le=512)
 
+
 class SummarizeResponse(BaseModel):
     summary: str
     decode_mode: str
@@ -140,6 +145,7 @@ class SummarizeResponse(BaseModel):
     generated_tokens: int
     tokens_per_second: float
     mtp_metrics: Optional[Dict[str, Any]] = None
+
 
 class ModelInfoResponse(BaseModel):
     encoder_name: str
@@ -155,9 +161,11 @@ class ModelInfoResponse(BaseModel):
     device: str
     ready: bool
 
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "model_ready": _model_ready}
+
 
 @app.get("/api/model-info", response_model=ModelInfoResponse)
 async def model_info():
@@ -178,6 +186,7 @@ async def model_info():
         ready=_model_ready,
     )
 
+
 @app.post("/api/summarize", response_model=SummarizeResponse)
 async def summarize(req: SummarizeRequest):
     if not _model_ready or _model is None or _tokenizer is None:
@@ -186,8 +195,7 @@ async def summarize(req: SummarizeRequest):
     if req.decode_mode not in ("autoregressive", "mtp_verified"):
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid decode_mode: {req.decode_mode}. "
-                   f"Must be 'autoregressive' or 'mtp_verified'.",
+            detail=f"Invalid decode_mode: {req.decode_mode}. Must be 'autoregressive' or 'mtp_verified'.",
         )
 
     source_prefix = _raw_cfg.get("data", {}).get("source_prefix", "")
@@ -248,13 +256,9 @@ async def summarize(req: SummarizeRequest):
             eos_token_id=_tokenizer.eos_token_id,
             pad_token_id=_tokenizer.pad_token_id,
             bos_token_id=_tokenizer.bos_token_id or _tokenizer.eos_token_id,
-            fallback_to_autoregressive=bool(
-                gen_cfg.get("mtp_fallback_to_autoregressive", False)
-            ),
+            fallback_to_autoregressive=bool(gen_cfg.get("mtp_fallback_to_autoregressive", False)),
             fallback_after_steps=int(gen_cfg.get("mtp_fallback_after_steps", 1)),
-            fallback_min_emitted_length=float(
-                gen_cfg.get("mtp_fallback_min_emitted_length", 3.8)
-            ),
+            fallback_min_emitted_length=float(gen_cfg.get("mtp_fallback_min_emitted_length", 3.8)),
         )
         out_ids = mtp_result["generated_ids"]
         mtp_metrics = mtp_result.get("metrics")
@@ -266,7 +270,11 @@ async def summarize(req: SummarizeRequest):
     elapsed = time.perf_counter() - t0
 
     summary = _tokenizer.decode(out_ids[0], skip_special_tokens=True).strip()
-    num_tokens = int(out_ids[0].ne(_tokenizer.pad_token_id).sum().item()) if _tokenizer.pad_token_id is not None else out_ids[0].size(0)
+    num_tokens = (
+        int(out_ids[0].ne(_tokenizer.pad_token_id).sum().item())
+        if _tokenizer.pad_token_id is not None
+        else out_ids[0].size(0)
+    )
 
     safe_mtp = None
     if mtp_metrics:
@@ -290,18 +298,19 @@ async def summarize(req: SummarizeRequest):
         mtp_metrics=safe_mtp,
     )
 
+
 @app.get("/api/random-sample")
 async def random_sample():
     test_json_path = PROJECT_ROOT / "src" / "llm2seq" / "datasets" / "wikilingua" / "test.json"
     if not test_json_path.exists():
         raise HTTPException(status_code=404, detail="test.json not found")
-    
+
     with open(test_json_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
-        
+
     if not lines:
         raise HTTPException(status_code=404, detail="test.json is empty")
-        
+
     line = random.choice(lines)
     data = json.loads(line)
     src_text = " ".join(data.get("src", []))

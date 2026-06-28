@@ -66,7 +66,9 @@ class Seq2SeqCollator:
             else:
                 padding = torch.full((src_max_len - length,), self.pad_token_id, dtype=ids.dtype)
                 padded_input_ids.append(torch.cat([ids, padding]))
-                mask = torch.cat([torch.ones(length, dtype=torch.long), torch.zeros(src_max_len - length, dtype=torch.long)])
+                mask = torch.cat(
+                    [torch.ones(length, dtype=torch.long), torch.zeros(src_max_len - length, dtype=torch.long)]
+                )
                 attention_masks.append(mask)
 
         batch["input_ids"] = torch.stack(padded_input_ids)
@@ -86,7 +88,9 @@ class Seq2SeqCollator:
             else:
                 padding = torch.full((tgt_max_len - length,), self.pad_token_id, dtype=ids.dtype)
                 padded_dec_ids.append(torch.cat([ids, padding]))
-                mask = torch.cat([torch.ones(length, dtype=torch.long), torch.zeros(tgt_max_len - length, dtype=torch.long)])
+                mask = torch.cat(
+                    [torch.ones(length, dtype=torch.long), torch.zeros(tgt_max_len - length, dtype=torch.long)]
+                )
                 dec_masks.append(mask)
 
         batch["decoder_input_ids"] = torch.stack(padded_dec_ids)

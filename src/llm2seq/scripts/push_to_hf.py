@@ -52,19 +52,14 @@ def validate_checkpoint_for_upload(path: Path) -> None:
         print(f"  {path.name}: skipped (no model_state_dict)")
         return
     state_dict = obj["model_state_dict"]
-    bad_keys = [
-        key for key in state_dict
-        if key.startswith("encoder.") and "lora_" not in key
-    ]
+    bad_keys = [key for key in state_dict if key.startswith("encoder.") and "lora_" not in key]
     if bad_keys:
         raise RuntimeError(
             f"BLOCKED: {path} contains {len(bad_keys)} base encoder weight(s) and "
             f"must not be uploaded. Examples: {', '.join(bad_keys[:20])}"
         )
     if obj.get("stores_base_encoder_weights") is True:
-        raise RuntimeError(
-            f"BLOCKED: {path} is marked stores_base_encoder_weights=True; refusing upload."
-        )
+        raise RuntimeError(f"BLOCKED: {path} is marked stores_base_encoder_weights=True; refusing upload.")
     # Count encoder LoRA keys (allowed) vs total keys for transparency.
     encoder_lora_keys = [k for k in state_dict if k.startswith("encoder.") and "lora_" in k]
     print(

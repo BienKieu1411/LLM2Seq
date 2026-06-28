@@ -40,9 +40,7 @@ def get_cosine_schedule_with_warmup(
             # Linear warmup
             return float(current_step) / float(max(1, num_warmup_steps))
         # Cosine annealing
-        progress = float(current_step - num_warmup_steps) / float(
-            max(1, num_training_steps - num_warmup_steps)
-        )
+        progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
         cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
         return max(min_lr_ratio, cosine_decay)
 
@@ -115,16 +113,16 @@ def build_optimizer_and_scheduler(
         # Check if this param should have weight decay
         apply_wd = not any(kw in name.lower() for kw in no_decay_keywords)
 
-        group.append({
-            "params": [param],
-            "lr": lr,
-            "component": "encoder" if group is encoder_params else (
-                "adaptor" if group is adaptor_params else (
-                    "mtp" if group is mtp_params else "decoder"
-                )
-            ),
-            "weight_decay": weight_decay if apply_wd else 0.0,
-        })
+        group.append(
+            {
+                "params": [param],
+                "lr": lr,
+                "component": "encoder"
+                if group is encoder_params
+                else ("adaptor" if group is adaptor_params else ("mtp" if group is mtp_params else "decoder")),
+                "weight_decay": weight_decay if apply_wd else 0.0,
+            }
+        )
 
     # Flatten into param groups
     param_groups = encoder_params + adaptor_params + mtp_params + decoder_params

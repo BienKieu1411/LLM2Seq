@@ -65,11 +65,15 @@ def build_comparison(main_metrics: Dict[str, Any], mtp_metrics: Dict[str, Any]) 
             "latency_mean_change_percent": round(percent_change(mtp_latency_mean, main_latency_mean), 4),
             "latency_p95_change_percent": round(percent_change(mtp_latency_p95, main_latency_p95), 4),
             "tokens_per_decode_step_gain": round(ratio(mtp_step_tokens, main_step_tokens), 6),
-            "mtp_theoretical_decode_step_speedup": round(get_float(mtp_metrics, "mtp_speedup_vs_autoregressive_mean"), 6),
+            "mtp_theoretical_decode_step_speedup": round(
+                get_float(mtp_metrics, "mtp_speedup_vs_autoregressive_mean"), 6
+            ),
             "mtp_acceptance_rate_mean": round(get_float(mtp_metrics, "mtp_acceptance_rate_mean"), 6),
             "mtp_average_accepted_length_mean": round(get_float(mtp_metrics, "mtp_average_accepted_length_mean"), 6),
             "mtp_average_emitted_length_mean": round(get_float(mtp_metrics, "mtp_average_emitted_length_mean"), 6),
-            "mtp_fallback_to_autoregressive_rate": round(get_float(mtp_metrics, "mtp_fallback_to_autoregressive_rate"), 6),
+            "mtp_fallback_to_autoregressive_rate": round(
+                get_float(mtp_metrics, "mtp_fallback_to_autoregressive_rate"), 6
+            ),
         },
         "main": {
             "decode_mode": main_metrics.get("decode_mode"),

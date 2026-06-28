@@ -401,7 +401,9 @@ class Adaptor(nn.Module):
             global_tokens = global_tokens.unsqueeze(0).expand(bsz, -1, -1)
             h = torch.cat([global_tokens, h], dim=1)
             if attention_mask is None:
-                token_mask = torch.ones(bsz, h.size(1) - self.num_global_memory_tokens, device=h.device, dtype=torch.long)
+                token_mask = torch.ones(
+                    bsz, h.size(1) - self.num_global_memory_tokens, device=h.device, dtype=torch.long
+                )
             else:
                 token_mask = attention_mask
             global_mask = torch.ones(bsz, self.num_global_memory_tokens, device=h.device, dtype=token_mask.dtype)

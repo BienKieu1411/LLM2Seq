@@ -12,7 +12,7 @@ from typing import List, Optional
 
 import torch
 
-from .confidence_adaptive import confidence_adaptive_accept, compute_acceptance_metrics
+from .confidence_adaptive import compute_acceptance_metrics, confidence_adaptive_accept
 
 
 @torch.no_grad()
@@ -117,9 +117,7 @@ def _mtp_generate_confidence(
     bsz = input_ids.size(0)
 
     # Encode source once
-    h_mem, memory_attention_mask = model.encode(
-        input_ids, attention_mask, return_attention_mask=True
-    )
+    h_mem, memory_attention_mask = model.encode(input_ids, attention_mask, return_attention_mask=True)
 
     # Initialize
     if bos_token_id is None:
@@ -151,8 +149,8 @@ def _mtp_generate_confidence(
         main_confidence, main_token = main_probs.max(dim=-1)  # [B, 1]
 
         # MTP draft predictions
-        from ..models.mtp_heads import ParallelMTPHeads
         from ..models.mtp_cascaded import CascadedMTP
+        from ..models.mtp_heads import ParallelMTPHeads
 
         if isinstance(model.mtp_module, ParallelMTPHeads):
             draft_results = model.mtp_module.get_draft_tokens_with_confidence(last_hidden)
@@ -264,15 +262,13 @@ def _mtp_generate_verified(
     if bos_token_id is None:
         bos_token_id = eos_token_id or 0
 
-    h_mem, memory_attention_mask = model.encode(
-        input_ids, attention_mask, return_attention_mask=True
-    )
-    
+    h_mem, memory_attention_mask = model.encode(input_ids, attention_mask, return_attention_mask=True)
+
     generated = torch.full((1, 1), bos_token_id, dtype=torch.long, device=device)
     generated_token_list = [int(bos_token_id)]
     current_input_ids = generated
     past_key_values = None
-    
+
     num_steps = 0
     total_generated = 0
     accepted_lengths: List[int] = []
@@ -290,7 +286,7 @@ def _mtp_generate_verified(
             use_cache=True,
         )
         last_hidden = decoder_states[:, -1:, :]
-        
+
         main_logits = _apply_greedy_constraints_from_list(
             logits=model.lm_head(last_hidden).squeeze(1),
             prefix_tokens=generated_token_list,
@@ -302,8 +298,8 @@ def _mtp_generate_verified(
         )
         main_token = main_logits.argmax(dim=-1).unsqueeze(1)
 
-        from ..models.mtp_heads import ParallelMTPHeads
         from ..models.mtp_cascaded import CascadedMTP
+        from ..models.mtp_heads import ParallelMTPHeads
 
         if isinstance(model.mtp_module, ParallelMTPHeads):
             draft_results = model.mtp_module.get_draft_tokens_with_confidence(last_hidden)
@@ -313,7 +309,7 @@ def _mtp_generate_verified(
             draft_results = []
 
         draft_tokens = [draft["token_ids"] for draft in draft_results]
-        
+
         if not draft_tokens:
             generated = torch.cat([generated, main_token], dim=1)
             generated_token_list.append(int(main_token.item()))
@@ -357,26 +353,26 @@ def _mtp_generate_verified(
             verifier_tokens.append(v_tok)
 
             if pos < candidate.size(1) - 1:
-                if torch.equal(candidate[:, pos+1:pos+2], v_tok):
+                if torch.equal(candidate[:, pos + 1 : pos + 2], v_tok):
                     accepted_drafts += 1
                 else:
                     break
 
-        accepted_cand = candidate[:, :1 + accepted_drafts]
+        accepted_cand = candidate[:, : 1 + accepted_drafts]
         corrected_tok = verifier_tokens[accepted_drafts]
 
         emitted_this_step = [accepted_cand]
         eos_found = False
-        
+
         if eos_token_id is not None:
             for i in range(accepted_cand.size(1)):
                 if accepted_cand[0, i].item() == eos_token_id:
-                    accepted_cand = accepted_cand[:, :i+1]
+                    accepted_cand = accepted_cand[:, : i + 1]
                     emitted_this_step = [accepted_cand]
                     corrected_tok = None
                     eos_found = True
                     break
-        
+
         if not eos_found:
             emitted_this_step.append(corrected_tok)
             if eos_token_id is not None and corrected_tok.item() == eos_token_id:
@@ -385,13 +381,13 @@ def _mtp_generate_verified(
         emitted_tensor = torch.cat(emitted_this_step, dim=1)
 
         if total_generated + emitted_tensor.size(1) > max_new_tokens:
-            emitted_tensor = emitted_tensor[:, :max_new_tokens - total_generated]
+            emitted_tensor = emitted_tensor[:, : max_new_tokens - total_generated]
             corrected_tok = emitted_tensor[:, -1:]
-            
+
         generated = torch.cat([generated, emitted_tensor], dim=1)
         generated_token_list.extend(int(token) for token in emitted_tensor[0].tolist())
         total_generated += emitted_tensor.size(1)
-        
+
         accepted_lengths.append(1 + accepted_drafts)
         emitted_lengths.append(emitted_tensor.size(1))
         num_steps += 1
@@ -595,7 +591,7 @@ def _apply_greedy_constraints_from_list(
     if no_repeat_ngram_size and len(prefix_tokens) >= no_repeat_ngram_size:
         n = no_repeat_ngram_size
         prefix_len = len(prefix_tokens)
-        prefix = prefix_tokens[-(n - 1):]
+        prefix = prefix_tokens[-(n - 1) :]
         blocked_tokens = []
         for i in range(prefix_len - n + 1):
             if prefix_tokens[i : i + n - 1] == prefix:
@@ -634,10 +630,10 @@ def _apply_greedy_constraints(
     if no_repeat_ngram_size and generated_prefix.size(1) >= no_repeat_ngram_size:
         for batch_idx in range(bsz):
             prefix = generated_prefix[batch_idx].tolist()
-            ngram_prefix = tuple(prefix[-(no_repeat_ngram_size - 1):])
+            ngram_prefix = tuple(prefix[-(no_repeat_ngram_size - 1) :])
             blocked_tokens = []
             for i in range(len(prefix) - no_repeat_ngram_size + 1):
-                ngram = tuple(prefix[i: i + no_repeat_ngram_size])
+                ngram = tuple(prefix[i : i + no_repeat_ngram_size])
                 if ngram[:-1] == ngram_prefix:
                     blocked_tokens.append(ngram[-1])
             if blocked_tokens:
@@ -657,10 +653,7 @@ def _aggregate_verified_metrics(metrics_list: List[dict]) -> dict:
         "emitted_tokens",
         "num_steps",
     }
-    result = {
-        key: sum(float(metrics.get(key, 0.0)) for metrics in metrics_list) / len(metrics_list)
-        for key in keys
-    }
+    result = {key: sum(float(metrics.get(key, 0.0)) for metrics in metrics_list) / len(metrics_list) for key in keys}
     car_values = [metrics.get("cumulative_acceptance_rates", []) for metrics in metrics_list]
     if car_values and car_values[0]:
         result["cumulative_acceptance_rates"] = [

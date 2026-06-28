@@ -173,10 +173,14 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
     resolve_parser = subparsers.add_parser("resolve")
     resolve_parser.add_argument("--local", default=None, help="Preferred local checkpoint path.")
-    resolve_parser.add_argument("--config", default=None, help="Config YAML whose huggingface.path_in_repo should be used.")
+    resolve_parser.add_argument(
+        "--config", default=None, help="Config YAML whose huggingface.path_in_repo should be used."
+    )
     resolve_parser.add_argument("--phase", default=None, help="phase1, phase2, phase3, or full training stage name.")
     resolve_parser.add_argument("--path_in_repo", default=None, help="Remote HF folder containing best.pt/final.pt.")
-    resolve_parser.add_argument("--filename", default=None, help="Remote checkpoint filename. Defaults to local basename.")
+    resolve_parser.add_argument(
+        "--filename", default=None, help="Remote checkpoint filename. Defaults to local basename."
+    )
     resolve_parser.add_argument("--repo_id", default=None)
     resolve_parser.add_argument("--repo_type", default=None)
     resolve_parser.add_argument("--token", default=None)

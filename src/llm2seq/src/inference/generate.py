@@ -63,9 +63,7 @@ def autoregressive_generate(
     bsz = input_ids.size(0)
 
     # Encode source once
-    h_mem, memory_attention_mask = model.encode(
-        input_ids, attention_mask, return_attention_mask=True
-    )
+    h_mem, memory_attention_mask = model.encode(input_ids, attention_mask, return_attention_mask=True)
 
     # Initialize decoder input with BOS token
     if bos_token_id is None:
@@ -115,10 +113,10 @@ def autoregressive_generate(
         if no_repeat_ngram_size and generated.size(1) >= no_repeat_ngram_size:
             for batch_idx in range(bsz):
                 prefix = generated[batch_idx].tolist()
-                ngram_prefix = tuple(prefix[-(no_repeat_ngram_size - 1):])
+                ngram_prefix = tuple(prefix[-(no_repeat_ngram_size - 1) :])
                 blocked_tokens = []
                 for i in range(len(prefix) - no_repeat_ngram_size + 1):
-                    ngram = tuple(prefix[i: i + no_repeat_ngram_size])
+                    ngram = tuple(prefix[i : i + no_repeat_ngram_size])
                     if ngram[:-1] == ngram_prefix:
                         blocked_tokens.append(ngram[-1])
                 if blocked_tokens:
@@ -141,9 +139,7 @@ def autoregressive_generate(
             sorted_indices_to_remove = cumulative_probs > top_p
             sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[:, :-1].clone()
             sorted_indices_to_remove[:, 0] = False
-            indices_to_remove = sorted_indices_to_remove.scatter(
-                1, sorted_indices, sorted_indices_to_remove
-            )
+            indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
             logits[indices_to_remove] = float("-inf")
 
         # Sample or greedy

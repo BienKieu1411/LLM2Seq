@@ -22,10 +22,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 # ---------------------------------------------------------------------------
 # RMSNorm — lightweight alternative to LayerNorm
 # ---------------------------------------------------------------------------
+
 
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization."""
@@ -43,6 +43,7 @@ class RMSNorm(nn.Module):
 # ---------------------------------------------------------------------------
 # Rotary Position Embeddings (RoPE)
 # ---------------------------------------------------------------------------
+
 
 class RotaryEmbedding(nn.Module):
     """Rotary Position Embedding (RoPE) for sequence positions."""
@@ -92,6 +93,7 @@ def apply_rotary_pos_emb(
 # Multi-Head Attention (Self and Cross)
 # ---------------------------------------------------------------------------
 
+
 class MultiHeadAttention(nn.Module):
     """
     Multi-head attention supporting both causal self-attention and cross-attention.
@@ -111,9 +113,7 @@ class MultiHeadAttention(nn.Module):
         is_cross_attention: bool = False,
     ):
         super().__init__()
-        assert hidden_size % num_heads == 0, (
-            f"hidden_size ({hidden_size}) must be divisible by num_heads ({num_heads})"
-        )
+        assert hidden_size % num_heads == 0, f"hidden_size ({hidden_size}) must be divisible by num_heads ({num_heads})"
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
@@ -204,6 +204,7 @@ class MultiHeadAttention(nn.Module):
 # Feed-Forward Network
 # ---------------------------------------------------------------------------
 
+
 class FeedForward(nn.Module):
     """SwiGLU-style feed-forward network."""
 
@@ -221,6 +222,7 @@ class FeedForward(nn.Module):
 # ---------------------------------------------------------------------------
 # Decoder Layer
 # ---------------------------------------------------------------------------
+
 
 class DecoderLayer(nn.Module):
     """
@@ -330,6 +332,7 @@ class DecoderLayer(nn.Module):
 # Lightweight Decoder
 # ---------------------------------------------------------------------------
 
+
 class LightweightDecoder(nn.Module):
     """
     Complete lightweight Transformer decoder.
@@ -381,15 +384,17 @@ class LightweightDecoder(nn.Module):
         )
 
         # Decoder layers
-        self.layers = nn.ModuleList([
-            DecoderLayer(
-                hidden_size=hidden_size,
-                num_heads=num_heads,
-                ffn_size=ffn_size,
-                dropout=dropout,
-            )
-            for _ in range(num_layers)
-        ])
+        self.layers = nn.ModuleList(
+            [
+                DecoderLayer(
+                    hidden_size=hidden_size,
+                    num_heads=num_heads,
+                    ffn_size=ffn_size,
+                    dropout=dropout,
+                )
+                for _ in range(num_layers)
+            ]
+        )
 
         # Final norm
         self.final_norm = RMSNorm(hidden_size)
@@ -481,9 +486,7 @@ class LightweightDecoder(nn.Module):
         # Cross-attention mask
         cross_attn_mask = None
         if encoder_attention_mask is not None:
-            cross_attn_mask = self._expand_encoder_mask(
-                encoder_attention_mask, seq_len, hidden_states.dtype
-            )
+            cross_attn_mask = self._expand_encoder_mask(encoder_attention_mask, seq_len, hidden_states.dtype)
 
         # Forward through layers
         present_key_values = [] if use_cache else None

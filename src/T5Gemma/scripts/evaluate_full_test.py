@@ -21,7 +21,6 @@ from sacrebleu import corpus_bleu, corpus_chrf
 from tqdm.auto import tqdm
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-
 T5GEMMA_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -117,10 +116,7 @@ def compute_metrics(
             rouge_totals[name] += scores[name].fmeasure
 
     n = max(1, len(predictions))
-    metrics: Dict[str, Any] = {
-        name: round((value / n) * 100.0, 4)
-        for name, value in rouge_totals.items()
-    }
+    metrics: Dict[str, Any] = {name: round((value / n) * 100.0, 4) for name, value in rouge_totals.items()}
     bleu = corpus_bleu(predictions, [references])
     chrf = corpus_chrf(predictions, [references])
     metrics.update(
@@ -134,17 +130,16 @@ def compute_metrics(
 
     pred_words = [word_count(pred) for pred in predictions]
     ref_words = [word_count(ref) for ref in references]
-    length_ratios = [
-        pred_len / max(1, ref_len)
-        for pred_len, ref_len in zip(pred_words, ref_words)
-    ]
+    length_ratios = [pred_len / max(1, ref_len) for pred_len, ref_len in zip(pred_words, ref_words)]
     repeat_rates = [repeated_ngram_rate(pred, n=3) for pred in predictions]
     metrics.update(
         {
             "prediction_words_mean": round(safe_mean(pred_words), 4),
             "reference_words_mean": round(safe_mean(ref_words), 4),
             "length_ratio_mean": round(safe_mean(length_ratios), 6),
-            "empty_prediction_rate": round(100.0 * safe_mean([1.0 if not pred.strip() else 0.0 for pred in predictions]), 4),
+            "empty_prediction_rate": round(
+                100.0 * safe_mean([1.0 if not pred.strip() else 0.0 for pred in predictions]), 4
+            ),
             "too_short_rate": round(100.0 * safe_mean([1.0 if ratio < 0.5 else 0.0 for ratio in length_ratios]), 4),
             "too_long_rate": round(100.0 * safe_mean([1.0 if ratio > 1.5 else 0.0 for ratio in length_ratios]), 4),
             "repeated_trigram_rate_mean": round(100.0 * safe_mean(repeat_rates), 4),
@@ -153,10 +148,7 @@ def compute_metrics(
 
     if sources is not None:
         source_words = [word_count(src) for src in sources]
-        compression_ratios = [
-            pred_len / max(1, src_len)
-            for pred_len, src_len in zip(pred_words, source_words)
-        ]
+        compression_ratios = [pred_len / max(1, src_len) for pred_len, src_len in zip(pred_words, source_words)]
         metrics.update(
             {
                 "source_words_mean": round(safe_mean(source_words), 4),
@@ -419,7 +411,8 @@ def main() -> None:
         references,
         sources=sources,
         compute_bertscore=args.compute_bertscore or bool(raw_cfg.get("evaluation", {}).get("compute_bertscore", False)),
-        bertscore_model_type=args.bertscore_model_type or raw_cfg.get("evaluation", {}).get("bertscore_model_type", "xlm-roberta-large"),
+        bertscore_model_type=args.bertscore_model_type
+        or raw_cfg.get("evaluation", {}).get("bertscore_model_type", "xlm-roberta-large"),
     )
     decode_elapsed = max(1e-9, sum(latencies))
     metrics.update(
@@ -442,7 +435,9 @@ def main() -> None:
             "decode_steps_total": float(total_new_tokens),
             "decode_steps_mean": round(safe_mean(new_token_counts), 6),
             "tokens_per_decode_step": 1.0,
-            "peak_gpu_memory_mb": round(torch.cuda.max_memory_allocated(device) / (1024 ** 2), 2) if device.type == "cuda" else 0.0,
+            "peak_gpu_memory_mb": round(torch.cuda.max_memory_allocated(device) / (1024**2), 2)
+            if device.type == "cuda"
+            else 0.0,
             "adapter": adapter_label,
             "base_model": model_name,
             "config": str(config_path),

@@ -19,12 +19,12 @@ lint:
 	@echo "Linting frontend..."
 	cd App/frontend && npm run lint
 	@echo "Linting backend and src..."
-	@if [ -f .venv/bin/ruff ]; then .venv/bin/ruff check .; else ruff check .; fi
+	@if [ -f .venv/bin/ruff ]; then .venv/bin/ruff check .; else python3 -m ruff check .; fi
 
 format:
 	@echo "Formatting code..."
-	@if [ -f .venv/bin/ruff ]; then .venv/bin/ruff check --fix .; else ruff check --fix .; fi
-	@if [ -f .venv/bin/ruff ]; then .venv/bin/ruff format .; else ruff format .; fi
+	@if [ -f .venv/bin/ruff ]; then .venv/bin/ruff check --fix .; else python3 -m ruff check --fix .; fi
+	@if [ -f .venv/bin/ruff ]; then .venv/bin/ruff format .; else python3 -m ruff format .; fi
 
 docker-up:
 	docker compose -f deploy/docker/docker-compose.yml up --build

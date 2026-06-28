@@ -78,7 +78,7 @@ def logits_kl_loss(
         loss = kl.mean()
 
     # Scale by T^2
-    loss = loss * (temperature ** 2)
+    loss = loss * (temperature**2)
     return loss
 
 
@@ -124,7 +124,7 @@ def topk_kl_loss(
         loss = kl.mean()
 
     # Scale by T^2
-    loss = loss * (temperature ** 2)
+    loss = loss * (temperature**2)
     return loss
 
 

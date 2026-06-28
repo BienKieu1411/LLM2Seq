@@ -21,13 +21,11 @@ import torch
 import yaml
 from rouge_score import rouge_scorer
 from sacrebleu import corpus_bleu, corpus_chrf
-from tqdm.auto import tqdm
-from transformers import AutoTokenizer
-
 from src.inference.generate import autoregressive_generate
 from src.inference.generate_mtp import mtp_generate
 from src.models.llm2seq_model import LLM2Seq, LLM2SeqConfig
-
+from tqdm.auto import tqdm
+from transformers import AutoTokenizer
 
 PHASE_REMOTE_DIRS = {
     "phase1_warmup": "checkpoints/phase1_warmup",
@@ -174,7 +172,7 @@ def load_model_state_checked(
 
     allowed_prefixes: tuple[str, ...] = ()
     allowed_exact: set[str] = set()
-    if ("phase1_warmup" in stage or "phase2_lora_encoder" in stage):
+    if "phase1_warmup" in stage or "phase2_lora_encoder" in stage:
         # Phase 1 checkpoints omit the frozen base encoder by design.
         allowed_prefixes = ("encoder.",)
     if "phase3_mtp_self_distill" in stage:
@@ -183,12 +181,19 @@ def load_model_state_checked(
         if context == "base":
             allowed_prefixes = ("encoder.", "mtp_module.")
         elif context == "delta":
-            allowed_prefixes = ("encoder.", "adaptor.", "decoder.", "lm_head.", "mtp_module.embed_tokens.", "mtp_module.lm_head.")
+            allowed_prefixes = (
+                "encoder.",
+                "adaptor.",
+                "decoder.",
+                "lm_head.",
+                "mtp_module.embed_tokens.",
+                "mtp_module.lm_head.",
+            )
 
     bad_missing = [
-        key for key in missing
-        if key not in allowed_exact
-        and not is_allowed_missing_key(key, allowed_prefixes, stage, context)
+        key
+        for key in missing
+        if key not in allowed_exact and not is_allowed_missing_key(key, allowed_prefixes, stage, context)
     ]
     if bad_missing or unexpected:
         raise RuntimeError(
@@ -292,10 +297,7 @@ def compute_metrics(
             rouge_totals[name] += scores[name].fmeasure
 
     n = max(1, len(predictions))
-    metrics: Dict[str, Any] = {
-        name: round((value / n) * 100.0, 4)
-        for name, value in rouge_totals.items()
-    }
+    metrics: Dict[str, Any] = {name: round((value / n) * 100.0, 4) for name, value in rouge_totals.items()}
     bleu = corpus_bleu(predictions, [references])
     chrf = corpus_chrf(predictions, [references])
     metrics.update(
@@ -309,17 +311,16 @@ def compute_metrics(
 
     pred_words = [word_count(pred) for pred in predictions]
     ref_words = [word_count(ref) for ref in references]
-    length_ratios = [
-        pred_len / max(1, ref_len)
-        for pred_len, ref_len in zip(pred_words, ref_words)
-    ]
+    length_ratios = [pred_len / max(1, ref_len) for pred_len, ref_len in zip(pred_words, ref_words)]
     repeat_rates = [repeated_ngram_rate(pred, n=3) for pred in predictions]
     metrics.update(
         {
             "prediction_words_mean": round(safe_mean(pred_words), 4),
             "reference_words_mean": round(safe_mean(ref_words), 4),
             "length_ratio_mean": round(safe_mean(length_ratios), 6),
-            "empty_prediction_rate": round(100.0 * safe_mean([1.0 if not pred.strip() else 0.0 for pred in predictions]), 4),
+            "empty_prediction_rate": round(
+                100.0 * safe_mean([1.0 if not pred.strip() else 0.0 for pred in predictions]), 4
+            ),
             "too_short_rate": round(100.0 * safe_mean([1.0 if ratio < 0.5 else 0.0 for ratio in length_ratios]), 4),
             "too_long_rate": round(100.0 * safe_mean([1.0 if ratio > 1.5 else 0.0 for ratio in length_ratios]), 4),
             "repeated_trigram_rate_mean": round(100.0 * safe_mean(repeat_rates), 4),
@@ -328,10 +329,7 @@ def compute_metrics(
 
     if sources is not None:
         source_words = [word_count(src) for src in sources]
-        compression_ratios = [
-            pred_len / max(1, src_len)
-            for pred_len, src_len in zip(pred_words, source_words)
-        ]
+        compression_ratios = [pred_len / max(1, src_len) for pred_len, src_len in zip(pred_words, source_words)]
         metrics.update(
             {
                 "source_words_mean": round(safe_mean(source_words), 4),
@@ -447,8 +445,7 @@ def main() -> None:
         and not any(key.startswith("adaptor.") or key.startswith("decoder.") for key in state_dict)
     ):
         raise ValueError(
-            "Phase 3 checkpoint is trainable-only and needs --base_checkpoint "
-            "pointing to the Phase 2 LoRA best.pt."
+            "Phase 3 checkpoint is trainable-only and needs --base_checkpoint pointing to the Phase 2 LoRA best.pt."
         )
     load_model_state_checked(
         model,
@@ -469,15 +466,21 @@ def main() -> None:
         "top_p": float(generation_value(args, raw_cfg, "top_p", 1.0)),
         "repetition_penalty": float(generation_value(args, raw_cfg, "repetition_penalty", 1.15)),
         "no_repeat_ngram_size": int(generation_value(args, raw_cfg, "no_repeat_ngram_size", 3)),
-        "mtp_fallback_to_autoregressive": bool(generation_value(args, raw_cfg, "mtp_fallback_to_autoregressive", False)),
+        "mtp_fallback_to_autoregressive": bool(
+            generation_value(args, raw_cfg, "mtp_fallback_to_autoregressive", False)
+        ),
         "mtp_fallback_after_steps": int(generation_value(args, raw_cfg, "mtp_fallback_after_steps", 1)),
-        "mtp_fallback_min_emitted_length": float(generation_value(args, raw_cfg, "mtp_fallback_min_emitted_length", 3.8)),
+        "mtp_fallback_min_emitted_length": float(
+            generation_value(args, raw_cfg, "mtp_fallback_min_emitted_length", 3.8)
+        ),
     }
     if args.decode_mode == "mtp_verified":
         if model.mtp_module is None:
             raise ValueError("decode_mode=mtp_verified requires a checkpoint/config with model.use_mtp=true.")
         if generation_settings["do_sample"]:
-            raise ValueError("decode_mode=mtp_verified supports deterministic greedy generation only; set do_sample=false.")
+            raise ValueError(
+                "decode_mode=mtp_verified supports deterministic greedy generation only; set do_sample=false."
+            )
 
     source_prefix = raw_cfg.get("data", {}).get("source_prefix", "")
 
@@ -494,13 +497,13 @@ def main() -> None:
         torch.cuda.reset_peak_memory_stats(device)
 
     eval_batch_size = raw_cfg.get("generation", {}).get("eval_batch_size", 128)
-    
+
     with predictions_path.open("w", encoding="utf-8") as out_f:
         for i in tqdm(range(0, len(examples), eval_batch_size), desc="Generating (Batched)"):
             batch_examples = examples[i : i + eval_batch_size]
             sources_batch = [ex["source"] for ex in batch_examples]
             references_batch = [ex["target"] for ex in batch_examples]
-            
+
             enc = tokenizer(
                 [source_prefix + s for s in sources_batch],
                 return_tensors="pt",
@@ -546,35 +549,35 @@ def main() -> None:
                 out_ids = mtp_result["generated_ids"]
                 sample_mtp_metrics = mtp_result.get("metrics", {})
                 mtp_metrics_list.append(sample_mtp_metrics)
-                
+
             sync_device(device)
             batch_latency = time.perf_counter() - generation_start
             latency_per_sample = batch_latency / len(batch_examples)
-            
+
             for j in range(len(batch_examples)):
                 prediction = tokenizer.decode(out_ids[j], skip_special_tokens=True).strip()
                 if tokenizer.pad_token_id is not None:
                     new_tokens = int(out_ids[j].ne(tokenizer.pad_token_id).sum().item())
                 else:
                     new_tokens = out_ids[j].size(0)
-                
+
                 total_new_tokens += new_tokens
                 latencies.append(latency_per_sample)
                 new_token_counts.append(float(new_tokens))
-                
+
                 if sample_mtp_metrics:
                     decode_steps.append(float(sample_mtp_metrics.get("num_steps", 0.0)))
                 else:
                     decode_steps.append(float(new_tokens))
-                    
+
                 predictions.append(prediction)
                 references.append(references_batch[j])
                 sources.append(sources_batch[j])
-                
+
                 source_words = word_count(sources_batch[j])
                 reference_words = word_count(references_batch[j])
                 prediction_words = word_count(prediction)
-                
+
                 row = {
                     "id": batch_examples[j].get("id"),
                     "source": sources_batch[j],
@@ -601,11 +604,7 @@ def main() -> None:
 
     sync_device(device)
     elapsed = time.perf_counter() - start
-    peak_gpu_memory_mb = (
-        round(torch.cuda.max_memory_allocated(device) / (1024 ** 2), 3)
-        if device.type == "cuda"
-        else 0.0
-    )
+    peak_gpu_memory_mb = round(torch.cuda.max_memory_allocated(device) / (1024**2), 3) if device.type == "cuda" else 0.0
     metrics = compute_metrics(
         predictions,
         references,

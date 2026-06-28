@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
+
 import argparse
 import json
 from pathlib import Path
 
+
 def decode_separator(value: str) -> str:
     return value.replace("\\n", "\n").replace("\\t", "\t")
+
 
 def convert_split(
     input_path: Path,
@@ -62,6 +65,7 @@ def convert_split(
                 break
     print(f"{split_name}: {kept} examples -> {output_path} (skipped: {skipped})")
 
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_dir", required=True)
@@ -88,6 +92,7 @@ def main() -> None:
             source_joiner,
             target_joiner,
         )
+
 
 if __name__ == "__main__":
     main()
