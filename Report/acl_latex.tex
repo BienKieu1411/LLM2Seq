@@ -25,6 +25,7 @@
 \usepackage{amssymb}
 \usepackage{url}
 \usepackage{xurl}
+\usepackage{float}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
 
@@ -67,16 +68,23 @@
 
 \begin{abstract}
 Abstractive summarization is a sequence-to-sequence task.
-The model must read a document, keep the important evidence, and then write a shorter text.
-Modern LLM checkpoints are strong generators and representation models, but many of them do not directly expose an encoder-decoder interface for summarization.
-Encoder-decoder models fit this workflow more naturally, yet they usually require a native encoder trained in that form.
-This report presents LLM2Seq, a framework that repurposes pretrained LLM source encoders inside an encoder-decoder summarizer.
-A gated residual adapter turns its source states into cross-attention memory for a lightweight Transformer decoder.
-The encoder reads the document, while the decoder writes the summary.
+A model reads a document and writes a shorter text.
+Modern LLM checkpoints are good at generation and representation learning.
+However, many of them do not provide a direct encoder-decoder interface for summarization.
+Encoder-decoder models fit this task because the encoder reads the source and the decoder writes the summary.
+
+This report presents LLM2Seq.
+LLM2Seq reuses pretrained LLM source encoders inside an encoder-decoder summarizer.
+A gated residual adapter maps source states into cross-attention memory.
+A lightweight Transformer decoder then generates the summary.
 We also study inference speed with self-distilled Multi-Token Prediction (MTP).
-After the summarizer is trained, MTP heads learn from the frozen decoder, draft future tokens, and are verified during decoding.
+After the summarizer is trained, MTP heads learn from the frozen decoder.
+They draft future tokens during decoding.
+The main decoder verifies these drafted tokens.
+
 We evaluate LLM2Seq on Vietnamese WikiLingua.
-The results show that LLM-based source encoders can serve as useful cross-attention memory for summarization, and that MTP speedups must be judged by real end-to-end throughput rather than accepted tokens alone.
+The results show that LLM-based source encoders can work as cross-attention memory for summarization.
+They also show that MTP speedups should be measured by real throughput, not only by accepted tokens.
 \end{abstract}
 
 \noindent\textbf{Keywords:} abstractive summarization; encoder-decoder models; LLM source encoders; adapters; multi-token prediction; Vietnamese WikiLingua
@@ -87,7 +95,7 @@ The results show that LLM-based source encoders can serve as useful cross-attent
 \subsection{Motivation}
 
 Abstractive summarization naturally follows a sequence-to-sequence formulation.
-A model reads a document, keeps the important evidence, and writes a shorter text.
+The task requires modeling the source document before generating a shorter target text.
 Encoder-decoder models match this shape because the encoder reads the source and the decoder writes the target \citep{sutskever2014sequence,bahdanau2015neural,vaswani2017attention}.
 Decoder-only LLMs are different.
 They are strong generators, but they mix the source and target into one left-to-right sequence \citep{brown2020language,dubey2024llama3,yang2024qwen2}.
@@ -98,7 +106,7 @@ This makes them easy to prompt, but it does not explicitly separate source under
 This report asks whether pretrained LLM-based source encoders can be reused inside an encoder-decoder summarizer.
 The task is Vietnamese abstractive summarization on WikiLingua \citep{ladhak2020wikilingua}.
 Given a source document $x$, the model must produce a summary $y$.
-The desired system should keep the representation strength of modern LLMs, use an encoder-decoder interface for summarization, and decode faster when possible.
+The goal is to reuse LLM source representations, keep an encoder-decoder interface, and improve decoding speed when possible.
 
 \subsection{Gap with Existing Work}
 
@@ -319,22 +327,22 @@ The adapted token state is:
 \begin{equation}
 R=P+G\odot U.
 \end{equation}
-This design serves a specific architectural purpose.
-The base path $P$ acts as a linear projection to match the decoder's dimension while preserving the original pretrained LLM representations.
-The non-linear update block $U$ computes task-specific transformations needed for summarization, while the sigmoid gate $G$ controls how much of this new information should be mixed into the base path.
-By using this residual structure, the adapter is intended to preserve source-encoder information while making the projection easier to optimize.
+The base path $P$ maps the encoder states into the decoder dimension.
+The update block $U$ adds task-specific changes.
+The gate $G$ controls how much of this update is used.
+This residual form keeps the original source information easier to preserve.
 
 A token salience gate then estimates which source positions should be emphasized:
 \begin{equation}
 S=\sigma(W_{s2}\operatorname{GELU}(W_{s1}\operatorname{LN}(R)+b_{s1})+b_{s2}).
 \end{equation}
-The implementation does not delete low-salience tokens.
+The implementation does not remove low-salience tokens.
 It rescales them:
 \begin{equation}
 R'_i=(0.5+S_i)R_i.
 \end{equation}
-By scaling $R_i$ with $(0.5+S_i)$, the model learns to amplify critical source tokens (such as key entities or events) while damping irrelevant background context.
-This soft-filtering mechanism provides an inductive bias that helps the downstream cross-attention layers focus on salient information without breaking the sequence structure or discarding context abruptly.
+This lets the model give more weight to useful source tokens.
+It also keeps the full source sequence for cross-attention.
 Padding positions have $S_i=0$.
 Thus padded memory cannot become salient.
 
@@ -484,7 +492,7 @@ The final Phase 3 loss is:
 \end{equation}
 where $u$ is the training progress.
 The ramp $\gamma(u)$ is 0 before 20\% of training, increases linearly until 50\%, and is 1 afterwards.
-We use $\lambda_{CE}=0.6$, $\lambda_{KL}=0.2$, $\tau=1.5$, $J=2048$, and head weights $[1.0,0.8,0.5,0.25]$ following the self-distilled MTP setup.
+We use $\lambda_{CE}=0.6$, $\lambda_{KL}=0.2$, $\tau=1.5$, $J=2048$, and head weights of $[1.0, 0.8, 0.5, 0.25]$ following the self-distilled MTP setup.
 Only the MTP heads are updated in this phase.
 
 \subsection{Verified MTP Decoding Algorithm}
@@ -526,7 +534,7 @@ Accepted draft tokens reduce future decoding work, while $v_a$ corrects the firs
 
 The full procedure follows verified draft-and-check decoding, which is summarized in Algorithm~\ref{alg:mtp_decoding}.
 
-\begin{algorithm}[t]
+\begin{algorithm}[H]
 \caption{Verified MTP Draft-and-Check Decoding}
 \label{alg:mtp_decoding}
 \begin{algorithmic}[1]
@@ -684,9 +692,8 @@ When comparing AR and MTP speed, we use paired comparison logs under the same mo
 
 \subsection{Research Questions}
 
-To systematically evaluate the proposed LLM2Seq architecture, our experiments aim to assess both generation quality and inference efficiency.
-Specifically, we investigate whether pretrained LLM encoders can effectively serve as cross-attention memory, how different encoder families affect the final summaries, and whether self-distilled MTP provides real-world acceleration.
-We structure our analysis around the following research questions:
+We evaluate LLM2Seq with three questions.
+They cover summarization quality, encoder configuration, and decoding speed.
 \begin{itemize}
     \item \textbf{RQ1}: Can pretrained LLM-based source encoders be reused inside an encoder-decoder summarizer?
     \item \textbf{RQ2}: How much do the LLM2Seq encoder configurations affect quality, length, and speed?
@@ -704,8 +711,10 @@ This shows that a pretrained LLM-based source encoder can provide useful cross-a
 The Llama-based system also produces valid summaries, but its lower ROUGE scores and much shorter outputs indicate that not every source encoder configuration transfers equally well.
 
 Compared with T5Gemma, LLM2Seq-Qwen is close on ROUGE-1 but lower on ROUGE-2 and ROUGE-L.
-This suggests that LLM2Seq is a viable encoder-decoder summarization framework, but it does not outperform the T5Gemma baseline.
-Therefore, RQ1 is answered positively for the Qwen-based configuration, with the important caveat that source encoder quality and output length strongly affect the final result.
+This suggests that LLM2Seq is a viable method, but it does not outperform the T5Gemma baseline.
+Overall, the Qwen-based result gives positive evidence for RQ1.
+It shows that an LLM-based source encoder can support encoder-decoder summarization.
+However, the result also depends on the encoder configuration and output length.
 
 \begin{table}[ht]
 \centering
@@ -733,8 +742,8 @@ LLM2Seq-Qwen generates longer and more complete summaries, with an average lengt
 This length difference partly explains the large ROUGE gap between the two LLM2Seq variants.
 
 The comparison should be read as a controlled configuration-level comparison rather than a pure encoder-only ablation.
-Both variants use the same overall LLM2Seq architecture, adapter design, decoder design, and decoding constraints, but the source encoder choice also changes the tokenizer, vocabulary, and representation space.
-Thus, the results show that the source encoder configuration is a major practical factor in LLM2Seq.
+Both variants use the same overall LLM2Seq architecture, adapter design, decoder design, and decoding constraints.
+However, the source encoder choice also changes the tokenizer, vocabulary, and representation space.
 
 Table~\ref{tab:speed} shows that LLM2Seq-Llama is faster than LLM2Seq-Qwen in autoregressive decoding, with 114.74 tokens/s compared with 95.87 tokens/s.
 A likely explanation is the decoder-side vocabulary size.
@@ -780,13 +789,13 @@ Qwen & MTP & \textbf{111.71} & \textbf{1.17x} & \textbf{0.662} & 2.30 & 0.44 & 5
 \end{table*}
 
 However, the speedup is much smaller than the emitted-token-per-step increase.
-This confirms that accepted or emitted tokens alone are not enough to evaluate MTP.
-The verifier cost, cache management, tensor control flow, and implementation overhead determine whether fewer decoding steps become real wall-clock gains.
-Although verified MTP is designed to follow the constrained greedy path, the current implementation can still show small metric differences because the AR and MTP evaluation paths may differ in cache handling, stopping behavior, or decoding constraints.
-We therefore report both speed and quality for AR and MTP instead of assuming exact output equivalence.
+This suggests that accepted or emitted tokens alone are not enough to evaluate MTP.
+The verifier also costs time.
+Cache handling and tensor control flow also add overhead.
+For this reason, we report both speed and quality for AR and MTP.
 
 Therefore, RQ3 is answered positively for the Qwen-based system: verified MTP gives a real throughput improvement.
-At the same time, the result is modest, so MTP should be treated as a system-level acceleration module whose benefit depends on implementation efficiency.
+At the same time, the result is modest, so MTP speed depends on implementation details.
 
 \subsection{Comparison with End-to-End Context Compression}
 
@@ -853,13 +862,15 @@ All quantitative claims come from the controlled evaluation logs.
 
 LLM2Seq shows that LLM-based source encoders can be reused inside an encoder-decoder summarizer.
 The Qwen variant is close to T5Gemma on ROUGE-1 while producing shorter summaries.
-This supports the core idea, but it does not prove that LLM2Seq dominates native encoder-decoder models.
+This supports the main idea, but it does not show that LLM2Seq is better than standard encoder-decoder baselines.
 
 \subsection{Why Source Encoder Configuration Matters}
 
-The Qwen-based LLM2Seq variant achieves higher ROUGE than the Llama-based variant under our tuned training and decoding settings.
-The high-level adapter and decoder architecture are the same, although the tokenizer-dependent embedding and output layers differ across configurations.
-This suggests that source encoder configuration is a major practical factor, while the comparison should still be read as a controlled configuration-level comparison rather than a pure encoder-only ablation.
+The Qwen-based LLM2Seq variant achieves higher ROUGE than the Llama-based variant.
+The high-level adapter and decoder design are the same.
+However, the tokenizer, vocabulary, and output layers are different.
+Thus, this is a controlled configuration-level comparison.
+It is not a pure encoder-only ablation.
 The adapter can only expose information that exists in the encoder states.
 
 \subsection{Why MTP Speedup Is Limited}
@@ -910,7 +921,7 @@ This limits how strongly we can attribute the observed differences to the encode
 
 The main automatic metric is ROUGE \citep{lin2004rouge}, which measures lexical overlap with the reference summary.
 ROUGE does not fully capture factual consistency, fluency, coherence, or usefulness.
-This matters because a model can obtain reasonable ROUGE scores while still producing semantically inappropriate phrases, as shown in the qualitative examples.
+This matters because a model can obtain reasonable ROUGE scores while still producing wrong or unnatural phrases, as shown in the qualitative examples.
 For Vietnamese, whitespace tokenization is also a source of variation because one semantic word can contain multiple whitespace-separated syllables.
 Therefore, the reported ROUGE and length statistics should be read together with qualitative inspection rather than as complete measures of summary quality.
 
@@ -919,7 +930,8 @@ Therefore, the reported ROUGE and length statistics should be read together with
 The verified MTP speed result depends on the current implementation.
 Although MTP emits multiple tokens per decoding step, the verifier, cache management, tensor control flow, and Python overhead can reduce the actual wall-clock benefit.
 A fused runtime or optimized inference engine may produce different speedups.
-For this reason, the MTP result should be interpreted as an end-to-end system measurement under the current implementation, not as a theoretical limit of verified MTP decoding.
+For this reason, the MTP result should be read as a result of our current implementation.
+It is not a theoretical limit of verified MTP decoding.
 
 \subsection{Generalization Validity}
 
@@ -960,7 +972,7 @@ At the same time, better summarization tools can also spread errors faster if us
 \section*{Code Availability}
 
 The repository includes the implementation, evaluation scripts, verified MTP decoding code, and the demo interface:
-\url{https://github.com/BienKieu1411/LLM2Seq}.
+\href{https://github.com/BienKieu1411/LLM2Seq}{\texttt{github.com/BienKieu1411/LLM2Seq}}.
 
 \section*{Acknowledgments}
 
@@ -1073,7 +1085,7 @@ Hãy nhớ rằng việc biểu lộ những cảm xúc của bản thân sẽ g
 Thử tưởng tượng về thời điểm trước đây khi bạn bật khóc vì điều gì đó.
 
 \paragraph{Comment.}
-This example shows that LLM2Seq-Qwen can preserve conciseness but may produce semantically inappropriate phrases.
+This example shows that LLM2Seq-Qwen can preserve conciseness but may produce wrong or unnatural phrases.
 This motivates future factuality and human evaluation.
 It also shows why automatic overlap and length statistics must be read together with output inspection.
 
