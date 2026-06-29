@@ -46,3 +46,11 @@ dist/
 __pycache__/
 
 .ruff_cache/
+
+*.bib
+
+*.text
+
+*.sty
+
+*.bst
