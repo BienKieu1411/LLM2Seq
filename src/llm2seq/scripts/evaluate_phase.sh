@@ -79,5 +79,6 @@ fi
   --output_dir "${OUTPUT_DIR}" \
   --decode_mode "${DECODE_MODE}" \
   --limit "${EVAL_LIMIT}" \
+  --compute_bertscore \
   "${EXTRA_ARGS[@]}" \
   2>&1 | tee "${LOG_FILE}"
