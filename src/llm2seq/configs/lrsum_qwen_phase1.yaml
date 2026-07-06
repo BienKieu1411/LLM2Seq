@@ -42,7 +42,7 @@ small_decoder:
 
 training:
   stage: lrsum_qwen_phase1_warmup
-  num_train_epochs: 4
+  num_train_epochs: 3
   batch_size: 16
   grad_accum_steps: 2
   decoder_lr: 2.0e-4

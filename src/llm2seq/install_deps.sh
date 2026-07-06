@@ -16,7 +16,7 @@ TORCH_CUDA_INDEX="${TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu124}"
   "torchaudio==${TORCHAUDIO_VERSION}" \
   --index-url "${TORCH_CUDA_INDEX}"
 
-"${PYTHON_BIN}" -m pip install -r "${LLM2Seq_ROOT}/requirements.txt"
+"${PYTHON_BIN}" -m pip install -r "${LLM2SEQ_ROOT}/requirements.txt"
 
 "${PYTHON_BIN}" - <<'PY'
 import torch
