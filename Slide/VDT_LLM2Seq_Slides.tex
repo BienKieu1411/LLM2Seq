@@ -189,20 +189,24 @@
   \begin{columns}[T,onlytextwidth]
     \begin{column}{0.48\textwidth}
       \begin{block}{Huấn luyện}
+        \begin{minipage}[t][2.1cm][t]{\linewidth}
         \begin{itemize}
-          \item Huấn luyện mô hình tóm tắt chính trước.
-          \item Giữ nguyên encoder, adapter và decoder.
-          \item Chỉ huấn luyện 4 MTP heads bằng CE + KL.
+          \item Huấn luyện summarizer trước.
+          \item Đóng băng encoder, adapter và decoder.
+          \item Chỉ cập nhật 4 MTP heads.
         \end{itemize}
+        \end{minipage}
       \end{block}
     \end{column}
     \begin{column}{0.48\textwidth}
       \begin{block}{Suy luận}
+        \begin{minipage}[t][2.1cm][t]{\linewidth}
         \begin{itemize}
-          \item MTP heads dự đoán trước vài token tiếp theo.
-          \item Decoder chính kiểm chứng từng token nháp.
-          \item Chỉ ghi ra token đã được kiểm chứng.
+          \item MTP dự đoán vài token tiếp theo.
+          \item Decoder kiểm chứng token nháp.
+          \item Chỉ ghi token đã được xác nhận.
         \end{itemize}
+        \end{minipage}
       \end{block}
     \end{column}
   \end{columns}
@@ -277,13 +281,11 @@
     \end{column}
     \hfill
     \begin{column}{0.30\textwidth}
-      \begin{block}{Huấn luyện}
+      \begin{block}{Dữ liệu}
         \begin{minipage}[t][3.05cm][t]{\linewidth}
         \begin{itemize}
-          \item WikiLingua: 3 giai đoạn
-          \item LR-Sum: chỉ Phase 1--2
-          \item LoRA để thích nghi encoder
-          \item MTP chỉ trên WikiLingua
+          \item WikiLingua
+          \item LR-Sum
         \end{itemize}
         \end{minipage}
       \end{block}
@@ -335,13 +337,17 @@
   \vfill
   \begin{columns}[T,onlytextwidth]
     \begin{column}{0.48\textwidth}
-      \begin{block}{Điểm chính}
+      \begin{block}{Nhìn chung}
+        \begin{minipage}[t][0.95cm][t]{\linewidth}
         Qwen tốt hơn Llama trên cả hai dataset.
+        \end{minipage}
       \end{block}
     \end{column}
     \begin{column}{0.48\textwidth}
-      \begin{block}{Giới hạn}
+      \begin{block}{So với T5Gemma}
+        \begin{minipage}[t][0.95cm][t]{\linewidth}
         T5Gemma vẫn mạnh hơn, nhất là ROUGE-2 và ROUGE-L.
+        \end{minipage}
       \end{block}
     \end{column}
   \end{columns}
@@ -372,7 +378,7 @@
           \item Draft được nhận: 0.44 token/bước
         \end{itemize}
       \end{block}
-      \smallnote{Kết quả MTP này chỉ áp dụng cho WikiLingua. LR-Sum chưa chạy Phase 3.}
+      \smallnote{Kết quả MTP này được đo trên WikiLingua.}
     \end{column}
   \end{columns}
 \end{frame}
@@ -385,16 +391,20 @@
   \begin{columns}[T,onlytextwidth]
     \begin{column}{0.48\textwidth}
       \small
-      \begin{block}{Diễn giải}
+      \begin{block}{Nếu tính lý tưởng}
+        \begin{minipage}[t][1.25cm][t]{\linewidth}
         Nếu chỉ xét việc sinh 2.30 token/bước, độ trễ kỳ vọng là 0.339s.
         Thực tế đo được là 0.662s.
+        \end{minipage}
       \end{block}
     \end{column}
     \begin{column}{0.48\textwidth}
       \small
-      \begin{block}{Ý nghĩa}
+      \begin{block}{Phần còn lại}
+        \begin{minipage}[t][1.25cm][t]{\linewidth}
         Phần chênh 0.323s cho thấy thời gian còn mất ở kiểm chứng token, quản lý cache,
         điều phối tensor và overhead Python.
+        \end{minipage}
       \end{block}
     \end{column}
   \end{columns}
@@ -420,7 +430,7 @@
 \begin{frame}{Thảo luận và hạn chế}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{0.48\textwidth}
-      \begin{block}{Điểm làm được}
+      \begin{block}{Kết quả rút ra}
         \begin{minipage}[t][3.35cm][t]{\linewidth}
         \begin{itemize}
           \item Có thể dùng LLM làm phần đọc nguồn cho decoder.
@@ -436,7 +446,7 @@
         \begin{itemize}
           \item Chưa chạy đầy đủ ablation cho từng phần của adapter.
           \item Chưa có đánh giá thủ công về độ đúng nghĩa.
-          \item LR-Sum chưa có Phase 3 MTP.
+          \item MTP vẫn tốn chi phí kiểm chứng và cache.
         \end{itemize}
         \end{minipage}
       \end{block}
