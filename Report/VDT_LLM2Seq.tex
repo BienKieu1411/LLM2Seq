@@ -54,7 +54,7 @@
 \setlength{\@dblfptop}{0pt}
 \makeatother
 
-\title{LLM2Seq: Repurposing LLM Source Encoders for Encoder-Decoder Summarization with Self-Distilled Multi-Token Prediction}
+\title{LLM2Seq: Repurposing LLM Encoders for Encoder-Decoder Summarization with Self-Distilled Multi-Token Prediction}
 
 \author{
   Giang-Bien Kieu$^1$ \quad Xuan-Dung Doan$^2$ \\
@@ -67,27 +67,18 @@
 \maketitle
 
 \begin{abstract}
-Abstractive summarization is a sequence-to-sequence task.
-A model reads a document and writes a shorter text.
-Modern Large Language Model (LLM) checkpoints are good at generation and representation learning.
-However, many of them do not provide a direct encoder-decoder interface for summarization.
-Encoder-decoder models fit this task because the encoder reads the source and the decoder writes the summary.
-
-This report presents LLM2Seq.
-LLM2Seq reuses pretrained LLM source encoders inside an encoder-decoder summarizer.
-A gated residual adapter maps source states into cross-attention memory.
-A lightweight Transformer decoder then generates the summary.
-On WikiLingua, we also study inference speed with self-distilled Multi-Token Prediction (MTP).
-After the summarizer is trained, MTP heads learn from the frozen decoder.
-They draft future tokens during decoding.
-The main decoder verifies these drafted tokens.
+Abstractive summarization requires modeling a source document and generating a concise target sequence, making encoder-decoder architectures a natural fit.
+Modern Large Language Model (LLM) checkpoints provide strong representations, but many do not expose a direct encoder-decoder interface for summarization.
+This report presents LLM2Seq, an encoder-decoder summarizer that repurposes pretrained LLM-based encoders to represent source documents.
+A gated residual adapter converts their hidden states into decoder-readable cross-attention memory, and a lightweight Transformer decoder generates the summary.
+On WikiLingua, we further study inference acceleration with self-distilled Multi-Token Prediction (MTP): after summarizer training, MTP heads learn from the frozen decoder, draft future tokens, and are verified by the main decoder during inference.
 
 We evaluate LLM2Seq on Vietnamese WikiLingua and add a Vietnamese LR-Sum evaluation.
-The results show that LLM-based source encoders can work as cross-attention memory for summarization.
-The WikiLingua MTP results also show that speedups should be measured by real throughput, not only by accepted tokens.
+The results show that LLM-based encoders can provide useful cross-attention memory for summarization.
+The WikiLingua MTP results further show that decoding acceleration should be evaluated by real throughput, not only by accepted-token statistics.
 \end{abstract}
 
-\noindent\textbf{Keywords:} abstractive summarization; encoder-decoder models; LLM source encoders; adapters; multi-token prediction; Vietnamese WikiLingua; LR-Sum
+\noindent\textbf{Keywords:} abstractive summarization; encoder-decoder models; LLM-based encoders; adapters; multi-token prediction; Vietnamese WikiLingua; LR-Sum
 
 \section{Introduction}
 \label{sec:introduction}
@@ -96,17 +87,14 @@ The WikiLingua MTP results also show that speedups should be measured by real th
 
 Abstractive summarization is a sequence-to-sequence task.
 The model reads a source document and writes a shorter summary \citep{sutskever2014sequence,bahdanau2015neural,vaswani2017attention}.
-Encoder-decoder models fit this structure.
-The encoder reads the source.
-The decoder writes the output.
+Encoder-decoder architectures naturally match this setting by separating source understanding from target generation.
 Many modern LLMs are decoder-only models \citep{brown2020language,dubey2024llama3,yang2024qwen2}.
-They generate well, but they mix the source and target in one causal stream.
+Although they are strong generators, they encode the source and target within a single causal stream.
 This makes the source-summary boundary less clear.
 
 \subsection{Problem Statement}
 
-This report asks a simple question.
-Can pretrained LLM source encoders be reused inside an encoder-decoder summarizer?
+We ask whether pretrained LLM-based encoders can be reused inside an encoder-decoder summarizer.
 We study Vietnamese WikiLingua \citep{ladhak2020wikilingua} and add a follow-up evaluation on Vietnamese LR-Sum \citep{palen-michel-lignos-2023-lr}.
 The goal is to keep strong source representations, expose them through cross-attention, and speed up decoding when possible.
 
@@ -115,24 +103,23 @@ The goal is to keep strong source representations, expose them through cross-att
 T5, BART, and mT5 are strong encoder-decoder models \citep{raffel2020t5,lewis2020bart,xue2021mt5}.
 They do not directly reuse newer LLM checkpoints.
 Recent work shows that decoder-only LLMs can become useful encoders \citep{behnamghader2024llm2vec,luo2025lamate}.
-But summarization still needs a stable bridge from source states to decoder cross-attention.
+For summarization, however, these representations still need a stable bridge into decoder cross-attention.
 
 Context compression methods such as LCLMs compress long prompts into short latent sequences \citep{li2026contextcompression}.
 This helps general long-context inference.
-It is less natural for source-grounded summarization.
-Summaries often need names, numbers, steps, and local details.
+Source-grounded summarization places different pressure on the representation, because summaries often need names, numbers, steps, and local details.
 If the source is compressed too early, the decoder may lose these details.
 LLM2Seq keeps token-level memory instead.
 
 \subsection{Contributions}
 
 We propose \textbf{LLM2Seq}.
-It is an encoder-decoder summarizer built from repurposed LLM source encoders.
+It is an encoder-decoder summarizer built from repurposed LLM-based encoders.
 \begin{itemize}
-    \item We adapt LLM source encoders for Vietnamese abstractive summarization on WikiLingua and LR-Sum.
-    \item We build an adapter that turns LLM states into decoder memory.
+    \item We adapt LLM-based encoders for Vietnamese abstractive summarization on WikiLingua and LR-Sum.
+    \item We introduce a gated residual memory adapter that converts LLM hidden states into decoder-readable cross-attention memory.
     \item On WikiLingua, we train self-distilled MTP heads after the summarizer is trained \citep{gloeckle2024mtp,zhao2026mtpdistill}.
-    \item On WikiLingua, we show that MTP must be judged by real throughput, not only accepted tokens.
+    \item On WikiLingua, we show that MTP should be evaluated by real throughput rather than accepted-token statistics alone.
 \end{itemize}
 
 \section{Background and Related Work}
@@ -173,7 +160,7 @@ MTP-D improves these heads with self-distillation \citep{zhao2026mtpdistill,hint
 
 LLM2Seq is not a context compressor.
 It is also not a pure prompting method.
-It asks whether LLM source states can become useful decoder memory for summarization.
+It studies whether LLM-derived source states can become useful decoder memory for summarization.
 On WikiLingua, it also tests whether verified MTP gives real speedup \citep{gloeckle2024mtp,zhao2026mtpdistill}.
 Table~\ref{tab:lclm-position} compares it with LCLM-style compression \citep{li2026contextcompression}.
 
@@ -238,31 +225,26 @@ With non-padding target positions $\Omega=\{t:a^y_t=1\}$, the summarization loss
 \log p_{\psi}(y_t\mid y_{<t},M).
 \end{equation}
 This form is the core design choice.
-The encoder handles source understanding.
-The decoder handles target generation.
-The adapter decides how source evidence is exposed to cross-attention.
+The encoder focuses on source understanding, the decoder handles target generation, and the adapter controls how source evidence is exposed to cross-attention.
 
 \subsection{Overall Architecture}
 
 Figure~\ref{fig:architecture} shows the full system.
 LLM2Seq has three main parts.
-First, the system uses a pretrained LLM-based source encoder.
+First, it uses a pretrained LLM-based encoder on the source side.
 We instantiate it with either an LLM2Vec-derived Llama encoder or a Qwen embedding encoder \citep{behnamghader2024llm2vec,zhang2025qwen3embedding}.
 Second, a gated residual memory adapter reshapes the encoder states into decoder memory.
-The adapter section later expands this memory as learned global tokens plus adapted token-level source states.
-In Figure~\ref{fig:architecture}, \textit{memory adapter} refers to this whole bridge.
-It is not a separate summarizer.
-It converts LLM hidden states into the memory that the decoder reads through cross-attention.
+In Figure~\ref{fig:architecture}, \textit{memory adapter} denotes the complete bridge from LLM hidden states to decoder-readable cross-attention memory, including learned global tokens and adapted token-level source states.
 Third, a lightweight Transformer decoder generates the summary with masked self-attention and cross-attention \citep{vaswani2017attention}.
 After the summarizer is trained, an MTP module is attached for acceleration.
 The MTP module is trained separately and verified by the main decoder during inference.
 
-\subsection{Repurposed LLM Source Encoder}
+\subsection{Repurposed LLM-Based Encoder}
 
-We use two source encoders.
+We use two source-side LLM encoders.
 The Llama variant uses an LLM2Vec Sheared-LLaMA checkpoint \citep{behnamghader2024llm2vec}.
 The Qwen variant uses Qwen3-Embedding-0.6B \citep{zhang2025qwen3embedding}.
-This distinction matters for the scope of the claim: LLM2Seq studies reusable LLM source encoders, not only pure decoder-only checkpoints.
+This distinction defines the scope of the claim: LLM2Seq studies reusable LLM-based encoders, not only pure decoder-only checkpoints.
 For a source sequence $x$, the encoder returns token-level hidden states:
 \begin{equation}
 H^{(\ell)}=F^{(\ell)}_{\theta}(x,a^x),
@@ -289,14 +271,10 @@ This adapts the source representation to Vietnamese summarization while keeping 
 
 \subsection{Gated Residual Memory Adapter}
 
-The adapter is the bridge between the LLM encoder and the decoder.
-It must solve a mismatch.
-The encoder states live in the LLM representation space, while the decoder expects memory in its own hidden space.
-The adapter also needs to keep token-level evidence, because summaries often depend on details in the source.
-The overall adapter composition is specific to LLM2Seq.
-However, its individual mechanisms are not claimed as new neural primitives.
-Some are direct applications of standard Transformer components.
-Others adapt layer mixing, gated updates, feature modulation, and learned prompt tokens to the source-memory interface.
+The adapter bridges the LLM encoder and the decoder.
+It resolves a representation mismatch: encoder states live in the LLM space, whereas the decoder expects memory in its own hidden space.
+At the same time, it preserves token-level evidence because summaries often depend on details in the source.
+The contribution is the organization of familiar mechanisms into a source-memory bridge for summarization: layer mixing, gated updates, feature modulation, Transformer refinement, and learned memory tokens.
 
 First, token-wise layer fusion combines selected encoder layers.
 This is inspired by learned layer mixing in contextual representation models such as ELMo \citep{peters2018elmo}.
@@ -319,9 +297,7 @@ The fused states are then projected into decoder space.
 We use a gated residual projection for this step.
 Gated residual mechanisms are widely used to modulate feature updates.
 Examples include Highway Networks and gated linear units \citep{srivastava2015highway,dauphin2017glu}.
-LLM2Seq does not claim this gating equation as a new neural block.
-Instead, we apply it to a specific interface problem.
-It bridges a frozen or lightly adapted LLM source encoder and a smaller cross-attentive decoder.
+Here, the gate is used for the specific interface between a frozen or lightly adapted LLM encoder and a smaller cross-attentive decoder.
 The implemented gated residual projection first normalizes the fused state:
 \begin{equation}
 \hat{H}=\operatorname{LN}(\bar{H}).
@@ -346,8 +322,7 @@ This residual form keeps the original source information easier to preserve whil
 
 A token salience gate then estimates which source positions should be emphasized.
 This gate is inspired by feature recalibration and feature-wise conditioning mechanisms such as Squeeze-and-Excitation and FiLM \citep{hu2018squeeze,perez2018film}.
-LLM2Seq adapts this idea to token-level source memory.
-The goal is not to remove tokens, but to rescale their representations before decoder cross-attention.
+LLM2Seq adapts this idea to token-level source memory by rescaling representations before decoder cross-attention.
 \begin{equation}
 S=\sigma(W_{s2}\operatorname{GELU}(W_{s1}\operatorname{LN}(R)+b_{s1})+b_{s2}).
 \end{equation}
@@ -377,9 +352,7 @@ Q^{(u)}=\bar{R}^{(u-1)}
 Let $\tilde{R}=\bar{R}^{(L_a)}$.
 The final memory concatenates learned global memory tokens $G_m$ with the refined token memory.
 Learned global tokens are inspired by prefix tuning and prompt tuning \citep{li2021prefix,lester2021prompt}.
-In those methods, trainable continuous tokens condition a language model.
-LLM2Seq uses them differently.
-They are decoder-visible source-memory slots trained for summarization, not a prompt prepended to the decoder input.
+In contrast to prompts prepended to the decoder input, these tokens act as decoder-visible source-memory slots trained for summarization.
 \begin{equation}
 M=[G_m;\,\tilde{R}].
 \end{equation}
@@ -430,17 +403,21 @@ Each MTP depth $k$ predicts $y_{t+k}$:
 p_t^{(k)}=\operatorname{softmax}(E^\top h_t^{(k)}),
 \qquad k=1,\ldots,K.
 \end{equation}
+Let $\Omega_k=\{t:a^y_{t+k}=1\}$ denote positions whose $k$-step future target is valid.
 The hard-label loss trains the heads on gold future tokens:
 \begin{equation}
 \mathcal{L}_{CE}
-=-\frac{1}{|\Omega_k|}
-\sum_{k=1}^{K}w_k\sum_{t\in\Omega_k}\log p_t^{(k)}(y_{t+k}).
+=-\frac{1}{\sum_{k=1}^{K}w_k}
+\sum_{k=1}^{K}w_k
+\frac{1}{|\Omega_k|}
+\sum_{t\in\Omega_k}\log p_t^{(k)}(y_{t+k}).
 \end{equation}
 The KL loss makes each MTP head follow the frozen main head at the same future position \citep{hinton2015distilling}.
-We compute it on the top-$J$ teacher logits:
+Let $q_{t,k}$ denote the teacher distribution from the frozen main head and $s_{t,k}$ denote the student distribution from the $k$-th MTP head, both restricted to the top-$J$ teacher logits.
+The KL term is:
 \begin{equation}
 \mathcal{L}_{KL}
-=\frac{\tau^2}{\sum_k w_k}
+=\frac{\tau^2}{\sum_{k=1}^{K}w_k}
 \sum_{k=1}^{K}w_k
 \frac{1}{|\Omega_k|}
 \sum_{t\in\Omega_k}\operatorname{KL}(q_{t,k}\,\|\,s_{t,k}).
@@ -451,7 +428,7 @@ The final Phase 3 loss is:
 =\lambda_{CE}\mathcal{L}_{CE}
 +\gamma(u)\lambda_{KL}\mathcal{L}_{KL},
 \end{equation}
-Here $\gamma(u)$ ramps in the KL term during training.
+Here, $\gamma(u)$ gradually ramps in the KL term during training.
 Only the MTP heads are updated in this phase.
 
 \subsection{Verified MTP Decoding Algorithm}
@@ -527,7 +504,7 @@ MTP is faster only when:
 \begin{equation}
 \bar{e} > 1+\frac{C_{\mathrm{ver}}}{C_{\mathrm{AR}}}.
 \end{equation}
-This explains why accepted tokens and real throughput can disagree.
+The condition explains why accepted tokens and real throughput can disagree.
 The system must save more decoder steps than it adds in verification overhead.
 
 \section{Experimental Setup}
@@ -632,7 +609,7 @@ For Vietnamese text, ROUGE is computed with the Python \texttt{rouge-score} impl
 Decoded strings are evaluated directly.
 Length statistics use whitespace-separated tokens from \texttt{text.split()}, which we call words for readability.
 We do not apply Vietnamese word segmentation such as VnCoreNLP or underthesea.
-This matters because Vietnamese word segmentation can change overlap scores.
+This choice is important because Vietnamese word segmentation can change overlap scores.
 For length, we report mean predicted words and too-long rate.
 The too-long rate is the percentage of predictions whose word count is more than 1.5 times the reference word count.
 BERTScore is computed with \texttt{bert-base-multilingual-cased}.
@@ -649,7 +626,7 @@ When comparing AR and MTP speed on WikiLingua, we use paired comparison logs und
 We evaluate LLM2Seq with three questions.
 They cover summarization quality, encoder configuration, and decoding speed.
 \begin{itemize}
-    \item \textbf{RQ1}: Can pretrained LLM-based source encoders be reused inside an encoder-decoder summarizer?
+    \item \textbf{RQ1}: Can pretrained LLM-based encoders be reused inside an encoder-decoder summarizer?
     \item \textbf{RQ2}: On WikiLingua, how much do the LLM2Seq encoder configurations affect quality, length, and speed?
     \item \textbf{RQ3}: On WikiLingua, does verified MTP improve real throughput, or does it only reduce decoding steps?
 \end{itemize}
@@ -657,19 +634,19 @@ They cover summarization quality, encoder configuration, and decoding speed.
 \section{Results and Analysis}
 \label{sec:results}
 
-\subsection{RQ1: Viability of LLM-based Source Encoders}
+\subsection{RQ1: Viability of LLM-Based Encoders}
 
 Table~\ref{tab:main-results} reports WikiLingua and LR-Sum test results.
 On WikiLingua, the Qwen-based LLM2Seq system achieves 54.01 ROUGE-1, 20.83 ROUGE-2, 31.83 ROUGE-L, and 73.42 BERTScore F1.
-The WikiLingua result shows that a pretrained LLM-based source encoder can provide useful cross-attention memory for an encoder-decoder summarizer.
+The WikiLingua result shows that a pretrained LLM-based encoder can provide useful cross-attention memory for an encoder-decoder summarizer.
 On WikiLingua, the Llama-based system also produces valid summaries.
 Its ROUGE scores are lower, and its outputs are much shorter.
-This shows that the encoder configuration matters.
+These differences indicate that encoder configuration has a substantial effect on output length and ROUGE.
 
 On WikiLingua, LLM2Seq-Qwen is close to T5Gemma on ROUGE-1.
 It is lower on ROUGE-2 and ROUGE-L.
-This supports the LLM2Seq design, but it does not beat T5Gemma.
-The result also depends on the encoder choice and output length.
+The result supports the LLM2Seq design, but it does not show that LLM2Seq outperforms T5Gemma.
+It also depends on the encoder choice and output length.
 
 \begin{table*}[t]
 \centering
@@ -699,9 +676,9 @@ BERTScore uses \texttt{bert-base-multilingual-cased} without baseline rescaling.
 On LR-Sum, LLM2Seq-Qwen improves over LLM2Seq-Llama.
 The gain is clearest on ROUGE-2 and BERTScore F1.
 Its average output length is also close to the reference length.
-T5Gemma is still much stronger on ROUGE-2 and ROUGE-L.
+T5Gemma still achieves substantially higher ROUGE-2 and ROUGE-L scores.
 The LR-Sum LLM2Seq outputs are fluent, but they can choose wrong entities or events.
-This lowers n-gram overlap with the reference.
+Such errors lower n-gram overlap with the reference.
 
 \subsection{RQ2: Effect of Encoder Configuration on WikiLingua}
 
@@ -710,11 +687,11 @@ LLM2Seq-Llama under-generates.
 Its average output length is 29.10 words, far below the 51.86-word reference average.
 LLM2Seq-Qwen generates longer summaries.
 Its average output length is 58.31 words, which is closer to the reference.
-This length difference partly explains the large ROUGE gap between the two LLM2Seq variants.
+The length difference partly explains the large ROUGE gap between the two LLM2Seq variants.
 
 The WikiLingua comparison should be read as a controlled configuration-level comparison rather than a pure encoder-only ablation.
 Both variants use the same overall LLM2Seq architecture, adapter design, decoder design, and decoding constraints.
-However, the source encoder choice also changes the tokenizer, vocabulary, and representation space.
+However, changing the source-side encoder also changes the tokenizer, vocabulary, and representation space.
 
 Table~\ref{tab:speed} shows WikiLingua autoregressive decoding speed.
 LLM2Seq-Llama is faster than LLM2Seq-Qwen: 114.74 tokens/s versus 95.87 tokens/s.
@@ -722,9 +699,7 @@ A likely explanation is the decoder-side vocabulary size.
 Because the decoder uses a tied input/output embedding matrix, the final LM head depends on the tokenizer vocabulary.
 The larger Qwen vocabulary can make each decoding step more expensive.
 At the same time, Qwen gives better summarization quality.
-This gives a trade-off on WikiLingua.
-Qwen improves quality and length control.
-Llama is faster, but it under-generates.
+The result suggests a quality-speed trade-off on WikiLingua: Qwen improves quality and length control, while Llama is faster but under-generates.
 
 \begin{table}[t]
 \centering
@@ -745,7 +720,7 @@ LLM2Seq-Qwen & 95.87 & 0.779s \\
 
 Table~\ref{tab:mtp-results} compares autoregressive decoding and verified MTP for the Qwen-based system on WikiLingua.
 Verified MTP increases the emitted tokens per decoding step from 1.00 to 2.30 and improves throughput from 95.87 tokens/s to 111.71 tokens/s.
-This gives a measured speedup of 1.17x and reduces mean latency from 0.779s to 0.662s.
+The measured speedup is 1.17x, with mean latency decreasing from 0.779s to 0.662s.
 
 \begin{table*}[t]
 \centering
@@ -767,7 +742,7 @@ Draft is accepted draft tokens per step.}
 \end{table*}
 
 However, the speedup is much smaller than the emitted-token-per-step increase.
-This suggests that accepted or emitted tokens alone are not enough to evaluate MTP.
+Accepted or emitted tokens alone are therefore insufficient for evaluating MTP.
 The verifier also costs time.
 Cache handling and tensor control flow also add overhead.
 For this reason, we report both speed and quality for AR and MTP.
@@ -779,8 +754,7 @@ We therefore report quality scores for both modes.
 Figure~\ref{fig:mtp-latency} shows a derived latency accounting for the WikiLingua Qwen system.
 If each MTP step cost the same as an autoregressive step, emitting 2.30 tokens per step would reduce mean latency from 0.779s to about 0.339s.
 In practice, the observed MTP latency is 0.662s, leaving about 0.323s as residual overhead.
-This is not kernel-level profiling.
-It is a conservative estimate from the evaluation logs.
+The accounting is a conservative estimate from the evaluation logs rather than kernel-level profiling.
 It points to verification, cache management, tensor control flow, and Python overhead as likely bottlenecks.
 
 \begin{figure}[t]
@@ -793,19 +767,15 @@ Residual is the remaining latency.}
 \end{figure}
 
 For the Qwen WikiLingua system, verified MTP improves real throughput.
-The gain is modest.
+The resulting speedup remains modest.
 MTP speed still depends on implementation details.
 
 \subsection{Comparison with End-to-End Context Compression}
 
-We do not claim a direct empirical comparison with LCLMs.
-The current project does not include an LCLM baseline.
-The comparison is conceptual.
+The comparison with LCLMs is conceptual rather than empirical, since the current project does not include an LCLM baseline.
 As summarized in Table~\ref{tab:lclm-position}, LCLMs compress contexts into shorter latent sequences for general long-context inference \citep{li2026contextcompression}.
 LLM2Seq keeps token-level source memory and trains for Vietnamese summarization.
-This distinction matters.
-LLM2Seq does not optimize compression ratio.
-It studies whether token-level LLM states can work as source memory for summarization.
+The distinction matters because LLM2Seq does not optimize compression ratio; it studies whether token-level LLM states can work as source memory for summarization.
 A fair future comparison should add block compression baselines, such as mean-pooling encoder states by 4, 8, or 16 tokens before the decoder.
 
 \subsection{Qualitative Example}
@@ -815,7 +785,7 @@ It shows the same pattern as the aggregate results.
 LLM2Seq-Llama is short but loses key content.
 LLM2Seq-Qwen often keeps the broad topic and a concise style, but it can also make serious semantic errors.
 T5Gemma is more fluent and covers more details, but it is also longer.
-This WikiLingua example matches the table.
+The WikiLingua example matches the table.
 Different LLM2Seq configurations choose different content and output lengths.
 
 \subsection{Error Analysis}
@@ -823,7 +793,7 @@ Different LLM2Seq configurations choose different content and output lengths.
 The WikiLingua results reveal three error patterns.
 First, on WikiLingua, LLM2Seq-Llama under-generates, which hurts recall and leads to lower ROUGE.
 Second, on WikiLingua, T5Gemma often generates much longer summaries.
-This can improve overlap scores but reduces conciseness.
+Longer outputs can improve overlap scores but reduce conciseness.
 Third, on WikiLingua, verified MTP improves throughput only modestly.
 It emits multiple tokens per step, but the verifier still costs time.
 
@@ -837,24 +807,16 @@ Autoregressive mode generates one token at a time.
 Verified MTP mode drafts future tokens and verifies them with the frozen decoder.
 The demo reports latency, generated tokens, tokens per second, and accepted-token statistics.
 Appendix~\ref{app:demo} shows the interface.
-The demo is for inspection.
-The main evidence comes from the evaluation logs.
+The demo is intended for qualitative inspection, while the main evidence comes from the evaluation logs.
 
 \section{Discussion}
 \label{sec:discussion}
 
-LLM2Seq shows that LLM-based source encoders can be reused inside an encoder-decoder summarizer.
-On WikiLingua, the Qwen variant is close to T5Gemma on ROUGE-1.
-It also produces shorter summaries.
-This supports the design.
-It does not show that LLM2Seq is better than standard encoder-decoder baselines.
-On WikiLingua, the Qwen-based LLM2Seq variant achieves higher ROUGE than the Llama-based variant.
-This should be read as a system-level comparison.
-The tokenizer, vocabulary, and representation space also change.
-For Qwen on WikiLingua, MTP gives 2.30 tokens per step but only 1.17x real speedup.
-MTP helps only when accepted tokens pay for verification.
-Token-level memory is useful when the summary needs local source evidence.
-This differs from fixed-ratio context compression \citep{li2026contextcompression}.
+LLM2Seq shows that LLM-based encoders can be reused inside an encoder-decoder summarizer.
+On WikiLingua, the Qwen variant is close to T5Gemma on ROUGE-1 while producing shorter summaries, which supports the design but does not show that LLM2Seq is better than standard encoder-decoder baselines.
+The comparison between Qwen and Llama should be interpreted as a system-level comparison, since changing the encoder also changes the tokenizer, vocabulary, and representation space.
+For Qwen on WikiLingua, MTP gives 2.30 tokens per step but only 1.17x real speedup, so accepted tokens help only when they compensate for verification overhead.
+Token-level memory is useful when the summary needs local source evidence, which differs from fixed-ratio context compression \citep{li2026contextcompression}.
 The current verified decoder is an implementation-level prototype.
 Future deployment should fuse verification, reduce Python control flow, and use optimized runtimes such as vLLM.
 Quantization methods such as SmoothQuant may also help under memory limits \citep{xiao2023smoothquant}.
@@ -878,7 +840,7 @@ Verifier cost, cache handling, and Python control flow can reduce speedup.
 \section{Conclusion}
 \label{sec:conclusion}
 
-LLM2Seq studies how to build an encoder-decoder summarizer from repurposed LLM source encoders.
+LLM2Seq studies how to build an encoder-decoder summarizer from repurposed LLM-based encoders.
 The model uses a gated residual adapter to map source-side LLM states into decoder memory.
 It then uses a lightweight cross-attentive decoder to generate summaries.
 On Vietnamese WikiLingua, the Qwen-based variant is competitive with T5Gemma on ROUGE-1 and produces shorter summaries.
