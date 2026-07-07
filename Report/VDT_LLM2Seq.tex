@@ -863,9 +863,9 @@ Quantization methods such as SmoothQuant may also help under memory limits \cite
 \label{sec:validity}
 
 There are five main threats.
-First, the main experiments use Vietnamese WikiLingua \citep{ladhak2020wikilingua}.
-LR-Sum \citep{palen-michel-lignos-2023-lr} is only an additional Phase 1--2 quality evaluation.
-The result may not transfer to dialogue, legal text, scientific text, or other summarization domains.
+First, the quality evaluation covers two Vietnamese summarization datasets: WikiLingua \citep{ladhak2020wikilingua} and LR-Sum \citep{palen-michel-lignos-2023-lr}.
+Even so, both are written-document summarization datasets.
+The result may not transfer to dialogue, legal text, scientific text, or other domains.
 Second, the report uses T5Gemma as the main baseline.
 It does not include many other baselines such as mT5, viT5, mBART, or prompted LLMs.
 Third, Llama and Qwen differ in tokenizer, vocabulary, and representation space.
