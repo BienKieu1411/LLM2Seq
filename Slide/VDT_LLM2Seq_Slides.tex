@@ -1,0 +1,486 @@
+\documentclass[aspectratio=169,11pt]{beamer}
+
+\usetheme{Madrid}
+\usecolortheme{beaver}
+\usefonttheme{professionalfonts}
+
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T5,T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+\else
+  \usepackage{fontspec}
+  \setmainfont{Avenir Next}
+  \setsansfont{Avenir Next}
+  \setmonofont{Avenir Next}
+\fi
+
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{tikz}
+\usepackage{hyperref}
+\usetikzlibrary{arrows.meta,positioning,fit}
+
+\graphicspath{{figures/}}
+
+\definecolor{LLMRed}{HTML}{A61C2A}
+\definecolor{LLMDark}{HTML}{222222}
+\definecolor{LLMBlue}{HTML}{BFCDE0}
+\definecolor{LLMGreen}{HTML}{CDECCF}
+\definecolor{LLMOrange}{HTML}{F4D6A0}
+\definecolor{LLMLight}{HTML}{F7F7F7}
+
+\setbeamercolor{title}{fg=white,bg=LLMRed}
+\setbeamercolor{frametitle}{fg=white,bg=LLMRed}
+\setbeamercolor{block title}{fg=white,bg=LLMRed}
+\setbeamercolor{block body}{fg=LLMDark,bg=LLMLight}
+\setbeamercolor{alerted text}{fg=LLMRed}
+\setbeamertemplate{navigation symbols}{}
+\renewcommand{\familydefault}{\sfdefault}
+\setbeamerfont{title}{family=\sffamily,series=\bfseries,size=\Large}
+\setbeamerfont{subtitle}{family=\sffamily,size=\small}
+\setbeamerfont{frametitle}{family=\sffamily,series=\bfseries,size=\large}
+\setbeamerfont{block title}{family=\sffamily,series=\bfseries,size=\small}
+\setbeamerfont{block body}{family=\sffamily,size=\small}
+\setbeamerfont{normal text}{family=\sffamily}
+\setbeamertemplate{itemize item}{\color{LLMRed}\scriptsize\textbullet}
+\setbeamertemplate{itemize subitem}{\color{LLMRed}\scriptsize\textbullet}
+\hyphenpenalty=10000
+\exhyphenpenalty=10000
+
+\newcommand{\smallnote}[1]{\vspace{0.3em}{\scriptsize\color{gray}#1}}
+\newcommand{\metric}[2]{\begin{block}{#1}\begin{minipage}[c][1.05cm][c]{\linewidth}\centering\bfseries #2\end{minipage}\end{block}}
+\newcommand{\tightv}{\vspace{-0.45em}}
+
+\title[LLM2Seq]{LLM2Seq}
+\subtitle{Vietnamese Summarization with LLM Source Encoders and Verified MTP}
+\author[Kiều Giang Biên]{Kiều Giang Biên}
+\institute[HUST]{Hanoi University of Science and Technology}
+\date{Báo cáo mini project}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+  \vspace{-0.8em}
+  \begin{center}
+    \small WikiLingua và LR-Sum tiếng Việt
+  \end{center}
+\end{frame}
+
+\begin{frame}{Từ bài toán đến hướng tiếp cận}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.31\textwidth}
+      \begin{block}{Bài toán}
+        \begin{minipage}[t][1.35cm][t]{\linewidth}
+        \raggedright Tóm tắt cần đọc văn bản nguồn rồi viết lại ngắn gọn.
+        \end{minipage}
+      \end{block}
+    \end{column}
+    \begin{column}{0.31\textwidth}
+      \begin{block}{Khoảng trống}
+        \begin{minipage}[t][1.35cm][t]{\linewidth}
+        \raggedright Decoder-only LLM viết tốt, nhưng khó dùng trực tiếp như encoder.
+        \end{minipage}
+      \end{block}
+    \end{column}
+    \begin{column}{0.31\textwidth}
+      \begin{block}{Hướng làm}
+        \begin{minipage}[t][1.35cm][t]{\linewidth}
+        \raggedright Dùng LLM đọc nguồn. Adapter chuyển biểu diễn sang decoder.
+        \end{minipage}
+      \end{block}
+    \end{column}
+  \end{columns}
+
+  \vfill
+  \begin{center}
+    \normalsize\alert{LLM2Seq giữ thông tin theo từng token, thay vì nén nguồn quá sớm.}
+
+    \smallskip
+    \small Decoder còn thấy chi tiết trong nguồn, đồng thời tận dụng biểu diễn mạnh từ LLM.
+  \end{center}
+\end{frame}
+
+\begin{frame}{Vì sao không chỉ dùng nén ngữ cảnh?}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.48\textwidth}
+      \begin{block}{Nén ngữ cảnh}
+        \begin{minipage}[t][3.25cm][t]{\linewidth}
+        \begin{itemize}
+          \item Nén văn bản dài thành chuỗi ẩn ngắn hơn.
+          \item Hữu ích cho suy luận với ngữ cảnh dài.
+          \item Không được thiết kế riêng cho tóm tắt bám nguồn.
+        \end{itemize}
+        \end{minipage}
+      \end{block}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{block}{LLM2Seq}
+        \begin{minipage}[t][3.25cm][t]{\linewidth}
+        \begin{itemize}
+          \item Giữ source memory theo từng token nguồn.
+          \item Decoder đọc nguồn bằng cross-attention.
+          \item Giảm nguy cơ mất tên riêng, số liệu và bước thao tác.
+        \end{itemize}
+        \end{minipage}
+      \end{block}
+    \end{column}
+  \end{columns}
+
+  \vfill
+  \begin{center}
+    \begin{tikzpicture}[node distance=0.55cm, every node/.style={font=\small}]
+      \node[draw,rounded corners,fill=LLMBlue,minimum width=3cm,minimum height=0.75cm] (src) {Văn bản nguồn};
+      \node[draw,rounded corners,fill=LLMOrange,right=1.1cm of src,minimum width=2.7cm,minimum height=0.75cm] (bottleneck) {Biểu diễn nén};
+      \node[draw,rounded corners,fill=LLMGreen,right=1.1cm of bottleneck,minimum width=2.7cm,minimum height=0.75cm] (summary) {Suy luận};
+      \draw[-{Latex[length=2mm]},thick] (src) -- (bottleneck);
+      \draw[-{Latex[length=2mm]},thick] (bottleneck) -- (summary);
+    \end{tikzpicture}
+  \end{center}
+\end{frame}
+
+\begin{frame}{LLM2Seq: tổng quan kiến trúc}
+  \centering
+  \includegraphics[width=0.98\textwidth,height=0.78\textheight,keepaspectratio]{architecture_crop.pdf}
+
+  \smallnote{LLM đọc nguồn $\rightarrow$ adapter tạo source memory $\rightarrow$ decoder nhẹ $\rightarrow$ verified MTP.}
+\end{frame}
+
+\begin{frame}{Adapter: nối biểu diễn nguồn với decoder}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.53\textwidth}
+      \begin{block}{Ý tưởng}
+        \begin{itemize}
+          \item Lấy hidden states từ LLM đọc nguồn.
+          \item Trộn thông tin từ nhiều layer của LLM.
+          \item Gated projection đưa biểu diễn sang không gian decoder.
+          \item Decoder đọc source memory bằng cross-attention.
+        \end{itemize}
+      \end{block}
+    \end{column}
+    \begin{column}{0.43\textwidth}
+      \begin{center}
+      \begin{tikzpicture}[node distance=0.5cm, every node/.style={font=\small}]
+        \node[draw,rounded corners,fill=LLMBlue,minimum width=3.2cm,minimum height=0.7cm] (enc) {Hidden states};
+        \node[draw,rounded corners,fill=LLMGreen,below=of enc,minimum width=3.2cm,minimum height=0.7cm] (fuse) {Layer fusion};
+        \node[draw,rounded corners,fill=LLMOrange,below=of fuse,minimum width=3.2cm,minimum height=0.7cm] (gate) {Gated projection};
+        \node[draw,rounded corners,fill=LLMBlue,below=of gate,minimum width=3.2cm,minimum height=0.7cm] (mem) {Source memory};
+        \draw[-{Latex[length=2mm]},thick] (enc) -- (fuse);
+        \draw[-{Latex[length=2mm]},thick] (fuse) -- (gate);
+        \draw[-{Latex[length=2mm]},thick] (gate) -- (mem);
+      \end{tikzpicture}
+      \end{center}
+    \end{column}
+  \end{columns}
+
+  \vfill
+  \centering
+  \normalsize\alert{Mục tiêu: dùng lại biểu diễn của LLM, nhưng vẫn giữ cấu trúc encoder-decoder.}
+
+  \smallskip
+  \small Adapter không tạo encoder mới từ đầu. Nó chuyển hidden states của LLM thành source memory cho decoder.
+\end{frame}
+
+\begin{frame}{Self-distilled MTP: tăng tốc có kiểm chứng}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.48\textwidth}
+      \begin{block}{Huấn luyện}
+        \begin{itemize}
+          \item Huấn luyện mô hình tóm tắt chính trước.
+          \item Giữ nguyên encoder, adapter và decoder.
+          \item Chỉ huấn luyện 4 MTP heads bằng CE + KL.
+        \end{itemize}
+      \end{block}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{block}{Suy luận}
+        \begin{itemize}
+          \item MTP heads dự đoán trước vài token tiếp theo.
+          \item Decoder chính kiểm chứng từng token nháp.
+          \item Chỉ ghi ra token đã được kiểm chứng.
+        \end{itemize}
+      \end{block}
+    \end{column}
+  \end{columns}
+
+  \vfill
+  \begin{center}
+    \begin{tikzpicture}[node distance=0.7cm, every node/.style={font=\small}]
+      \node[draw,rounded corners,fill=LLMBlue,minimum width=2.4cm,minimum height=0.72cm] (main) {Decoder chính};
+      \node[draw,rounded corners,fill=LLMOrange,right=1.0cm of main,minimum width=2.5cm,minimum height=0.72cm] (draft) {Token nháp};
+      \node[draw,rounded corners,fill=LLMGreen,right=1.0cm of draft,minimum width=2.5cm,minimum height=0.72cm] (verify) {Kiểm chứng};
+      \node[draw,rounded corners,fill=LLMBlue,right=1.0cm of verify,minimum width=2.2cm,minimum height=0.72cm] (emit) {Ghi output};
+      \draw[-{Latex[length=2mm]},thick] (main) -- (draft);
+      \draw[-{Latex[length=2mm]},thick] (draft) -- (verify);
+      \draw[-{Latex[length=2mm]},thick] (verify) -- (emit);
+      \node[below=0.25cm of verify,color=LLMRed] {chỉ nhận token đã được kiểm chứng};
+    \end{tikzpicture}
+  \end{center}
+\end{frame}
+
+\begin{frame}{Dữ liệu: WikiLingua và LR-Sum tiếng Việt}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.57\textwidth}
+      \centering
+      \includegraphics[width=\textwidth]{dataset_split.pdf}
+    \end{column}
+    \begin{column}{0.39\textwidth}
+      \begin{block}{WikiLingua}
+        \begin{itemize}
+          \item Huấn luyện: 13,999
+          \item Xác thực: 1,680
+          \item Kiểm thử: 3,901
+          \item Nguồn: WikiHow
+        \end{itemize}
+      \end{block}
+      \begin{block}{LR-Sum}
+        \begin{itemize}
+          \item Huấn luyện: 11,676
+          \item Xác thực: 1,459
+          \item Kiểm thử: 1,460
+          \item Nguồn: VOA newswire
+        \end{itemize}
+      \end{block}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Thiết lập thí nghiệm}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.30\textwidth}
+      \begin{block}{Hệ thống so sánh}
+        \begin{minipage}[t][3.05cm][t]{\linewidth}
+        \begin{itemize}
+          \item LLM2Seq-Llama
+          \item LLM2Seq-Qwen
+          \item T5Gemma LoRA
+        \end{itemize}
+        \end{minipage}
+      \end{block}
+    \end{column}
+    \hfill
+    \begin{column}{0.30\textwidth}
+      \begin{block}{Thước đo}
+        \begin{minipage}[t][3.05cm][t]{\linewidth}
+        \begin{itemize}
+          \item ROUGE-1/2/L
+          \item BERTScore mBERT
+          \item Thống kê độ dài
+          \item Token/s và độ trễ
+        \end{itemize}
+        \end{minipage}
+      \end{block}
+    \end{column}
+    \hfill
+    \begin{column}{0.30\textwidth}
+      \begin{block}{Huấn luyện}
+        \begin{minipage}[t][3.05cm][t]{\linewidth}
+        \begin{itemize}
+          \item WikiLingua: 3 giai đoạn
+          \item LR-Sum: chỉ Phase 1--2
+          \item LoRA để thích nghi encoder
+          \item MTP chỉ trên WikiLingua
+        \end{itemize}
+        \end{minipage}
+      \end{block}
+    \end{column}
+  \end{columns}
+
+  \vfill
+  \begin{center}
+    \normalsize\alert{Cần trả lời ba câu hỏi: tóm tắt tốt không, dài ngắn ra sao, và chạy nhanh hơn bao nhiêu.}
+
+    \smallskip
+    \small BERTScore dùng \texttt{bert-base-multilingual-cased}. AR--MTP chỉ so sánh trên WikiLingua.
+  \end{center}
+\end{frame}
+
+\begin{frame}{Kết quả chính: chất lượng tóm tắt}
+  \centering
+  \includegraphics[width=0.90\textwidth,height=0.66\textheight,keepaspectratio]{quality_metrics.pdf}
+
+  \vfill
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.48\textwidth}
+      \small\alert{WikiLingua}: Qwen gần T5Gemma ở ROUGE-1, nhưng thấp hơn ở ROUGE-2 và ROUGE-L.
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \small\alert{LR-Sum}: Qwen hơn Llama, nhưng T5Gemma vẫn mạnh nhất.
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Bảng kết quả chính}
+  \centering
+  \tiny
+  \setlength{\tabcolsep}{2.2pt}
+  \begin{tabular}{llrrrrrr}
+    \toprule
+    Dataset & Model & R-1 & R-2 & R-L & BERT-P & BERT-R & BERT-F1 \\
+    \midrule
+    \multirow{3}{*}{WikiLingua} & LLM2Seq-Llama & 48.36 & 15.54 & 29.05 & \textbf{74.08} & 72.11 & 73.02 \\
+    & LLM2Seq-Qwen & 54.01 & 20.83 & 31.83 & 72.87 & 74.11 & 73.42 \\
+    & T5Gemma & \textbf{54.24} & \textbf{27.42} & \textbf{33.89} & 71.99 & \textbf{78.40} & \textbf{74.98} \\
+    \midrule
+    \multirow{3}{*}{LR-Sum} & LLM2Seq-Llama & 50.49 & 12.08 & 29.41 & 70.74 & 69.26 & 69.98 \\
+    & LLM2Seq-Qwen & 51.59 & 15.58 & 31.21 & 72.24 & 71.04 & 71.62 \\
+    & T5Gemma & \textbf{58.79} & \textbf{27.34} & \textbf{39.86} & \textbf{74.13} & \textbf{75.24} & \textbf{74.65} \\
+    \bottomrule
+  \end{tabular}
+
+  \vfill
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.48\textwidth}
+      \begin{block}{Điểm chính}
+        Qwen tốt hơn Llama trên cả hai dataset.
+      \end{block}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{block}{Giới hạn}
+        T5Gemma vẫn mạnh hơn, nhất là ROUGE-2 và ROUGE-L.
+      \end{block}
+    \end{column}
+  \end{columns}
+
+\end{frame}
+
+\begin{frame}{Kết quả độ dài: không chỉ nhìn ROUGE}
+  \centering
+  \includegraphics[width=0.90\textwidth,height=0.67\textheight,keepaspectratio]{length_behavior.pdf}
+
+  \vfill
+  \small\alert{Nhận xét}: Llama thường ngắn. Qwen gần độ dài tham chiếu hơn. T5Gemma đầy đủ hơn, nhưng có xu hướng dài.
+\end{frame}
+
+\begin{frame}{MTP trên WikiLingua: tăng tốc vừa phải}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.53\textwidth}
+      \centering
+      \includegraphics[width=\textwidth]{mtp_speed.pdf}
+    \end{column}
+    \begin{column}{0.43\textwidth}
+      \begin{block}{Quan sát trên Qwen}
+        \begin{itemize}
+          \item AR: 95.87 tok/s
+          \item MTP: 111.71 tok/s
+          \item Tăng tốc: 1.17x
+          \item Sinh ra: 2.30 token/bước
+          \item Draft được nhận: 0.44 token/bước
+        \end{itemize}
+      \end{block}
+      \smallnote{Kết quả MTP này chỉ áp dụng cho WikiLingua. LR-Sum chưa chạy Phase 3.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Vì sao MTP trên WikiLingua chưa tăng tốc mạnh?}
+  \centering
+  \includegraphics[width=0.94\textwidth,height=0.54\textheight,keepaspectratio]{mtp_latency_accounting.pdf}
+
+  \vspace{0.2em}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.48\textwidth}
+      \small
+      \begin{block}{Diễn giải}
+        Nếu chỉ xét việc sinh 2.30 token/bước, độ trễ kỳ vọng là 0.339s.
+        Thực tế đo được là 0.662s.
+      \end{block}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \small
+      \begin{block}{Ý nghĩa}
+        Phần chênh 0.323s cho thấy thời gian còn mất ở kiểm chứng token, quản lý cache,
+        điều phối tensor và overhead Python.
+      \end{block}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Demo hệ thống}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.49\textwidth}
+      \centering
+      \includegraphics[height=0.68\textheight]{demo_autoregressive_cropped.pdf}
+
+      \small Chế độ autoregressive
+    \end{column}
+    \begin{column}{0.49\textwidth}
+      \centering
+      \includegraphics[height=0.68\textheight]{demo_mtp_cropped.pdf}
+
+      \small Chế độ verified MTP
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Thảo luận và hạn chế}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.48\textwidth}
+      \begin{block}{Điểm làm được}
+        \begin{minipage}[t][3.35cm][t]{\linewidth}
+        \begin{itemize}
+          \item Có thể dùng LLM làm phần đọc nguồn cho decoder.
+          \item Qwen tốt hơn Llama trên cả hai dataset.
+          \item Verified MTP giúp chạy nhanh hơn trên WikiLingua.
+        \end{itemize}
+        \end{minipage}
+      \end{block}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{block}{Hạn chế hiện tại}
+        \begin{minipage}[t][3.35cm][t]{\linewidth}
+        \begin{itemize}
+          \item Chưa chạy đầy đủ ablation cho từng phần của adapter.
+          \item Chưa có đánh giá thủ công về độ đúng nghĩa.
+          \item LR-Sum chưa có Phase 3 MTP.
+        \end{itemize}
+        \end{minipage}
+      \end{block}
+    \end{column}
+  \end{columns}
+
+  \vfill
+  \begin{center}
+    \normalsize\alert{LLM2Seq-Qwen tốt hơn Llama, nhưng chưa vượt T5Gemma.}
+  \end{center}
+\end{frame}
+
+\begin{frame}{Thông điệp chính}
+  \vspace{0.3em}
+  \begin{itemize}
+    \item LLM2Seq dùng LLM để đọc nguồn, rồi chuyển source memory cho decoder.
+    \item Qwen tốt hơn Llama trên WikiLingua và LR-Sum tiếng Việt.
+    \item T5Gemma vẫn mạnh hơn, đặc biệt ở ROUGE-2 và ROUGE-L.
+    \item Verified MTP đạt 1.17x trên WikiLingua, nhưng còn tốn chi phí kiểm chứng.
+  \end{itemize}
+
+  \vfill
+  \begin{block}{Bước tiếp theo}
+    Chạy thêm ablation cho adapter, đánh giá độ đúng nghĩa, và tối ưu verified decoding.
+  \end{block}
+\end{frame}
+
+\begin{frame}{Hỏi đáp}
+  \centering
+  \vspace{0.2em}
+  \includegraphics[width=0.70\textwidth,height=0.52\textheight,keepaspectratio]{qa_end_image.pdf}
+
+  \vspace{0.25em}
+  {\Large\bfseries Cảm ơn đã lắng nghe!}
+
+  \begin{tikzpicture}[remember picture,overlay]
+    \node[anchor=south east,align=right,xshift=-1.98cm,yshift=0.85cm] at (current page.south east) {
+      \scriptsize GitHub:\\[-0.1em]
+      \scriptsize\href{https://github.com/BienKieu1411/LLM2Seq}{github.com/BienKieu1411/LLM2Seq}
+    };
+    \node[anchor=south east,xshift=-0.45cm,yshift=0.54cm] at (current page.south east) {
+      \href{https://github.com/BienKieu1411/LLM2Seq}{\includegraphics[width=1.25cm]{github_qr.pdf}}
+    };
+  \end{tikzpicture}
+\end{frame}
+
+\end{document}
