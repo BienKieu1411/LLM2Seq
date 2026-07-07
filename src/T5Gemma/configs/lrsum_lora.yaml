@@ -86,4 +86,4 @@ generation:
 
 evaluation:
   compute_bertscore: true
-  bertscore_model_type: xlm-roberta-large
+  bertscore_model_type: bert-base-multilingual-cased

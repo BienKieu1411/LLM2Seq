@@ -103,7 +103,7 @@ def compute_metrics(
     references: List[str],
     sources: Optional[List[str]] = None,
     compute_bertscore: bool = False,
-    bertscore_model_type: str = "xlm-roberta-large",
+    bertscore_model_type: str = "bert-base-multilingual-cased",
 ) -> Dict[str, Any]:
     scorer = rouge_scorer.RougeScorer(
         ["rouge1", "rouge2", "rougeL", "rougeLsum"],
@@ -412,7 +412,7 @@ def main() -> None:
         sources=sources,
         compute_bertscore=args.compute_bertscore or bool(raw_cfg.get("evaluation", {}).get("compute_bertscore", False)),
         bertscore_model_type=args.bertscore_model_type
-        or raw_cfg.get("evaluation", {}).get("bertscore_model_type", "xlm-roberta-large"),
+        or raw_cfg.get("evaluation", {}).get("bertscore_model_type", "bert-base-multilingual-cased"),
     )
     decode_elapsed = max(1e-9, sum(latencies))
     metrics.update(

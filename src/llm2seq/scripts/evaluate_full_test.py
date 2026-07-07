@@ -284,7 +284,7 @@ def compute_metrics(
     references: List[str],
     sources: Optional[List[str]] = None,
     compute_bertscore: bool = False,
-    bertscore_model_type: str = "xlm-roberta-large",
+    bertscore_model_type: str = "bert-base-multilingual-cased",
 ) -> Dict[str, Any]:
     scorer = rouge_scorer.RougeScorer(
         ["rouge1", "rouge2", "rougeL", "rougeLsum"],
@@ -396,7 +396,7 @@ def main() -> None:
     parser.add_argument("--mtp_fallback_after_steps", type=int, default=None)
     parser.add_argument("--mtp_fallback_min_emitted_length", type=float, default=None)
     parser.add_argument("--compute_bertscore", action="store_true")
-    parser.add_argument("--bertscore_model_type", default="xlm-roberta-large")
+    parser.add_argument("--bertscore_model_type", default="bert-base-multilingual-cased")
     args = parser.parse_args()
 
     config_path = Path(args.config)
