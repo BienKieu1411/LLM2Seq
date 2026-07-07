@@ -9,7 +9,6 @@ import tempfile
 from pathlib import Path
 from typing import Iterable
 
-
 DEFAULT_DATASET = "bltlab/lr-sum"
 DEFAULT_LANGUAGE = "vie"
 SPLITS = ("train", "validation", "test")
@@ -115,7 +114,9 @@ def main() -> None:
             max_samples=args.max_samples,
             include_title=args.include_title,
         )
-        print(f"{split_name}: {kept} examples -> {args.output_dir / f'{split_name}.jsonl'} (skipped_empty={skipped_empty})")
+        print(
+            f"{split_name}: {kept} examples -> {args.output_dir / f'{split_name}.jsonl'} (skipped_empty={skipped_empty})"
+        )
 
 
 if __name__ == "__main__":
