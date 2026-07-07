@@ -1,0 +1,30 @@
+{
+  "metric": "BERTScore",
+  "model_type": "bert-base-multilingual-cased",
+  "device": "mps",
+  "rescale_with_baseline": false,
+  "scoring_direction": "prediction_vs_reference",
+  "systems": {
+    "lrsum_llama": {
+      "num_examples": 1460,
+      "precision": 70.7406,
+      "recall": 69.2639,
+      "f1": 69.9823,
+      "predictions_file": "src/llm2seq/results/lrsum/llama/predictions.jsonl"
+    },
+    "lrsum_t5gemma": {
+      "num_examples": 1460,
+      "precision": 74.131,
+      "recall": 75.2371,
+      "f1": 74.6529,
+      "predictions_file": "src/T5Gemma/results/lrsum/predictions.jsonl"
+    },
+    "lrsum_qwen": {
+      "num_examples": 1460,
+      "precision": 72.2409,
+      "recall": 71.0393,
+      "f1": 71.619,
+      "predictions_file": "src/llm2seq/results/lrsum/qwen/predictions.jsonl"
+    }
+  }
+}
