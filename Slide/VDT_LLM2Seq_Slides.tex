@@ -127,7 +127,7 @@
   \centering
   \includegraphics[width=0.98\textwidth,height=0.78\textheight,keepaspectratio]{architecture_crop.pdf}
 
-  \smallnote{Qwen hoặc Llama đọc nguồn $\rightarrow$ adapter tạo source memory $\rightarrow$ decoder nhẹ $\rightarrow$ MTP có kiểm chứng.}
+  \smallnote{Encoder dùng LLM2Vec-Sheared-LLaMA hoặc Qwen3-Embedding-0.6B; decoder nhẹ; MTP có kiểm chứng.}
 \end{frame}
 
 \begin{frame}{Adapter: nối biểu diễn nguồn với decoder}
@@ -205,11 +205,14 @@
   \begin{columns}[T,onlytextwidth]
     \begin{column}{0.30\textwidth}
       \begin{block}{Hệ thống so sánh}
-        \begin{minipage}[t][3.05cm][t]{\linewidth}
+        \begin{minipage}[t][3.30cm][t]{\linewidth}
         \begin{itemize}
-          \item LLM2Seq-Llama: Llama encoder
-          \item LLM2Seq-Qwen: Qwen encoder
-          \item T5Gemma LoRA
+          \item \textbf{LLM2Seq-Llama}\\[-0.15em]
+          {\scriptsize LLM2Vec-Sheared-LLaMA encoder}
+          \item \textbf{LLM2Seq-Qwen}\\[-0.15em]
+          {\scriptsize Qwen3-Embedding-0.6B encoder}
+          \item \textbf{T5Gemma baseline}\\[-0.15em]
+          {\scriptsize T5Gemma-2-1B-1B LoRA}
         \end{itemize}
         \end{minipage}
       \end{block}
@@ -217,7 +220,7 @@
     \hfill
     \begin{column}{0.30\textwidth}
       \begin{block}{Thước đo}
-        \begin{minipage}[t][3.05cm][t]{\linewidth}
+        \begin{minipage}[t][3.30cm][t]{\linewidth}
         \begin{itemize}
           \item ROUGE-1/2/L
           \item BERTScore mBERT
@@ -230,7 +233,7 @@
     \hfill
     \begin{column}{0.30\textwidth}
       \begin{block}{Dữ liệu}
-        \begin{minipage}[t][3.05cm][t]{\linewidth}
+        \begin{minipage}[t][3.30cm][t]{\linewidth}
         \begin{itemize}
           \item WikiLingua
           \item LR-Sum
