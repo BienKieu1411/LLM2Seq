@@ -92,7 +92,7 @@
 \end{frame}
 
 \begin{frame}{Vì sao không chỉ dùng nén ngữ cảnh?}
-  \begin{columns}[T,onlytextwidth]
+  \begin{columns}[T,totalwidth=0.98\textwidth]
     \begin{column}{0.48\textwidth}
       \begin{block}{Nén ngữ cảnh}
         \begin{minipage}[t][3.25cm][t]{\linewidth}
@@ -123,6 +123,28 @@
   \end{center}
 \end{frame}
 
+\begin{frame}{Phát biểu bài toán}
+  \begin{block}{Mục tiêu}
+    \vspace{0.2em}
+    Tìm mô hình ước lượng phân phối của bản tóm tắt $y = (y_1, \ldots, y_n)$ dựa trên văn bản nguồn $x = (x_1, \ldots, x_m)$:
+    \vspace{-0.3em}
+    $$p(y|x)=\prod_{t=1}^{n}p(y_t \mid y_{<t},x)$$
+  \end{block}
+
+  \begin{block}{Công thức hóa LLM2Seq}
+    \vspace{0.2em}
+    \begin{itemize}
+      \item \textbf{Encoder}: Trích xuất hidden states từ LLM, $H=E_{\theta}(x)$.
+      \item \textbf{Adapter}: Biến đổi thành không gian bộ nhớ của decoder, $M=A_{\phi}(H)$.
+      \item \textbf{Decoder}: Sinh từng token tóm tắt dựa trên token trước đó và bộ nhớ nguồn, $p(y|x)=\prod_{t=1}^{n}p_{\psi}(y_t \mid y_{<t},M)$.
+    \end{itemize}
+  \end{block}
+  \vfill
+  \begin{center}
+    \small\alert{Việc tách biệt này giúp Encoder tập trung hiểu nguồn, Decoder tập trung sinh văn bản.}
+  \end{center}
+\end{frame}
+
 \begin{frame}{LLM2Seq: tổng quan kiến trúc}
   \centering
   \includegraphics[width=0.98\textwidth,height=0.78\textheight,keepaspectratio]{architecture_crop.pdf}
@@ -132,23 +154,92 @@
 
 \begin{frame}{Adapter: nối biểu diễn nguồn với decoder}
   \begin{columns}[c,onlytextwidth]
-    \begin{column}{0.53\textwidth}
-      \begin{block}{Ý tưởng}
-        \begin{itemize}
-          \item Lấy hidden states từ LLM đọc nguồn.
-          \item Trộn thông tin từ nhiều layer của LLM.
-          \item Gated projection đưa biểu diễn sang không gian decoder.
-          \item Decoder đọc source memory bằng cross-attention.
-        \end{itemize}
+    \begin{column}{0.54\textwidth}
+      \begin{block}{Các module cốt lõi}
+        \begin{enumerate}
+          \item \textbf{Token-wise Layer Fusion}: Trộn thông tin từ nhiều layer LLM theo từng token.
+          \item \textbf{Gated Residual Projection}: Đưa biểu diễn sang không gian của decoder.
+          \item \textbf{Token Salience Gate}: Đánh giá và nhấn mạnh các token mang thông tin quan trọng.
+          \item \textbf{EncStack}: Dùng 4 layer Transformer để tinh chỉnh cục bộ bộ nhớ nguồn.
+          \item \textbf{Global Memory Tokens}: Cung cấp các token toàn cục cho decoder tham chiếu.
+        \end{enumerate}
       \end{block}
     \end{column}
-    \begin{column}{0.43\textwidth}
+    \begin{column}{0.42\textwidth}
       \begin{center}
       \includegraphics[width=\linewidth,height=0.72\textheight,keepaspectratio]{adapter_flow_redrawn.pdf}
       \end{center}
     \end{column}
   \end{columns}
 
+\end{frame}
+
+\begin{frame}{Huấn luyện theo từng mức can thiệp}
+  \vspace{0.2em}
+  \begin{center}
+    \small\alert{Mỗi giai đoạn chỉ mở thêm phần cần thiết: học đọc nguồn, thích ứng encoder, rồi tăng tốc suy luận.}
+  \end{center}
+
+  \vspace{0.25em}
+  \begin{columns}[c,onlytextwidth]
+    \begin{column}{0.27\textwidth}
+      \begin{block}{GĐ 1: Khởi tạo}
+        \begin{minipage}[t][3.6cm][t]{\linewidth}
+        \small\raggedright
+        \textbf{Cố định}\\
+        LLM encoder
+
+        \vspace{0.55em}
+        \textbf{Cập nhật}\\
+        Adapter và decoder
+
+        \vspace{0.55em}
+        \textbf{Kết quả}\\
+        Decoder học đọc bộ nhớ nguồn $M$.
+        \end{minipage}
+      \end{block}
+    \end{column}
+    \begin{column}{0.06\textwidth}
+      \centering{\Large$\longrightarrow$}
+    \end{column}
+    \begin{column}{0.27\textwidth}
+      \begin{block}{GĐ 2: Thích ứng}
+        \begin{minipage}[t][3.6cm][t]{\linewidth}
+        \small\raggedright
+        \textbf{Mở khóa}\\
+        LoRA trên LLM encoder
+
+        \vspace{0.55em}
+        \textbf{Cập nhật}\\
+        LoRA, adapter và decoder
+
+        \vspace{0.55em}
+        \textbf{Kết quả}\\
+        Nguồn khớp hơn với tác vụ tóm tắt.
+        \end{minipage}
+      \end{block}
+    \end{column}
+    \begin{column}{0.06\textwidth}
+      \centering{\Large$\longrightarrow$}
+    \end{column}
+    \begin{column}{0.27\textwidth}
+      \begin{exampleblock}{GĐ 3: Tăng tốc}
+        \begin{minipage}[t][3.6cm][t]{\linewidth}
+        \small\raggedright
+        \textbf{Cố định}\\
+        Mô hình sau GĐ 2
+
+        \vspace{0.55em}
+        \textbf{Cập nhật}\\
+        4 MTP heads
+
+        \vspace{0.55em}
+        \textbf{Kết quả}\\
+        Draft-and-verify giảm số bước tự hồi quy.
+        \end{minipage}
+      \end{exampleblock}
+    \end{column}
+  \end{columns}
 \end{frame}
 
 \begin{frame}{Self-distilled MTP: tăng tốc có kiểm chứng}
@@ -202,51 +293,48 @@
 \end{frame}
 
 \begin{frame}{Thiết lập thí nghiệm}
-  \begin{columns}[T,onlytextwidth]
-    \begin{column}{0.30\textwidth}
-      \begin{block}{Hệ thống so sánh}
-        \begin{minipage}[t][3.65cm][t]{\linewidth}
+  \vspace{0.1em}
+  \begin{columns}[T,totalwidth=0.98\textwidth]
+    \begin{column}{0.545\textwidth}
+      \begin{block}{Ba hệ thống so sánh}
+        \begin{minipage}[t][4.95cm][t]{\linewidth}
+        \small\raggedright
+        \renewcommand{\arraystretch}{1.15}
+        \begin{tabular}{>{\bfseries}p{0.38\linewidth}>{\raggedright\arraybackslash}p{0.52\linewidth}}
+          LLM2Seq-Llama & LLM2Vec-Sheared-LLaMA encoder \\
+          LLM2Seq-Qwen & Qwen3-Embedding-0.6B encoder \\
+          T5Gemma & T5Gemma-2-1B-1B LoRA baseline \\
+        \end{tabular}
+
+        \vspace{0.55em}
+        \textbf{Dữ liệu kiểm thử}
         \begin{itemize}
-          \item \textbf{LLM2Seq-Llama}\\[-0.15em]
-          {\tiny LLM2Vec-Sheared-LLaMA encoder}
-          \item \textbf{LLM2Seq-Qwen}\\[-0.15em]
-          {\tiny Qwen3-Embedding-0.6B encoder}
-          \item \textbf{T5Gemma baseline}\\[-0.15em]
-          {\tiny T5Gemma-2-1B-1B LoRA}
+          \setlength{\itemsep}{0.25em}
+          \item WikiLingua: tóm tắt hướng dẫn, cần giữ trình tự thao tác.
+          \item LR-Sum: văn bản dài, cần cô đọng ý chính.
         \end{itemize}
         \end{minipage}
       \end{block}
     \end{column}
     \hfill
-    \begin{column}{0.30\textwidth}
-      \begin{block}{Thước đo}
-        \begin{minipage}[t][3.65cm][t]{\linewidth}
+    \begin{column}{0.36\textwidth}
+      \begin{exampleblock}{Bốn góc nhìn đánh giá}
+        \begin{minipage}[t][4.95cm][t]{\linewidth}
+        \small\raggedright
         \begin{itemize}
-          \item ROUGE-1/2/L
-          \item BERTScore mBERT
-          \item Thống kê độ dài
-          \item Token/s và độ trễ
+          \setlength{\itemsep}{0.35em}
+          \item \textbf{N-gram}: ROUGE-1/2/L
+          \item \textbf{Ngữ nghĩa}: BERTScore mBERT
+          \item \textbf{Hành vi sinh}: thống kê độ dài
+          \item \textbf{Tốc độ}: token/s và độ trễ
         \end{itemize}
+        \vspace{0.25em}
+        \centering
+        \alert{\small Chất lượng, độ dài và tốc độ được đọc cùng nhau.}
         \end{minipage}
-      \end{block}
-    \end{column}
-    \hfill
-    \begin{column}{0.30\textwidth}
-      \begin{block}{Dữ liệu}
-        \begin{minipage}[t][3.65cm][t]{\linewidth}
-        \begin{itemize}
-          \item WikiLingua
-          \item LR-Sum
-        \end{itemize}
-        \end{minipage}
-      \end{block}
+      \end{exampleblock}
     \end{column}
   \end{columns}
-
-  \vfill
-  \begin{center}
-    \normalsize\alert{Thiết lập này đánh giá ba khía cạnh: chất lượng tóm tắt, hành vi độ dài, và tốc độ suy luận.}
-  \end{center}
 \end{frame}
 
 \begin{frame}{Kết quả chính: chất lượng tóm tắt}
@@ -309,6 +397,64 @@
 
   \vfill
   \small\alert{Nhận xét}: Llama thường sinh ngắn. Qwen gần độ dài tham chiếu hơn. T5Gemma dài hơn, tăng độ trùng nhưng kém cô đọng hơn.
+\end{frame}
+
+\begin{frame}{Ví dụ định tính: Qwen giữ ý nguồn tốt hơn}
+  \begin{block}{Văn bản nguồn (WikiLingua)}
+    \small \textit{... Tùy vào loại da và mức độ nghiêm trọng của mụn ẩn mà bạn nên cân nhắc giữa phương pháp chườm ấm với chườm lạnh. Chườm ấm giúp làm khô mụn ẩn; chườm lạnh giúp giảm sưng đau. Không nên chườm đá trong giai đoạn đầu. Nếu là mụn lớn, viêm nghiêm trọng, nên chườm ấm để rút dịch ...}
+  \end{block}
+
+  \vspace{0.05em}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.305\textwidth}
+      \begin{alertblock}{LLM2Seq-Llama}
+        \begin{minipage}[t][3.05cm][t]{\linewidth}
+        \scriptsize\raggedright
+        \textbf{Sinh ra}\\
+        Dùng gel lô hội.\\
+        Thoa sữa rửa mặt nhẹ dịu.\\
+        Dù bằng dầu tràm trà.\\
+        Dưỡng ẩm cho da.
+
+        \vspace{0.35em}
+        \textbf{Hành vi}\\
+        Quá ngắn, bỏ mất ý chính và tự thêm chi tiết ngoài nguồn.
+        \end{minipage}
+      \end{alertblock}
+    \end{column}
+    \hfill
+    \begin{column}{0.305\textwidth}
+      \begin{exampleblock}{LLM2Seq-Qwen}
+        \begin{minipage}[t][3.05cm][t]{\linewidth}
+        \scriptsize\raggedright
+        \textbf{Sinh ra}\\
+        Chườm đá viên lên mụn.\\
+        Chườm gạc ấm lên mụn để giảm đau.\\
+        Sử dụng tinh dầu tràm trà...
+
+        \vspace{0.35em}
+        \textbf{Hành vi}\\
+        Bắt được ý chính về chườm ấm/lạnh, nhưng còn lẫn chỉ dẫn.
+        \end{minipage}
+      \end{exampleblock}
+    \end{column}
+    \hfill
+    \begin{column}{0.305\textwidth}
+      \begin{block}{T5Gemma}
+        \begin{minipage}[t][3.05cm][t]{\linewidth}
+        \scriptsize\raggedright
+        \textbf{Sinh ra}\\
+        Chườm ấm hoặc chườm lạnh.\\
+        Thử dùng táo và mật ong...\\
+        Dùng tinh dầu tràm trà...
+
+        \vspace{0.35em}
+        \textbf{Hành vi}\\
+        Diễn đạt tự nhiên hơn, nhưng sinh thêm thông tin phụ.
+        \end{minipage}
+      \end{block}
+    \end{column}
+  \end{columns}
 \end{frame}
 
 \begin{frame}{MTP trên WikiLingua: tăng tốc vừa phải}
