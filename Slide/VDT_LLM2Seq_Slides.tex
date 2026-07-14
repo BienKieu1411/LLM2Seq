@@ -58,6 +58,55 @@
   \centering\small Mentor: Đoàn Xuân Dũng - Viettel AI
 \end{frame}
 
+\begin{frame}{Bài toán tóm tắt văn bản}
+  \begin{center}
+    \small Một văn bản nguồn dài $x$ được rút thành tóm tắt ngắn $y$ nhưng vẫn giữ các ý chính.
+  \end{center}
+
+  \vspace{0.35em}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.30\textwidth}
+      \begin{block}{Trích xuất}
+        \begin{minipage}[t][2.35cm][t]{\linewidth}\small\raggedright
+        Chọn câu hoặc đoạn đã xuất hiện trong nguồn.
+
+        \vspace{0.45em}
+        Ít thay đổi cách diễn đạt.
+        \end{minipage}
+      \end{block}
+    \end{column}
+    \hfill
+    \begin{column}{0.30\textwidth}
+      \begin{exampleblock}{Trừu tượng}
+        \begin{minipage}[t][2.35cm][t]{\linewidth}\small\raggedright
+        Tổng hợp ý và diễn đạt lại bằng token mới.
+
+        \vspace{0.45em}
+        \textbf{Bài toán LLM2Seq.}
+        \end{minipage}
+      \end{exampleblock}
+    \end{column}
+    \hfill
+    \begin{column}{0.30\textwidth}
+      \begin{block}{Lai}
+        \begin{minipage}[t][2.35cm][t]{\linewidth}\small\raggedright
+        Kết hợp sao chép chi tiết quan trọng và sinh cách diễn đạt mới.
+
+        \vspace{0.45em}
+        Hữu ích khi cần độ trung thực cao.
+        \end{minipage}
+      \end{block}
+    \end{column}
+  \end{columns}
+
+  \vfill
+  \begin{center}
+    \normalsize\alert{Trong đề tài này, LLM2Seq tóm tắt từng văn bản tiếng Việt theo hướng trừu tượng.}
+
+    \smallnote{Theo số nguồn, tóm tắt còn có thể là một văn bản hoặc đa văn bản; WikiLingua và LR-Sum thuộc thiết lập một văn bản.}
+  \end{center}
+\end{frame}
+
 \begin{frame}{Từ bài toán đến hướng tiếp cận}
   \vspace{0.4em}
   \begin{columns}[T,onlytextwidth]
@@ -356,6 +405,33 @@
       \end{exampleblock}
     \end{column}
   \end{columns}
+\end{frame}
+
+\begin{frame}{Kiến trúc của hai source encoder}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.48\textwidth}
+      \begin{block}{LLM2Vec-Sheared-LLaMA-mntp}
+        \begin{minipage}[t][1.72cm][t]{\linewidth}\small\raggedright
+        \textbf{Backbone:} Sheared-LLaMA decoder-only.
+
+        \vspace{0.35em}
+        \textbf{Kiến trúc dùng:} LLM2Vec encoder hai chiều (bidirectional attention + MNTP).
+        \end{minipage}
+      \end{block}
+    \end{column}
+    \hfill
+    \begin{column}{0.48\textwidth}
+      \begin{exampleblock}{Qwen3-Embedding-0.6B}
+        \begin{minipage}[t][1.72cm][t]{\linewidth}\small\raggedright
+        \textbf{Backbone:} Qwen3-0.6B-Base.
+
+        \vspace{0.35em}
+        \textbf{Kiến trúc dùng:} Qwen3 causal Transformer đã huấn luyện cho text embedding đa ngôn ngữ.
+        \end{minipage}
+      \end{exampleblock}
+    \end{column}
+  \end{columns}
+
 \end{frame}
 
 \begin{frame}{So sánh hai cấu hình LLM2Seq và T5Gemma}
