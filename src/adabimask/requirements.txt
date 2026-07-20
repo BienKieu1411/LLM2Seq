@@ -1,0 +1,7 @@
+torch>=2.4
+transformers>=4.51,<5
+peft>=0.14,<1
+accelerate>=1.0
+pyyaml>=6.0
+numpy>=1.24
+rouge-score>=0.1.2

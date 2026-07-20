@@ -1,0 +1,13 @@
+_base_: ../base.yaml
+
+experiment:
+  name: learnable_budget_8_layers
+  output_dir: runs/adabimask/learnable_k8
+
+mask:
+  mode: learnable
+  budget_groups: 2
+  init_probability: 0.285714
+
+training:
+  epochs: 2

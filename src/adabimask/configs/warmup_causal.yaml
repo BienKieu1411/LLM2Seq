@@ -1,0 +1,15 @@
+_base_: base.yaml
+
+experiment:
+  name: warmup_causal_decoder
+  output_dir: runs/adabimask/warmup_causal
+
+model:
+  use_lora: false
+  train_base: false
+
+mask:
+  mode: causal
+
+training:
+  epochs: 3

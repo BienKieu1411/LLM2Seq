@@ -1,0 +1,8 @@
+_base_: ../base.yaml
+
+experiment:
+  name: encoder_decoder_full_bidirectional
+  output_dir: runs/adabimask/full
+
+mask:
+  mode: full

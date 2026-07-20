@@ -3,7 +3,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 
-
 OUT = Path(__file__).parent / "figures" / "adapter_flow_polished.pdf"
 
 NAVY = "#123A7A"

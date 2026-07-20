@@ -1,0 +1,73 @@
+experiment:
+  name: adabimask_base
+  kind: encoder_decoder
+  output_dir: runs/adabimask/base
+
+model:
+  encoder_name: Qwen/Qwen3-0.6B-Base
+  dtype: bfloat16
+  use_lora: true
+  train_base: false
+  gradient_checkpointing: true
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+mask:
+  mode: causal
+  num_groups: 7
+  budget_groups: 2
+  fixed_strategy: middle
+  selected_groups: []
+  random_seed: 42
+  init_probability: 0.285714
+  temperature: 1.0
+  hard_eval: true
+  budget_weight: 0.05
+  binary_weight: 0.01
+
+decoder:
+  num_layers: 8
+  hidden_size: 1024
+  num_heads: 16
+  ffn_size: 4096
+  dropout: 0.1
+  tie_embeddings: true
+  max_target_length: 384
+
+training:
+  epochs: 4
+  batch_size: 2
+  gradient_accumulation_steps: 16
+  num_workers: 2
+  encoder_lr: 5.0e-5
+  adaptor_lr: 2.0e-4
+  decoder_lr: 2.0e-4
+  gate_lr: 1.0e-2
+  warmup_ratio: 0.05
+  min_lr_ratio: 0.1
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true
+  fp16: false
+  tf32: true
+  seed: 42
+  log_every_steps: 10
+
+data:
+  train_file: src/llm2seq/data/processed/train.jsonl
+  validation_file: src/llm2seq/data/processed/validation.jsonl
+  test_file: src/llm2seq/data/processed/test.jsonl
+  source_prefix: "Tóm tắt văn bản sau:\n"
+  target_prefix: "\nTóm tắt:\n"
+  max_source_length: 3072
+  max_target_length: 384
+
+generation:
+  batch_size: 8
+  min_new_tokens: 16
+  max_new_tokens: 256
+  repetition_penalty: 1.1
+  no_repeat_ngram_size: 3

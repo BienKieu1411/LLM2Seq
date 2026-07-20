@@ -1,0 +1,13 @@
+_base_: ../base.yaml
+
+experiment:
+  name: learnable_budget_12_layers
+  output_dir: runs/adabimask/learnable_k12
+
+mask:
+  mode: learnable
+  budget_groups: 3
+  init_probability: 0.428571
+
+training:
+  epochs: 2
