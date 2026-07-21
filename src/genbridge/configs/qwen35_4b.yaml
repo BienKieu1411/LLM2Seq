@@ -1,0 +1,23 @@
+_base_: base.yaml
+
+experiment:
+  name: genbridge_qwen35_4b
+  output_dir: runs/genbridge/qwen35_4b
+
+model:
+  encoder_name: Qwen/Qwen3.5-4B
+
+decoder:
+  pretrained_name: Qwen/Qwen3.5-4B
+  num_layers: 32
+
+training:
+  # Two independent 4B backbones are fully trainable. Quantizing only Adam's
+  # optimizer states is required to leave B200 memory for activations.
+  batch_size: 2
+  gradient_accumulation_steps: 16
+  optimizer: adamw_8bit
+  full_lr: 5.0e-6
+
+generation:
+  batch_size: 2

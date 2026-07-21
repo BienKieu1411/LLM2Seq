@@ -1,0 +1,39 @@
+_base_: base.yaml
+
+experiment:
+  name: genbridge_qwen3_0_6b_smoke_100
+  output_dir: runs/genbridge/qwen3_0_6b_smoke_100
+
+# Replace both values with the same local checkpoint directory when the model
+# has already been downloaded. The directory must contain config.json,
+# tokenizer files, and model*.safetensors.
+model:
+  encoder_name: Qwen/Qwen3-0.6B
+
+decoder:
+  pretrained_name: Qwen/Qwen3-0.6B
+  num_layers: 28
+
+training:
+  # Qualitative overfit test: 75 interface updates then 225 full-FT updates.
+  # The paper configs remain 2 warm-up + 8 full epochs at effective batch 32.
+  epochs: 12
+  interface_warmup_epochs: 3
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  num_workers: 2
+  full_lr: 2.0e-5
+  log_every_steps: 1
+
+data:
+  max_train_samples: 100
+  max_validation_samples: 32
+  # Smoke inference intentionally checks examples seen during this tiny run.
+  test_file: data/wikilingua/train.jsonl
+  max_source_length: 768
+  max_target_length: 128
+  precompute_evidence_on_load: true
+
+generation:
+  batch_size: 2
+  max_new_tokens: 128

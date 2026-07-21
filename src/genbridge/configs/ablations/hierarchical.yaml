@@ -1,0 +1,18 @@
+_base_: ../base.yaml
+
+experiment:
+  name: hierarchical_bidirectional_only
+  output_dir: runs/genbridge/hierarchical
+
+bridge:
+  mode: hierarchical
+  use_salience_loss: true
+  use_plan_alignment: false
+
+decoder:
+  memory_attention: concat
+
+objectives:
+  salience_weight: 0.2
+  plan_alignment_weight: 0.0
+  plan_diversity_weight: 0.0

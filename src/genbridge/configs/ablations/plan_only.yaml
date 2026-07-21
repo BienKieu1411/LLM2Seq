@@ -1,0 +1,11 @@
+_base_: ../base.yaml
+
+experiment:
+  name: summary_plan_without_full_token_memory
+  output_dir: runs/genbridge/plan_only
+
+bridge:
+  mode: plan_only
+
+decoder:
+  memory_attention: concat

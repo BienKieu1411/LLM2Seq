@@ -1,0 +1,104 @@
+experiment:
+  name: genbridge_qwen35_wikilingua
+  kind: encoder_decoder
+  output_dir: runs/genbridge/base
+
+model:
+  encoder_name: Qwen/Qwen3.5-0.8B
+  dtype: bfloat16
+  train_base: true
+  gradient_checkpointing: true
+  # Learned suffix states. Because they follow the source under a causal mask,
+  # every state has read the complete document before planning the summary.
+  num_summary_tokens: 16
+  layer_fusion:
+    enabled: false
+    indices: [-1, -5, -9, -13]
+
+bridge:
+  # genbridge is the proposed model. Other modes exist only for ablations.
+  mode: genbridge
+  hidden_size: 512
+  token_num_layers: 2
+  unit_num_layers: 1
+  num_heads: 8
+  ffn_size: 2048
+  use_salience_loss: true
+  use_plan_alignment: true
+  dropout: 0.1
+
+decoder:
+  pretrained_name: Qwen/Qwen3.5-0.8B
+  # Keep the complete pretrained decoder for the main quality result.
+  num_layers: 24
+  # Qwen3.5 groups three DeltaNet layers followed by one full-attention layer.
+  # Cross-attention is injected once per four-layer group rather than into all
+  # layers, which keeps the new parameter count controlled at 4B scale.
+  cross_attention_every: 4
+  # Main contribution: normalize attention over full token evidence and the
+  # compact output plan separately, then mix them with a learned query gate.
+  memory_attention: gated_dual
+  # Start from 90% token evidence / 10% plan to protect pretrained generation.
+  plan_gate_init: 0.1
+  gradient_checkpointing: true
+  cross_attention_dropout: 0.0
+
+objectives:
+  salience_weight: 0.2
+  plan_alignment_weight: 0.1
+  plan_diversity_weight: 0.01
+
+training:
+  # Epochs 1-2 train only the new adapter/interface. Epochs 3-10 full-FT every
+  # encoder and decoder parameter; there is no LoRA path in this package.
+  epochs: 10
+  interface_warmup_epochs: 2
+  skip_interface_warmup_on_resume: true
+  batch_size: 32
+  gradient_accumulation_steps: 1
+  num_workers: 4
+  adapter_warmup_lr: 1.0e-4
+  # One common LR for every parameter after warm-up.
+  full_lr: 1.0e-5
+  warmup_ratio: 0.05
+  min_lr_ratio: 0.1
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true
+  fp16: false
+  tf32: true
+  fused_optimizer: true
+  optimizer: adamw_torch
+  seed: 42
+  log_every_steps: 10
+
+data:
+  train_file: data/wikilingua/train.jsonl
+  validation_file: data/wikilingua/validation.jsonl
+  test_file: data/wikilingua/test.jsonl
+  source_prefix: "Tóm tắt thành các bước hành động ngắn, đúng thứ tự; không thêm thông tin.\nVăn bản:\n"
+  target_prefix: "\nCác bước:\n"
+  # Teacher forcing and autoregressive decoding start from the same concise
+  # Vietnamese task anchor; it is not included in scored predictions.
+  decoder_prefix: "Các bước:\n"
+  # Dataset profile: the model pools configurable evidence units, not WikiHow-only steps.
+  evidence_unit: sentence
+  sentence_separator: "\n"
+  use_chat_template: true
+  clean_wikihow_metadata: true
+  max_source_length: 3072
+  max_target_length: 384
+  oracle_max_units: 12
+  oracle_budget_mode: target_units
+  oracle_fixed_units: 3
+  oracle_rouge1_weight: 0.5
+  oracle_rouge2_weight: 0.5
+  # Compute the oracle once before training; avoids repeating CPU ROUGE search every epoch.
+  precompute_evidence_on_load: true
+
+generation:
+  batch_size: 32
+  min_new_tokens: 16
+  max_new_tokens: 256
+  repetition_penalty: 1.05
+  no_repeat_ngram_size: 3

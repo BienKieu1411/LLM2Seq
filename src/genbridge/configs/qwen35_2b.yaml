@@ -1,0 +1,22 @@
+_base_: base.yaml
+
+experiment:
+  name: genbridge_qwen35_2b
+  output_dir: runs/genbridge/qwen35_2b
+
+model:
+  encoder_name: Qwen/Qwen3.5-2B
+
+decoder:
+  pretrained_name: Qwen/Qwen3.5-2B
+  num_layers: 24
+
+training:
+  # Effective batch is 32 on one B200.
+  batch_size: 8
+  gradient_accumulation_steps: 4
+  optimizer: adamw_torch
+  full_lr: 8.0e-6
+
+generation:
+  batch_size: 4
