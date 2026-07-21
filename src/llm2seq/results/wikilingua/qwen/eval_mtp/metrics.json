@@ -1,8 +1,8 @@
 {
-  "rouge1": 53.9025,
-  "rouge2": 20.8074,
-  "rougeL": 31.6363,
-  "rougeLsum": 31.6363,
+  "rouge1": 24.1205,
+  "rouge2": 7.9773,
+  "rougeL": 24.4636,
+  "rougeLsum": 24.4636,
   "bertscore_precision": 72.7072,
   "bertscore_recall": 73.961,
   "bertscore_f1": 73.264,
@@ -55,5 +55,7 @@
     0.013228
   ],
   "mtp_verified_with_main": true,
-  "mtp_fallback_to_autoregressive_rate": 0.0
+  "mtp_fallback_to_autoregressive_rate": 0.0,
+  "rouge_backend": "rouge==1.0.0 (HeterSumGraph)",
+  "rouge_preprocessing": "NFC + lowercase + stored whitespace tokenization"
 }

@@ -92,6 +92,8 @@ scripts/compare_speed_metrics.py
 ```
 
 The report uses ROUGE, BERTScore, length statistics, and runtime metrics generated from these scripts.
+All ROUGE values use HeterSumGraph's `rouge==1.0.0` protocol: NFC normalization,
+lowercase text, stored whitespace tokenization, and macro-averaged F1.
 
 ## Notes
 

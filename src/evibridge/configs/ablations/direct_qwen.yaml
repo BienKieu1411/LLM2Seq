@@ -1,9 +1,0 @@
-_base_: ../base.yaml
-
-experiment:
-  name: direct_qwen35_full_ft
-  kind: direct_causal
-  output_dir: runs/evibridge/direct_qwen
-
-training:
-  interface_warmup_epochs: 0

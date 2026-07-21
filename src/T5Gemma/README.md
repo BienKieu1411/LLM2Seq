@@ -3,6 +3,10 @@
 Baseline fine-tuning for WikiLingua summarization with a T5Gemma encoder-decoder
 model.
 
+Evaluation uses the same HeterSumGraph-compatible `rouge==1.0.0` protocol as
+LLM2Seq: NFC normalization, lowercase text, stored whitespace tokenization,
+and macro-averaged F1.
+
 This folder is standalone. Upload the whole `T5Gemma/` directory to the server;
 do not rely on files outside this directory.
 

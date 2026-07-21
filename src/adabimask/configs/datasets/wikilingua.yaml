@@ -1,6 +1,0 @@
-_base_: ../base.yaml
-
-experiment:
-  name: adabimask_qwen35_wikilingua
-  output_dir: runs/adabimask/wikilingua
-

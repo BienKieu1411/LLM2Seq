@@ -436,13 +436,26 @@
 
 \begin{frame}{So sánh hai cấu hình LLM2Seq và T5Gemma}
   \centering
-  \includegraphics[width=0.98\textwidth,height=0.66\textheight,keepaspectratio]{quality_metrics.pdf}
+  \small
+  \setlength{\tabcolsep}{5pt}\renewcommand{\arraystretch}{1.08}
+  \begin{tabular}{llrrr}
+    \toprule Dataset & Model & R-1 & R-2 & R-L \\ \midrule
+    \multirow{3}{*}{WikiLingua} & LLM2Seq-Llama & 17.28 & 4.70 & 18.71 \\
+    & \cellcolor{LLMBlue!35}LLM2Seq-Qwen & \cellcolor{LLMBlue!35}24.14 & \cellcolor{LLMBlue!35}8.04 & \cellcolor{LLMBlue!35}24.55 \\
+    & \cellcolor{LLMGreen!35}T5Gemma & \cellcolor{LLMGreen!35}\textbf{33.10} & \cellcolor{LLMGreen!35}\textbf{13.76} & \cellcolor{LLMGreen!35}\textbf{31.64} \\ \midrule
+    \multirow{3}{*}{LR-Sum} & LLM2Seq-Llama & 12.83 & 2.74 & 10.16 \\
+    & \cellcolor{LLMBlue!35}LLM2Seq-Qwen & \cellcolor{LLMBlue!35}18.71 & \cellcolor{LLMBlue!35}5.84 & \cellcolor{LLMBlue!35}15.60 \\
+    & \cellcolor{LLMGreen!35}T5Gemma & \cellcolor{LLMGreen!35}\textbf{30.09} & \cellcolor{LLMGreen!35}\textbf{18.42} & \cellcolor{LLMGreen!35}\textbf{27.31} \\ \bottomrule
+  \end{tabular}
+
+  \vspace{0.35em}
+  \scriptsize HeterSumGraph \texttt{rouge==1.0.0}; NFC + lowercase; macro F1.
 
   \vfill
   \begin{columns}[T,onlytextwidth]
     \begin{column}{0.31\textwidth}\centering\scriptsize\textbf{LLM2Seq-Qwen}\\[-0.15em]\textbf{$>$ LLM2Seq-Llama}\\trên cả hai bộ dữ liệu\\{\scriptsize\color{blue!65!black}System-level comparison}\end{column}
-    \begin{column}{0.34\textwidth}\centering\small\textbf{54.01 $\approx$ 54.24}\\ WikiLingua R-1\end{column}
-    \begin{column}{0.31\textwidth}\centering\small\textbf{T5Gemma dẫn đầu}\\ ở R-2 và R-L\end{column}
+    \begin{column}{0.34\textwidth}\centering\small\textbf{Qwen $>$ Llama}\\ trên cả R-1/2/L\end{column}
+    \begin{column}{0.31\textwidth}\centering\small\textbf{T5Gemma dẫn đầu}\\ trên cả R-1/2/L\end{column}
   \end{columns}
 \end{frame}
 
@@ -582,7 +595,7 @@
       \begin{block}{Vấn đề còn lại}
         \begin{minipage}[t][3.35cm][t]{\linewidth}
         \begin{itemize}
-          \item Chưa vượt T5Gemma ở ROUGE-2 và ROUGE-L.
+          \item Chưa vượt T5Gemma ở ROUGE-1, ROUGE-2 và ROUGE-L.
           \item Chưa có full adapter ablation hay human factuality evaluation.
           \item MTP prototype còn chịu chi phí verification và cache.
         \end{itemize}
@@ -602,7 +615,7 @@
     LLM2Seq chuyển token-level LLM hidden states thành decoder-readable memory qua gated residual adapter.
   \end{block}
   \begin{block}{Chất lượng}
-    Qwen cải thiện rõ so với Llama và gần T5Gemma ở WikiLingua ROUGE-1, nhưng baseline vẫn mạnh hơn tổng thể.
+    Qwen cải thiện rõ so với Llama, nhưng T5Gemma vẫn cao hơn trên cả ROUGE-1/2/L.
   \end{block}
   \begin{exampleblock}{Hiệu quả suy luận}
     Verified MTP đạt 1.17$\times$ throughput; tốc độ thực phụ thuộc mạnh vào verification overhead.
@@ -650,12 +663,12 @@
   \setlength{\tabcolsep}{5pt}\renewcommand{\arraystretch}{1.12}
   \begin{tabular}{llrrrr}
     \toprule Dataset & Model & R-1 & R-2 & R-L & BERT-F1 \\ \midrule
-    \multirow{3}{*}{WikiLingua} & LLM2Seq-Llama & 48.36 & 15.54 & 29.05 & 73.02 \\
-    & \cellcolor{LLMBlue!35}LLM2Seq-Qwen & \cellcolor{LLMBlue!35}\textbf{54.01} & \cellcolor{LLMBlue!35}\textbf{20.83} & \cellcolor{LLMBlue!35}\textbf{31.83} & \cellcolor{LLMBlue!35}\textbf{73.42} \\
-    & \cellcolor{LLMGreen!35}T5Gemma & \cellcolor{LLMGreen!35}\textbf{54.24} & \cellcolor{LLMGreen!35}\textbf{27.42} & \cellcolor{LLMGreen!35}\textbf{33.89} & \cellcolor{LLMGreen!35}\textbf{74.98} \\ \midrule
-    \multirow{3}{*}{LR-Sum} & LLM2Seq-Llama & 50.49 & 12.08 & 29.41 & 69.98 \\
-    & \cellcolor{LLMBlue!35}LLM2Seq-Qwen & \cellcolor{LLMBlue!35}\textbf{51.59} & \cellcolor{LLMBlue!35}\textbf{15.58} & \cellcolor{LLMBlue!35}\textbf{31.21} & \cellcolor{LLMBlue!35}\textbf{71.62} \\
-    & \cellcolor{LLMGreen!35}T5Gemma & \cellcolor{LLMGreen!35}\textbf{58.79} & \cellcolor{LLMGreen!35}\textbf{27.34} & \cellcolor{LLMGreen!35}\textbf{39.86} & \cellcolor{LLMGreen!35}\textbf{74.65} \\ \bottomrule
+    \multirow{3}{*}{WikiLingua} & LLM2Seq-Llama & 17.28 & 4.70 & 18.71 & 73.02 \\
+    & \cellcolor{LLMBlue!35}LLM2Seq-Qwen & \cellcolor{LLMBlue!35}\textbf{24.14} & \cellcolor{LLMBlue!35}\textbf{8.04} & \cellcolor{LLMBlue!35}\textbf{24.55} & \cellcolor{LLMBlue!35}\textbf{73.42} \\
+    & \cellcolor{LLMGreen!35}T5Gemma & \cellcolor{LLMGreen!35}\textbf{33.10} & \cellcolor{LLMGreen!35}\textbf{13.76} & \cellcolor{LLMGreen!35}\textbf{31.64} & \cellcolor{LLMGreen!35}\textbf{74.98} \\ \midrule
+    \multirow{3}{*}{LR-Sum} & LLM2Seq-Llama & 12.83 & 2.74 & 10.16 & 69.98 \\
+    & \cellcolor{LLMBlue!35}LLM2Seq-Qwen & \cellcolor{LLMBlue!35}\textbf{18.71} & \cellcolor{LLMBlue!35}\textbf{5.84} & \cellcolor{LLMBlue!35}\textbf{15.60} & \cellcolor{LLMBlue!35}\textbf{71.62} \\
+    & \cellcolor{LLMGreen!35}T5Gemma & \cellcolor{LLMGreen!35}\textbf{30.09} & \cellcolor{LLMGreen!35}\textbf{18.42} & \cellcolor{LLMGreen!35}\textbf{27.31} & \cellcolor{LLMGreen!35}\textbf{74.65} \\ \bottomrule
   \end{tabular}
   \vfill\small Blue: best LLM2Seq. \quad Green: best overall.
 \end{frame}

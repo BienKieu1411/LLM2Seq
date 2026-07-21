@@ -1,5 +1,0 @@
-_base_: ../base.yaml
-
-experiment:
-  name: evibridge_wikilingua
-  output_dir: runs/evibridge/wikilingua

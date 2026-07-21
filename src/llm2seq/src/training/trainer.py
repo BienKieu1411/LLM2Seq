@@ -34,6 +34,7 @@ from torch.utils.data import DataLoader
 from ..data.collator import Seq2SeqCollator
 from ..data.dataset import Seq2SeqDataset
 from ..inference.generate import autoregressive_generate
+from ..metrics import heter_sum_graph_rouge
 
 # Local imports
 from ..models.llm2seq_model import LLM2Seq, LLM2SeqConfig
@@ -1027,17 +1028,9 @@ def train(
 
 
 def _compute_rouge_scores(predictions: list[str], references: list[str]) -> dict[str, float]:
-    """Compute ROUGE scores. Lazy-imports rouge_scorer to avoid loading it at trainer import time."""
-    from rouge_score import rouge_scorer as _rs
+    """Compute HeterSumGraph-compatible macro ROUGE F1."""
 
-    scorer = _rs.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=False)
-    totals = {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
-    for pred, ref in zip(predictions, references):
-        scores = scorer.score(ref, pred)
-        for name in totals:
-            totals[name] += scores[name].fmeasure
-    n = max(1, len(predictions))
-    return {name: round((v / n) * 100.0, 2) for name, v in totals.items()}
+    return heter_sum_graph_rouge(predictions, references, digits=2)
 
 
 @torch.no_grad()

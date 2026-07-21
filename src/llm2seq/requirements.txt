@@ -8,7 +8,8 @@ peft==0.11.1
 # Evaluation
 evaluate>=0.4
 sacrebleu>=2.3
-rouge-score>=0.1.2
+# HeterSumGraph-compatible Unicode/whitespace ROUGE protocol.
+rouge==1.0.0
 bert-score>=0.3.13
 
 # Tokenization

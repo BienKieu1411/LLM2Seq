@@ -37,24 +37,24 @@
   },
   "quality_delta": {
     "rouge1": {
-      "main": 54.0099,
-      "mtp_verified": 53.9025,
-      "delta": -0.1074
+      "main": 24.1378,
+      "mtp_verified": 24.1205,
+      "delta": -0.0173
     },
     "rouge2": {
-      "main": 20.8292,
-      "mtp_verified": 20.8074,
-      "delta": -0.0218
+      "main": 8.0361,
+      "mtp_verified": 7.9773,
+      "delta": -0.0588
     },
     "rougeL": {
-      "main": 31.8259,
-      "mtp_verified": 31.6363,
-      "delta": -0.1896
+      "main": 24.5533,
+      "mtp_verified": 24.4636,
+      "delta": -0.0897
     },
     "rougeLsum": {
-      "main": 31.8259,
-      "mtp_verified": 31.6363,
-      "delta": -0.1896
+      "main": 24.5533,
+      "mtp_verified": 24.4636,
+      "delta": -0.0897
     },
     "bleu": {
       "main": 7.5828,
@@ -68,8 +68,8 @@
     }
   },
   "files": {
-    "main_metrics": "runs/phase3_mtp_self_distill_qwen_wikilingua/eval_ar/metrics.json",
-    "mtp_metrics": "runs/phase3_mtp_self_distill_qwen_wikilingua/eval_mtp/metrics.json"
+    "main_metrics": "src/llm2seq/results/wikilingua/qwen/eval_base/metrics.json",
+    "mtp_metrics": "src/llm2seq/results/wikilingua/qwen/eval_mtp/metrics.json"
   },
   "note": "Use real_decode_tokens_per_second_speedup and latency_*_speedup as the real measured speedup. mtp_theoretical_decode_step_speedup only measures fewer verifier steps, not full serving latency."
 }

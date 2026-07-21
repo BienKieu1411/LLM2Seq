@@ -1,8 +1,8 @@
 {
-  "rouge1": 48.3643,
-  "rouge2": 15.5403,
-  "rougeL": 29.0525,
-  "rougeLsum": 29.0525,
+  "rouge1": 17.2773,
+  "rouge2": 4.7046,
+  "rougeL": 18.711,
+  "rougeLsum": 18.711,
   "bertscore_precision": 74.0794,
   "bertscore_recall": 72.1137,
   "bertscore_f1": 73.0223,
@@ -73,5 +73,7 @@
     0.03218,
     0.01558
   ],
-  "mtp_verified_with_main": true
+  "mtp_verified_with_main": true,
+  "rouge_backend": "rouge==1.0.0 (HeterSumGraph)",
+  "rouge_preprocessing": "NFC + lowercase + stored whitespace tokenization"
 }

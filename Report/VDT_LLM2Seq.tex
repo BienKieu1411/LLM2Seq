@@ -604,9 +604,11 @@ Appendix~\ref{app:hparams} summarizes the training and decoding configuration.
 We report ROUGE \citep{lin2004rouge}, BERTScore \citep{zhang2020bertscore}, length statistics, and speed.
 ROUGE-1 and ROUGE-2 measure unigram and bigram overlap.
 ROUGE-L measures longest common subsequence overlap.
-We report F1 for all ROUGE scores.
-For Vietnamese text, ROUGE is computed with the Python \texttt{rouge-score} implementation using \texttt{use\_stemmer=False}.
-Decoded strings are evaluated directly.
+We report macro-averaged F1 for all ROUGE scores.
+For Vietnamese text, ROUGE is computed with the HeterSumGraph protocol using
+\texttt{rouge==1.0.0} and \texttt{Rouge().get\_scores(..., avg=True)}.
+Both predictions and references are normalized to Unicode NFC and lowercase;
+the stored whitespace and punctuation tokenization is otherwise preserved.
 Length statistics use whitespace-separated tokens from \texttt{text.split()}, which we call words for readability.
 We do not apply Vietnamese word segmentation such as VnCoreNLP or underthesea.
 This choice is important because Vietnamese word segmentation can change overlap scores.
@@ -637,14 +639,13 @@ They cover summarization quality, encoder configuration, and decoding speed.
 \subsection{RQ1: Viability of LLM-Based Encoders}
 
 Table~\ref{tab:main-results} reports WikiLingua and LR-Sum test results.
-On WikiLingua, the Qwen-based LLM2Seq system achieves 54.01 ROUGE-1, 20.83 ROUGE-2, 31.83 ROUGE-L, and 73.42 BERTScore F1.
+On WikiLingua, the Qwen-based LLM2Seq system achieves 24.14 ROUGE-1, 8.04 ROUGE-2, 24.55 ROUGE-L, and 73.42 BERTScore F1.
 The WikiLingua result shows that a pretrained LLM-based encoder can provide useful cross-attention memory for an encoder-decoder summarizer.
 On WikiLingua, the Llama-based system also produces valid summaries.
 Its ROUGE scores are lower, and its outputs are much shorter.
 These differences indicate that encoder configuration has a substantial effect on output length and ROUGE.
 
-On WikiLingua, LLM2Seq-Qwen is close to T5Gemma on ROUGE-1.
-It is lower on ROUGE-2 and ROUGE-L.
+On WikiLingua, LLM2Seq-Qwen is better than the Llama configuration, but T5Gemma is higher on all three ROUGE metrics.
 The result supports the LLM2Seq design, but it does not show that LLM2Seq outperforms T5Gemma.
 It also depends on the encoder choice and output length.
 
@@ -656,13 +657,13 @@ It also depends on the encoder choice and output length.
 \toprule
 Dataset & Model & R-1 & R-2 & R-L & BERT-P & BERT-R & BERT-F1 & Avg. Words & Too Long (\%) \\
 \midrule
-\multirow{3}{*}{WikiLingua} & LLM2Seq-Llama & 48.36 & 15.54 & 29.05 & \textbf{74.08} & 72.11 & 73.02 & 29.10 & 5.46 \\
- & LLM2Seq-Qwen & 54.01 & 20.83 & 31.83 & 72.87 & 74.11 & 73.42 & 58.31 & 35.79 \\
- & T5Gemma & \textbf{54.24} & \textbf{27.42} & \textbf{33.89} & 71.99 & \textbf{78.40} & \textbf{74.98} & 90.89 & 68.03 \\
+\multirow{3}{*}{WikiLingua} & LLM2Seq-Llama & 17.28 & 4.70 & 18.71 & \textbf{74.08} & 72.11 & 73.02 & 29.10 & 5.46 \\
+ & LLM2Seq-Qwen & 24.14 & 8.04 & 24.55 & 72.87 & 74.11 & 73.42 & 58.31 & 35.79 \\
+ & T5Gemma & \textbf{33.10} & \textbf{13.76} & \textbf{31.64} & 71.99 & \textbf{78.40} & \textbf{74.98} & 90.89 & 68.03 \\
 \midrule
-\multirow{3}{*}{LR-Sum} & LLM2Seq-Llama & 50.49 & 12.08 & 29.41 & 70.74 & 69.26 & 69.98 & 26.78 & 4.18 \\
- & LLM2Seq-Qwen & 51.59 & 15.58 & 31.21 & 72.24 & 71.04 & 71.62 & 29.50 & 6.92 \\
- & T5Gemma & \textbf{58.79} & \textbf{27.34} & \textbf{39.86} & \textbf{74.13} & \textbf{75.24} & \textbf{74.65} & 33.73 & 14.18 \\
+\multirow{3}{*}{LR-Sum} & LLM2Seq-Llama & 12.83 & 2.74 & 10.16 & 70.74 & 69.26 & 69.98 & 26.78 & 4.18 \\
+ & LLM2Seq-Qwen & 18.71 & 5.84 & 15.60 & 72.24 & 71.04 & 71.62 & 29.50 & 6.92 \\
+ & T5Gemma & \textbf{30.09} & \textbf{18.42} & \textbf{27.31} & \textbf{74.13} & \textbf{75.24} & \textbf{74.65} & 33.73 & 14.18 \\
 \bottomrule
 \end{tabular}
 \caption{Test results on WikiLingua and Vietnamese LR-Sum.
@@ -676,7 +677,7 @@ BERTScore uses \texttt{bert-base-multilingual-cased} without baseline rescaling.
 On LR-Sum, LLM2Seq-Qwen improves over LLM2Seq-Llama.
 The gain is clearest on ROUGE-2 and BERTScore F1.
 Its average output length is also close to the reference length.
-T5Gemma still achieves substantially higher ROUGE-2 and ROUGE-L scores.
+T5Gemma still achieves substantially higher ROUGE-1, ROUGE-2, and ROUGE-L scores.
 The LR-Sum LLM2Seq outputs are fluent, but they can choose wrong entities or events.
 Such errors lower n-gram overlap with the reference.
 
@@ -729,9 +730,9 @@ The measured speedup is 1.17x, with mean latency decreasing from 0.779s to 0.662
 \toprule
 Model & Mode & tok/s & Spd. & Lat. & Emit & Draft & R-1 & R-2 & R-L & BERT-F1 \\
 \midrule
-Llama & AR & 114.74 & 1.00x & 0.697 & 1.00 & 0.00 & 48.36 & 15.54 & 29.05 & 73.02 \\
-Qwen & AR & 95.87 & 1.00x & 0.779 & 1.00 & 0.00 & 54.01 & 20.83 & 31.83 & 73.42 \\
-Qwen & MTP & \textbf{111.71} & \textbf{1.17x} & \textbf{0.662} & 2.30 & 0.44 & 53.90 & 20.81 & 31.64 & 73.26 \\
+Llama & AR & 114.74 & 1.00x & 0.697 & 1.00 & 0.00 & 17.28 & 4.70 & 18.71 & 73.02 \\
+Qwen & AR & 95.87 & 1.00x & 0.779 & 1.00 & 0.00 & 24.14 & 8.04 & 24.55 & 73.42 \\
+Qwen & MTP & \textbf{111.71} & \textbf{1.17x} & \textbf{0.662} & 2.30 & 0.44 & 24.12 & 7.98 & 24.46 & 73.26 \\
 \bottomrule
 \end{tabular}
 \caption{WikiLingua AR and verified MTP results.
@@ -813,7 +814,7 @@ The demo is intended for qualitative inspection, while the main evidence comes f
 \label{sec:discussion}
 
 LLM2Seq shows that LLM-based encoders can be reused inside an encoder-decoder summarizer.
-On WikiLingua, the Qwen variant is close to T5Gemma on ROUGE-1 while producing shorter summaries, which supports the design but does not show that LLM2Seq is better than standard encoder-decoder baselines.
+On WikiLingua, the Qwen variant improves substantially over the Llama configuration while producing shorter summaries than T5Gemma, but it remains behind T5Gemma on all three ROUGE metrics.
 The comparison between Qwen and Llama should be interpreted as a system-level comparison, since changing the encoder also changes the tokenizer, vocabulary, and representation space.
 For Qwen on WikiLingua, MTP gives 2.30 tokens per step but only 1.17x real speedup, so accepted tokens help only when they compensate for verification overhead.
 Token-level memory is useful when the summary needs local source evidence, which differs from fixed-ratio context compression \citep{li2026contextcompression}.
@@ -843,7 +844,7 @@ Verifier cost, cache handling, and Python control flow can reduce speedup.
 LLM2Seq studies how to build an encoder-decoder summarizer from repurposed LLM-based encoders.
 The model uses a gated residual adapter to map source-side LLM states into decoder memory.
 It then uses a lightweight cross-attentive decoder to generate summaries.
-On Vietnamese WikiLingua, the Qwen-based variant is competitive with T5Gemma on ROUGE-1 and produces shorter summaries.
+On Vietnamese WikiLingua, the Qwen-based variant improves over the Llama configuration and produces shorter summaries, but it remains behind T5Gemma on ROUGE.
 On Vietnamese LR-Sum, LLM2Seq-Qwen improves over LLM2Seq-Llama but still trails T5Gemma.
 Self-distilled MTP gives a real 1.17x speedup for Qwen on WikiLingua.
 Future work should add adapter ablations, add compression baselines, and optimize verified decoding.

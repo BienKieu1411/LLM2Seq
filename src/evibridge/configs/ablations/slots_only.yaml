@@ -1,8 +1,0 @@
-_base_: ../base.yaml
-
-experiment:
-  name: evidence_bottleneck_without_full_memory
-  output_dir: runs/evibridge/slots_only
-
-bridge:
-  mode: slots_only

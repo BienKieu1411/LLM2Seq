@@ -11,7 +11,8 @@
     "mtp_theoretical_decode_step_speedup": 2.498872,
     "mtp_acceptance_rate_mean": 0.132475,
     "mtp_average_accepted_length_mean": 1.529902,
-    "mtp_average_emitted_length_mean": 2.498872
+    "mtp_average_emitted_length_mean": 2.498872,
+    "mtp_fallback_to_autoregressive_rate": 0.0
   },
   "main": {
     "decode_mode": "autoregressive",
@@ -31,27 +32,28 @@
     "latency_seconds_mean": 1.093613,
     "latency_seconds_p95": 2.156881,
     "tokens_per_decode_step": 2.450036,
-    "peak_gpu_memory_mb": 6413.671
+    "peak_gpu_memory_mb": 6413.671,
+    "fallback_to_autoregressive_rate": 0.0
   },
   "quality_delta": {
     "rouge1": {
-      "main": 48.3643,
-      "mtp_verified": 48.3643,
+      "main": 17.2773,
+      "mtp_verified": 17.2773,
       "delta": 0.0
     },
     "rouge2": {
-      "main": 15.5403,
-      "mtp_verified": 15.5403,
+      "main": 4.7046,
+      "mtp_verified": 4.7046,
       "delta": 0.0
     },
     "rougeL": {
-      "main": 29.0525,
-      "mtp_verified": 29.0525,
+      "main": 18.711,
+      "mtp_verified": 18.711,
       "delta": 0.0
     },
     "rougeLsum": {
-      "main": 29.0525,
-      "mtp_verified": 29.0525,
+      "main": 18.711,
+      "mtp_verified": 18.711,
       "delta": 0.0
     },
     "bleu": {
@@ -66,8 +68,8 @@
     }
   },
   "files": {
-    "main_metrics": "llm2seq/eval_outputs/full_test_phase2_main/metrics.json",
-    "mtp_metrics": "llm2seq/eval_outputs/full_test_phase3_mtp_verified/metrics.json"
+    "main_metrics": "src/llm2seq/results/wikilingua/llama/eval_base/metrics.json",
+    "mtp_metrics": "src/llm2seq/results/wikilingua/llama/eval_mtp/metrics.json"
   },
   "note": "Use real_decode_tokens_per_second_speedup and latency_*_speedup as the real measured speedup. mtp_theoretical_decode_step_speedup only measures fewer verifier steps, not full serving latency."
 }

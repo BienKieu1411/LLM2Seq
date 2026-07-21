@@ -19,10 +19,10 @@ if str(LLM2SEQ_ROOT) not in sys.path:
 
 import torch
 import yaml
-from rouge_score import rouge_scorer
 from sacrebleu import corpus_bleu, corpus_chrf
 from src.inference.generate import autoregressive_generate
 from src.inference.generate_mtp import mtp_generate
+from src.metrics import heter_sum_graph_rouge
 from src.models.llm2seq_model import LLM2Seq, LLM2SeqConfig
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
@@ -286,18 +286,13 @@ def compute_metrics(
     compute_bertscore: bool = False,
     bertscore_model_type: str = "bert-base-multilingual-cased",
 ) -> Dict[str, Any]:
-    scorer = rouge_scorer.RougeScorer(
-        ["rouge1", "rouge2", "rougeL", "rougeLsum"],
-        use_stemmer=False,
+    metrics: Dict[str, Any] = heter_sum_graph_rouge(
+        predictions,
+        references,
+        include_rouge_lsum=True,
     )
-    rouge_totals = {name: 0.0 for name in ["rouge1", "rouge2", "rougeL", "rougeLsum"]}
-    for pred, ref in zip(predictions, references):
-        scores = scorer.score(ref, pred)
-        for name in rouge_totals:
-            rouge_totals[name] += scores[name].fmeasure
-
-    n = max(1, len(predictions))
-    metrics: Dict[str, Any] = {name: round((value / n) * 100.0, 4) for name, value in rouge_totals.items()}
+    metrics["rouge_backend"] = "rouge==1.0.0 (HeterSumGraph)"
+    metrics["rouge_preprocessing"] = "NFC + lowercase + stored whitespace tokenization"
     bleu = corpus_bleu(predictions, [references])
     chrf = corpus_chrf(predictions, [references])
     metrics.update(

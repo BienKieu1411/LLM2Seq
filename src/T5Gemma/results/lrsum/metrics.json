@@ -1,8 +1,8 @@
 {
-  "rouge1": 58.7949,
-  "rouge2": 27.3385,
-  "rougeL": 39.8572,
-  "rougeLsum": 39.8572,
+  "rouge1": 30.0928,
+  "rouge2": 18.4178,
+  "rougeL": 27.3116,
+  "rougeLsum": 27.3116,
   "bleu": 16.0167,
   "bleu_bp": 1.0,
   "chrf": 33.2313,
@@ -57,5 +57,7 @@
   },
   "source_prefix": "Tóm tắt văn bản sau:\n",
   "eval_batch_size": 64,
-  "bertscore_rescale_with_baseline": false
+  "bertscore_rescale_with_baseline": false,
+  "rouge_backend": "rouge==1.0.0 (HeterSumGraph)",
+  "rouge_preprocessing": "NFC + lowercase + stored whitespace tokenization"
 }

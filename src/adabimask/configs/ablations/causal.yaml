@@ -1,8 +1,0 @@
-_base_: ../base.yaml
-
-experiment:
-  name: encoder_decoder_causal
-  output_dir: runs/adabimask/causal
-
-mask:
-  mode: causal

@@ -1,0 +1,177 @@
+{
+  "metric": "macro-average precision/recall/F1 x 100",
+  "library": "rouge==1.0.0",
+  "protocol": "NFC + lowercase, then Rouge().get_scores(hyps, refs, avg=True)",
+  "source": "https://github.com/dqwang122/HeterSumGraph",
+  "note": "Whitespace/punctuation tokenization is kept exactly as stored in each predictions file.",
+  "runs": {
+    "wikilingua/qwen_base": {
+      "n": 3901,
+      "heter_sum_graph_protocol": {
+        "rouge-1": {
+          "f": 24.1378,
+          "p": 23.3419,
+          "r": 29.1435
+        },
+        "rouge-2": {
+          "f": 8.0361,
+          "p": 7.7739,
+          "r": 9.8049
+        },
+        "rouge-l": {
+          "f": 24.5533,
+          "p": 23.3303,
+          "r": 29.1296
+        }
+      },
+      "predictions": "src/llm2seq/results/wikilingua/qwen/eval_base/predictions.jsonl"
+    },
+    "wikilingua/qwen_mtp": {
+      "n": 3901,
+      "heter_sum_graph_protocol": {
+        "rouge-1": {
+          "f": 24.1205,
+          "p": 23.4014,
+          "r": 29.1807
+        },
+        "rouge-2": {
+          "f": 7.9773,
+          "p": 7.7508,
+          "r": 9.7678
+        },
+        "rouge-l": {
+          "f": 24.4636,
+          "p": 23.2837,
+          "r": 29.0897
+        }
+      },
+      "predictions": "src/llm2seq/results/wikilingua/qwen/eval_mtp/predictions.jsonl"
+    },
+    "wikilingua/llama_base": {
+      "n": 3901,
+      "heter_sum_graph_protocol": {
+        "rouge-1": {
+          "f": 17.2773,
+          "p": 24.6634,
+          "r": 15.0302
+        },
+        "rouge-2": {
+          "f": 4.7046,
+          "p": 7.1009,
+          "r": 4.0595
+        },
+        "rouge-l": {
+          "f": 18.711,
+          "p": 23.6155,
+          "r": 17.3117
+        }
+      },
+      "predictions": "src/llm2seq/results/wikilingua/llama/eval_base/predictions.jsonl"
+    },
+    "wikilingua/llama_mtp": {
+      "n": 3901,
+      "heter_sum_graph_protocol": {
+        "rouge-1": {
+          "f": 17.2773,
+          "p": 24.6634,
+          "r": 15.0302
+        },
+        "rouge-2": {
+          "f": 4.7046,
+          "p": 7.1009,
+          "r": 4.0595
+        },
+        "rouge-l": {
+          "f": 18.711,
+          "p": 23.6155,
+          "r": 17.3117
+        }
+      },
+      "predictions": "src/llm2seq/results/wikilingua/llama/eval_mtp/predictions.jsonl"
+    },
+    "lrsum/qwen": {
+      "n": 1460,
+      "heter_sum_graph_protocol": {
+        "rouge-1": {
+          "f": 18.7144,
+          "p": 19.1074,
+          "r": 18.9622
+        },
+        "rouge-2": {
+          "f": 5.8411,
+          "p": 5.9015,
+          "r": 5.9744
+        },
+        "rouge-l": {
+          "f": 15.6004,
+          "p": 16.6422,
+          "r": 15.1348
+        }
+      },
+      "predictions": "src/llm2seq/results/lrsum/qwen/predictions.jsonl"
+    },
+    "lrsum/llama": {
+      "n": 1460,
+      "heter_sum_graph_protocol": {
+        "rouge-1": {
+          "f": 12.8289,
+          "p": 13.8584,
+          "r": 12.3502
+        },
+        "rouge-2": {
+          "f": 2.7387,
+          "p": 2.9368,
+          "r": 2.6599
+        },
+        "rouge-l": {
+          "f": 10.1649,
+          "p": 10.7651,
+          "r": 9.942
+        }
+      },
+      "predictions": "src/llm2seq/results/lrsum/llama/predictions.jsonl"
+    },
+    "wikilingua/t5gemma": {
+      "n": 3901,
+      "heter_sum_graph_protocol": {
+        "rouge-1": {
+          "f": 33.1033,
+          "p": 26.8008,
+          "r": 51.6322
+        },
+        "rouge-2": {
+          "f": 13.7565,
+          "p": 11.2358,
+          "r": 21.7484
+        },
+        "rouge-l": {
+          "f": 31.6429,
+          "p": 24.217,
+          "r": 53.3535
+        }
+      },
+      "predictions": "src/T5Gemma/results/wikilingua/predictions.jsonl"
+    },
+    "lrsum/t5gemma": {
+      "n": 1460,
+      "heter_sum_graph_protocol": {
+        "rouge-1": {
+          "f": 30.0928,
+          "p": 28.8258,
+          "r": 32.628
+        },
+        "rouge-2": {
+          "f": 18.4178,
+          "p": 17.5975,
+          "r": 20.0604
+        },
+        "rouge-l": {
+          "f": 27.3116,
+          "p": 26.1546,
+          "r": 29.4781
+        }
+      },
+      "predictions": "src/T5Gemma/results/lrsum/predictions.jsonl"
+    }
+  }
+}
