@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import torch
 import torch.nn as nn
@@ -22,27 +21,24 @@ def save_checkpoint(
     config: Dict[str, Any],
     epoch: int,
     global_step: int,
-    eval_loss: float,
 ) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     state = trainable_state_dict(model)
+    stores_pretrained_weights = any(
+        name.startswith(("encoder.model.", "decoder.backbone.", "model.")) for name in state
+    )
     payload: Dict[str, Any] = {
         "model_state_dict": state,
         "epoch": int(epoch),
         "global_step": int(global_step),
-        "eval_loss": float(eval_loss),
         "config": config,
-        "compact_checkpoint": True,
-        "stores_base_encoder_weights": False,
+        "compact_checkpoint": not stores_pretrained_weights,
+        "stores_pretrained_weights": stores_pretrained_weights,
     }
     if hasattr(model, "encoder") and hasattr(model.encoder, "policy_state"):
         payload["policy"] = model.encoder.policy_state()
     torch.save(payload, path)
-
-    if "policy" in payload:
-        policy_path = path.with_suffix(".policy.json")
-        policy_path.write_text(json.dumps(payload["policy"], ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_checkpoint(model: nn.Module, path: str | Path) -> Dict[str, Any]:

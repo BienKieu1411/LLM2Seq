@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from adabimask.mask_policy import LayerMaskPolicy, MaskPolicyConfig
-from adabimask.routed_attention import RoutedSelfAttention, make_bidirectional_mask
+from adabimask.routed_attention import RoutedLinearAttention, RoutedSelfAttention, make_bidirectional_mask
 
 
 class DummyAttention(nn.Module):
@@ -58,3 +58,17 @@ def test_soft_route_computes_two_branches_and_updates_gate():
     assert torch.allclose(output, torch.full_like(output, 0.5))
     output.sum().backward()
     assert policy.gate_logits.grad is not None
+
+
+class DummyLinearAttention(nn.Module):
+    def forward(self, hidden_states, attention_mask=None, **kwargs):
+        positions = torch.arange(hidden_states.shape[1], dtype=hidden_states.dtype)[None, :, None]
+        return hidden_states + positions
+
+
+def test_linear_attention_adds_a_reversed_right_context_branch():
+    hidden = torch.zeros(1, 4, 2)
+    policy = LayerMaskPolicy(1, MaskPolicyConfig(mode="full", num_groups=1, budget_groups=1))
+    routed = RoutedLinearAttention(DummyLinearAttention(), 0, policy)
+    output = routed(hidden_states=hidden, attention_mask=torch.ones(1, 4), cache_params=None)
+    assert torch.allclose(output[0, :, 0], torch.full((4,), 1.5))

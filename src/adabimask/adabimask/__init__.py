@@ -4,4 +4,6 @@ Submodules are intentionally not imported eagerly: configuration and launcher
 tools should remain usable before heavyweight training dependencies are loaded.
 """
 
-__all__ = ["config", "mask_policy", "model"]
+STANDALONE_API_VERSION = 2
+
+__all__ = ["STANDALONE_API_VERSION", "config", "mask_policy", "model"]

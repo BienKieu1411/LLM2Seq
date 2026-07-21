@@ -1,0 +1,26 @@
+_base_: ../base.yaml
+
+experiment:
+  name: evibridge_lrsum
+  output_dir: runs/evibridge/lrsum
+
+data:
+  train_file: data/lrsum/train.jsonl
+  validation_file: data/lrsum/validation.jsonl
+  test_file: data/lrsum/test.jsonl
+  source_prefix: "Tóm tắt bài báo bằng một câu nêu sự kiện chính; không thêm thông tin.\nBài báo:\n"
+  target_prefix: "\nTóm tắt:\n"
+  evidence_unit: sentence
+  clean_wikihow_metadata: false
+  max_target_length: 256
+  # LR-Sum is one-sentence extreme news summarization. Let the planner fuse up
+  # to three source sentences instead of inheriting WikiLingua's step count.
+  oracle_max_units: 6
+  oracle_budget_mode: fixed
+  oracle_fixed_units: 3
+  oracle_rouge1_weight: 0.7
+  oracle_rouge2_weight: 0.3
+
+generation:
+  min_new_tokens: 16
+  max_new_tokens: 192

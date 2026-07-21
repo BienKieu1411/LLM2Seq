@@ -1,0 +1,15 @@
+_base_: ../base.yaml
+
+experiment:
+  name: learnable_budget_8_layers_lora
+  output_dir: runs/adabimask/learnable_k8_lora
+
+model:
+  use_lora: true
+  train_base: false
+
+mask:
+  mode: learnable
+  budget_groups: 2
+  init_probability: 0.01
+

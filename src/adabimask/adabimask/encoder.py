@@ -1,25 +1,15 @@
-"""Qwen3-Base encoder with layer-wise routed source attention."""
+"""Qwen3/Qwen3.5 encoder with layer-wise routed source token mixers."""
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
 
+from .backbone import load_text_causal_lm, torch_dtype
 from .mask_policy import LayerMaskPolicy, MaskPolicyConfig
-from .routed_attention import RoutedSelfAttention
-
-
-def _torch_dtype(name: str) -> torch.dtype:
-    mapping = {
-        "bfloat16": torch.bfloat16,
-        "float16": torch.float16,
-        "float32": torch.float32,
-    }
-    if name not in mapping:
-        raise ValueError(f"Unsupported dtype {name!r}; choose one of {sorted(mapping)}")
-    return mapping[name]
+from .routed_attention import RoutedLinearAttention, RoutedSelfAttention
 
 
 def _find_decoder_layers(model: nn.Module, expected_layers: int) -> nn.ModuleList:
@@ -28,7 +18,7 @@ def _find_decoder_layers(model: nn.Module, expected_layers: int) -> nn.ModuleLis
         layers = getattr(module, "layers", None)
         if not isinstance(layers, nn.ModuleList) or len(layers) != expected_layers:
             continue
-        if all(hasattr(layer, "self_attn") for layer in layers):
+        if all(hasattr(layer, "self_attn") or hasattr(layer, "linear_attn") for layer in layers):
             candidates.append((name, layers))
     if not candidates:
         raise RuntimeError(
@@ -42,49 +32,41 @@ def _find_decoder_layers(model: nn.Module, expected_layers: int) -> nn.ModuleLis
 
 
 class AdaBiMaskEncoder(nn.Module):
-    """Load a causal Qwen3 base model and route its attention masks by layer."""
+    """Load a causal Qwen text model and route source context by layer."""
 
     def __init__(self, model_config: Dict[str, Any], mask_config: Dict[str, Any]):
         super().__init__()
-        try:
-            from transformers import AutoConfig, AutoModel
-        except ImportError as exc:
-            raise ImportError("Install src/adabimask/requirements.txt before building the encoder") from exc
-
-        model_name = str(model_config.get("encoder_name", "Qwen/Qwen3-0.6B-Base"))
-        dtype = _torch_dtype(str(model_config.get("dtype", "bfloat16")))
+        model_name = str(model_config.get("encoder_name", "Qwen/Qwen3.5-0.8B"))
+        dtype = torch_dtype(str(model_config.get("dtype", "bfloat16")))
         self.model_name = model_name
-        self.config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+        causal_lm, self.config = load_text_causal_lm(model_name, dtype=dtype, attn_implementation="sdpa")
         self.hidden_size = int(getattr(self.config, "hidden_size"))
         self.num_layers = int(getattr(self.config, "num_hidden_layers"))
-
-        # SDPA accepts a 4-D additive padding-only mask. FlashAttention-2's
-        # Transformers interface expects a 2-D mask and cannot be switched per
-        # layer by this wrapper.
-        self.model = AutoModel.from_pretrained(
-            model_name,
-            config=self.config,
-            torch_dtype=dtype,
-            trust_remote_code=True,
-            attn_implementation="sdpa",
-        )
+        # Keep only the text backbone. The LM head is not needed by the source
+        # encoder and is tied to the embedding in Qwen checkpoints anyway.
+        self.model = causal_lm.model
 
         use_lora = bool(model_config.get("use_lora", True))
         train_base = bool(model_config.get("train_base", False))
-        if train_base:
-            raise ValueError(
-                "Full backbone training is intentionally disabled: controlled AdaBiMask experiments use LoRA only"
-            )
+        if train_base and use_lora:
+            raise ValueError("Choose either full fine-tuning (train_base=true) or LoRA, not both")
+        self.use_lora = use_lora
+        self.train_base = train_base
         if use_lora:
             self.model = self._apply_lora(model_config)
-        else:
+        elif not train_base:
             for parameter in self.model.parameters():
                 parameter.requires_grad = False
 
         self.policy = LayerMaskPolicy(self.num_layers, MaskPolicyConfig.from_dict(mask_config))
         layers = _find_decoder_layers(self.model, self.num_layers)
         for layer_index, layer in enumerate(layers):
-            layer.self_attn = RoutedSelfAttention(layer.self_attn, layer_index, self.policy)
+            if hasattr(layer, "self_attn"):
+                layer.self_attn = RoutedSelfAttention(layer.self_attn, layer_index, self.policy)
+            elif hasattr(layer, "linear_attn"):
+                layer.linear_attn = RoutedLinearAttention(layer.linear_attn, layer_index, self.policy)
+            else:  # pragma: no cover - guarded by _find_decoder_layers
+                raise RuntimeError(f"Layer {layer_index} has no supported token mixer")
 
         if bool(model_config.get("gradient_checkpointing", True)):
             self.model.gradient_checkpointing_enable()
@@ -109,6 +91,20 @@ class AdaBiMaskEncoder(nn.Module):
             bias="none",
         )
         return get_peft_model(self.model, config)
+
+    def set_backbone_trainable(self, enabled: bool) -> None:
+        """Toggle pretrained encoder updates for staged training."""
+
+        if self.train_base:
+            for parameter in self.model.parameters():
+                parameter.requires_grad = bool(enabled)
+        elif self.use_lora:
+            for name, parameter in self.model.named_parameters():
+                if "lora_" in name:
+                    parameter.requires_grad = bool(enabled)
+
+    def set_curriculum_progress(self, progress: float) -> None:
+        self.policy.set_progress(progress)
 
     def forward(
         self,

@@ -1,0 +1,14 @@
+_base_: ../base.yaml
+
+experiment:
+  name: direct_qwen35_lora
+  kind: direct_causal
+  output_dir: runs/adabimask/direct_qwen_lora
+
+model:
+  use_lora: true
+  train_base: false
+
+training:
+  epochs: 10
+  interface_warmup_epochs: 0

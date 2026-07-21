@@ -2,15 +2,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-if [[ -z "${PYTHON_BIN:-}" && -x "${HOME}/bienkieu_env/bin/python" ]]; then
-  PYTHON_BIN="${HOME}/bienkieu_env/bin/python"
+BIENKIEU_PYTHON="/Users/kieugiangbien/bienkieu_env/bin/python"
+if [[ -z "${PYTHON_BIN:-}" && -x "${BIENKIEU_PYTHON}" ]]; then
+  PYTHON_BIN="${BIENKIEU_PYTHON}"
 else
   PYTHON_BIN="${PYTHON_BIN:-python3}"
 fi
-export PYTHONPATH="${SCRIPT_DIR}:${PROJECT_ROOT}/src/llm2seq${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONDONTWRITEBYTECODE=1
-cd "${PROJECT_ROOT}"
+cd "${SCRIPT_DIR}"
 
 COMMAND="${1:-train}"
 if [[ $# -gt 0 ]]; then shift; fi

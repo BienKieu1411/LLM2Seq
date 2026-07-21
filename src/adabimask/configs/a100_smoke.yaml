@@ -1,0 +1,30 @@
+_base_: base.yaml
+
+experiment:
+  name: a100_smoke
+  output_dir: runs/a100_smoke
+
+model:
+  encoder_name: Qwen/Qwen3.5-0.8B
+
+decoder:
+  pretrained_name: Qwen/Qwen3.5-0.8B
+  max_target_length: 96
+
+training:
+  epochs: 2
+  interface_warmup_epochs: 1
+  batch_size: 1
+  gradient_accumulation_steps: 8
+  num_workers: 2
+  log_every_steps: 5
+
+data:
+  max_train_samples: 256
+  max_validation_samples: 32
+  max_source_length: 512
+  max_target_length: 96
+
+generation:
+  batch_size: 1
+  max_new_tokens: 96

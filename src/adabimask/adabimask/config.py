@@ -9,6 +9,12 @@ from typing import Any, Dict
 import yaml
 
 
+QWEN35_MODEL_SIZES = {
+    "0.8B": "Qwen/Qwen3.5-0.8B",
+    "2B": "Qwen/Qwen3.5-2B",
+}
+
+
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     merged = deepcopy(base)
     for key, value in override.items():
@@ -49,3 +55,27 @@ def dump_config(config: Dict[str, Any], path: str | Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(config, handle, sort_keys=False, allow_unicode=True)
+
+
+def apply_model_size(config: Dict[str, Any], model_size: str | None) -> Dict[str, Any]:
+    """Apply a controlled Qwen3.5 scale override to both model halves.
+
+    A changed scale receives a separate output directory so a 2B run cannot
+    overwrite the default 0.8B final checkpoint.
+    """
+
+    if model_size is None:
+        return config
+    if model_size not in QWEN35_MODEL_SIZES:
+        raise ValueError(f"model_size must be one of {sorted(QWEN35_MODEL_SIZES)}, got {model_size!r}")
+
+    model_name = QWEN35_MODEL_SIZES[model_size]
+    previous_name = str((config.get("model", {}) or {}).get("encoder_name", ""))
+    config.setdefault("model", {})["encoder_name"] = model_name
+    config.setdefault("decoder", {})["pretrained_name"] = model_name
+    if previous_name and previous_name != model_name:
+        experiment = config.setdefault("experiment", {})
+        output_dir = Path(str(experiment.get("output_dir", "runs/adabimask")))
+        suffix = model_size.lower().replace(".", "_")
+        experiment["output_dir"] = str(output_dir.with_name(f"{output_dir.name}_{suffix}"))
+    return config

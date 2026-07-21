@@ -7,7 +7,4 @@ experiment:
 mask:
   mode: learnable
   budget_groups: 1
-  init_probability: 0.142857
-
-training:
-  epochs: 2
+  init_probability: 0.01

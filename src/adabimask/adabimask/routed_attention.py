@@ -100,7 +100,7 @@ class RoutedSelfAttention(nn.Module):
         if route == "causal":
             return self.base_attention(*args, **kwargs)
 
-        past_key_value = kwargs.get("past_key_value")
+        past_key_value = kwargs.get("past_key_value", kwargs.get("past_key_values"))
         if past_key_value is not None:
             raise RuntimeError(
                 "Bidirectional source attention does not support KV-cache; call encoder with use_cache=False"
@@ -116,3 +116,98 @@ class RoutedSelfAttention(nn.Module):
         bidirectional_result = self.base_attention(*args, **bidirectional_kwargs)
         gate = self.policy.gate_for_layer(self.layer_index)
         return _mix_attention_results(causal_result, bidirectional_result, gate)
+
+
+def _reverse_sequence_argument(value: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+    if value is None:
+        return None
+    if value.ndim == 2:
+        return value.flip(-1)
+    if value.ndim == 4:
+        return value.flip(-1).flip(-2)
+    return value
+
+
+class RoutedLinearAttention(nn.Module):
+    """Give Qwen3.5 Gated DeltaNet a right-context branch.
+
+    DeltaNet is a causal recurrence rather than a masked softmax attention.
+    Removing a triangular mask therefore cannot make it bidirectional.  The
+    same pretrained mixer is evaluated on the reversed source and flipped back;
+    averaging forward and backward states is the bidirectional route.  This is
+    source-only, uses no target tokens, and leaves the decoder strictly causal.
+    """
+
+    def __init__(self, base_attention: nn.Module, layer_index: int, policy: LayerMaskPolicy):
+        super().__init__()
+        self.base_attention = base_attention
+        self.layer_index = int(layer_index)
+        object.__setattr__(self, "_policy", policy)
+
+    @property
+    def policy(self) -> LayerMaskPolicy:
+        return object.__getattribute__(self, "_policy")
+
+    @staticmethod
+    def _call_with_hidden(
+        module: nn.Module,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor],
+    ) -> Any:
+        routed_kwargs = dict(kwargs)
+        routed_args = list(args)
+        if "hidden_states" in routed_kwargs:
+            routed_kwargs["hidden_states"] = hidden_states
+        elif routed_args:
+            routed_args[0] = hidden_states
+        else:
+            routed_kwargs["hidden_states"] = hidden_states
+        if "attention_mask" in routed_kwargs or attention_mask is not None:
+            routed_kwargs["attention_mask"] = attention_mask
+        return module(*routed_args, **routed_kwargs)
+
+    def forward(self, *args: Any, **kwargs: Any) -> Any:
+        hidden_states = kwargs.get("hidden_states")
+        if hidden_states is None and args:
+            hidden_states = args[0]
+        if not isinstance(hidden_states, torch.Tensor):
+            raise TypeError("Could not find hidden_states tensor in linear-attention call")
+
+        route = self.policy.route(self.layer_index)
+        if route == "causal":
+            return self.base_attention(*args, **kwargs)
+
+        cache = kwargs.get("cache_params", kwargs.get("past_key_values"))
+        if cache is not None:
+            raise RuntimeError("Bidirectional source DeltaNet requires use_cache=False")
+
+        attention_mask = kwargs.get("attention_mask")
+        forward_result = self.base_attention(*args, **kwargs)
+        backward_result = self._call_with_hidden(
+            self.base_attention,
+            args,
+            kwargs,
+            hidden_states.flip(1),
+            _reverse_sequence_argument(attention_mask),
+        )
+        if isinstance(backward_result, tuple):
+            backward_result = tuple(
+                value.flip(1) if isinstance(value, torch.Tensor) and value.ndim >= 2 else value
+                for value in backward_result
+            )
+        else:
+            backward_result = backward_result.flip(1)
+        bidirectional_result = _mix_attention_results(
+            forward_result,
+            backward_result,
+            torch.tensor(0.5, device=hidden_states.device, dtype=hidden_states.dtype),
+        )
+        if route == "bidirectional":
+            return bidirectional_result
+        return _mix_attention_results(
+            forward_result,
+            bidirectional_result,
+            self.policy.gate_for_layer(self.layer_index),
+        )

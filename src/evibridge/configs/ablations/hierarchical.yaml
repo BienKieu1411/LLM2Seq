@@ -1,0 +1,14 @@
+_base_: ../base.yaml
+
+experiment:
+  name: hierarchical_bidirectional_only
+  output_dir: runs/evibridge/hierarchical
+
+bridge:
+  mode: hierarchical
+  num_evidence_slots: 0
+  use_evidence_loss: false
+
+objectives:
+  evidence_weight: 0.0
+  diversity_weight: 0.0

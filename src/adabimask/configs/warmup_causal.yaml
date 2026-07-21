@@ -6,10 +6,12 @@ experiment:
 
 model:
   use_lora: false
-  train_base: false
+  train_base: true
 
 mask:
   mode: causal
 
 training:
-  epochs: 3
+  epochs: 10
+  interface_warmup_epochs: 2
+  stop_after_interface: true

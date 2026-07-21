@@ -1,0 +1,10 @@
+_base_: ../base.yaml
+
+experiment:
+  name: evibridge_with_layer_fusion
+  output_dir: runs/evibridge/layer_fusion
+
+model:
+  layer_fusion:
+    enabled: true
+    indices: [-1, -5, -9, -13]

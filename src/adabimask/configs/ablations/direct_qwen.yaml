@@ -1,11 +1,10 @@
 _base_: ../base.yaml
 
 experiment:
-  name: direct_qwen_lora
+  name: direct_qwen35_full_ft
   kind: direct_causal
   output_dir: runs/adabimask/direct_qwen
 
 training:
-  epochs: 4
-  batch_size: 1
-  gradient_accumulation_steps: 32
+  epochs: 10
+  interface_warmup_epochs: 0

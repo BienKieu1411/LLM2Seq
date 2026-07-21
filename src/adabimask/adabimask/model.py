@@ -9,16 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .encoder import AdaBiMaskEncoder
-
-try:
-    # The sibling llm2seq project owns the already-tested scratch decoder. The
-    # supplied run.sh exposes it without changing the legacy project.
-    from src.models.decoder import LightweightDecoder
-except ImportError as exc:  # pragma: no cover - exercised by environment smoke check
-    raise ImportError(
-        "Cannot import the sibling llm2seq scratch decoder. Run through src/adabimask/run.sh "
-        "or add both src/adabimask and src/llm2seq to PYTHONPATH."
-    ) from exc
+from .pretrained_decoder import PretrainedQwenDecoder
 
 
 class MemoryProjection(nn.Module):
@@ -35,7 +26,7 @@ class MemoryProjection(nn.Module):
 
 
 class AdaBiMaskSeq2Seq(nn.Module):
-    """Qwen3-Base source encoder, minimal projection, and scratch decoder."""
+    """AdaBiMask source encoder and a causal pretrained shallow Qwen decoder."""
 
     def __init__(self, config: Dict[str, Any], vocab_size: int):
         super().__init__()
@@ -44,25 +35,25 @@ class AdaBiMaskSeq2Seq(nn.Module):
         decoder_config = config.get("decoder", {}) or {}
         self.encoder = AdaBiMaskEncoder(model_config, config.get("mask", {}) or {})
 
-        decoder_size = int(decoder_config.get("hidden_size", self.encoder.hidden_size))
-        self.adaptor = MemoryProjection(
-            encoder_size=self.encoder.hidden_size,
-            decoder_size=decoder_size,
-            dropout=float(decoder_config.get("dropout", 0.1)),
+        decoder_name = str(decoder_config.get("pretrained_name", self.encoder.model_name))
+        self.decoder = PretrainedQwenDecoder(
+            decoder_name,
+            decoder_config,
+            dtype_name=str(model_config.get("dtype", "bfloat16")),
         )
-        self.decoder = LightweightDecoder(
-            vocab_size=vocab_size,
-            hidden_size=decoder_size,
-            num_layers=int(decoder_config.get("num_layers", 8)),
-            num_heads=int(decoder_config.get("num_heads", 16)),
-            ffn_size=int(decoder_config.get("ffn_size", 4096)),
-            max_seq_len=int(decoder_config.get("max_target_length", 512)),
-            dropout=float(decoder_config.get("dropout", 0.1)),
-            tie_embeddings=bool(decoder_config.get("tie_embeddings", True)),
-        )
-        self.lm_head = nn.Linear(decoder_size, vocab_size, bias=False)
-        if bool(decoder_config.get("tie_embeddings", True)):
-            self.lm_head.weight = self.decoder.embed_tokens.weight
+        if self.encoder.hidden_size == self.decoder.hidden_size:
+            self.adaptor = nn.Identity()
+        else:
+            self.adaptor = MemoryProjection(
+                encoder_size=self.encoder.hidden_size,
+                decoder_size=self.decoder.hidden_size,
+                dropout=float(decoder_config.get("dropout", 0.0)),
+            )
+            reference_parameter = next(self.decoder.parameters())
+            self.adaptor.to(
+                device=reference_parameter.device,
+                dtype=reference_parameter.dtype,
+            )
 
     def forward(
         self,
@@ -80,18 +71,26 @@ class AdaBiMaskSeq2Seq(nn.Module):
             encoder_attention_mask=attention_mask,
             attention_mask=decoder_attention_mask,
         )
-        logits = self.lm_head(decoder_states)
-        result: Dict[str, torch.Tensor] = {"logits": logits}
-        if labels is not None:
-            loss_ce = F.cross_entropy(
-                logits.reshape(-1, logits.size(-1)),
-                labels.reshape(-1),
-                ignore_index=-100,
-            )
-            gate_losses = self.encoder.gate_regularization()
-            result.update(gate_losses)
-            result["loss_ce"] = loss_ce
-            result["loss"] = loss_ce + gate_losses["loss_gate"]
+        if labels is None:
+            # Generation still needs the dense [batch, length, vocabulary]
+            # projection. Training does not: padding labels are ignored by the
+            # loss, so projecting them only wastes most of the large Qwen
+            # vocabulary GEMM.
+            logits = self.lm_head(decoder_states)
+            return {"logits": logits}
+
+        supervised = labels.ne(-100)
+        selected_states = decoder_states[supervised]
+        if selected_states.shape[0] == 0:
+            raise ValueError("At least one decoder label must be supervised")
+        selected_logits = self.lm_head(selected_states)
+        selected_labels = labels[supervised]
+        result: Dict[str, torch.Tensor] = {"logits": selected_logits}
+        loss_ce = F.cross_entropy(selected_logits.float(), selected_labels)
+        gate_losses = self.encoder.gate_regularization()
+        result.update(gate_losses)
+        result["loss_ce"] = loss_ce
+        result["loss"] = loss_ce + gate_losses["loss_gate"]
         return result
 
     def encode(
@@ -110,6 +109,26 @@ class AdaBiMaskSeq2Seq(nn.Module):
     def device(self) -> torch.device:
         return next(self.parameters()).device
 
+    @property
+    def lm_head(self) -> nn.Module:
+        return self.decoder.lm_head
+
+    def set_training_stage(self, stage: str) -> None:
+        if stage not in {"interface_warmup", "full_finetune"}:
+            raise ValueError(f"Unknown training stage: {stage}")
+        full = stage == "full_finetune"
+        self.encoder.set_backbone_trainable(full)
+        self.decoder.set_backbone_trainable(full)
+        for parameter in self.adaptor.parameters():
+            parameter.requires_grad = True
+        if self.encoder.policy.gate_logits is not None:
+            self.encoder.policy.gate_logits.requires_grad = full
+        self.encoder.policy.set_force_causal(not full)
+        self.encoder.set_curriculum_progress(0.0 if not full else 1e-6)
+
+    def set_curriculum_progress(self, progress: float) -> None:
+        self.encoder.set_curriculum_progress(progress)
+
     def trainable_parameters(self) -> int:
         return sum(parameter.numel() for parameter in self.parameters() if parameter.requires_grad)
 
@@ -124,6 +143,7 @@ class AdaBiMaskSeq2Seq(nn.Module):
                 f"  groups: {policy['groups']}",
                 f"  selected groups: {policy['selected_groups']}",
                 f"  selected layers: {policy['selected_layers']}",
+                f"  decoder layers copied from: {list(self.decoder.layer_indices)}",
                 f"  total parameters: {total:,}",
                 f"  trainable parameters: {self.trainable_parameters():,}",
             ]

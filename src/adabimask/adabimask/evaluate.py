@@ -9,9 +9,10 @@ from typing import Any, Dict, List
 
 import torch
 
+from .backbone import torch_dtype
 from .checkpoint import load_checkpoint
-from .config import load_config
-from .data import read_jsonl
+from .config import QWEN35_MODEL_SIZES, apply_model_size, load_config
+from .data import clean_wikihow_metadata, prompt_token_ids, read_jsonl
 from .training import build_experiment
 
 
@@ -36,7 +37,7 @@ def _generate_encoder_decoder(
     config: Dict[str, Any],
     device: torch.device,
 ) -> List[str]:
-    from src.inference.generate import autoregressive_generate
+    from .generation import autoregressive_generate
 
     data = config.get("data", {}) or {}
     generation = config.get("generation", {}) or {}
@@ -44,26 +45,27 @@ def _generate_encoder_decoder(
     predictions: List[str] = []
     for start in range(0, len(examples), batch_size):
         batch = examples[start : start + batch_size]
-        sources = [str(data.get("source_prefix", "")) + str(example["source"]) for example in batch]
-        encoded = tokenizer(
-            sources,
+        features = []
+        for example in batch:
+            ids = prompt_token_ids(tokenizer, str(example["source"]), data)
+            features.append({"input_ids": ids, "attention_mask": [1] * len(ids)})
+        encoded = tokenizer.pad(
+            features,
             return_tensors="pt",
-            truncation=True,
             padding=True,
-            max_length=int(data.get("max_source_length", 3072)),
         ).to(device)
         generated = autoregressive_generate(
             model,
             input_ids=encoded["input_ids"],
             attention_mask=encoded["attention_mask"],
             max_new_tokens=int(generation.get("max_new_tokens", 256)),
-            min_new_tokens=int(generation.get("min_new_tokens", 16)),
+            min_new_tokens=int(generation.get("min_new_tokens", 0)),
             do_sample=False,
             repetition_penalty=float(generation.get("repetition_penalty", 1.1)),
             no_repeat_ngram_size=int(generation.get("no_repeat_ngram_size", 3)),
             eos_token_id=tokenizer.eos_token_id,
             pad_token_id=tokenizer.pad_token_id,
-            bos_token_id=tokenizer.bos_token_id or tokenizer.eos_token_id,
+            bos_token_id=tokenizer.bos_token_id or tokenizer.pad_token_id or tokenizer.eos_token_id,
             use_cache=True,
         )
         predictions.extend(tokenizer.batch_decode(generated, skip_special_tokens=True))
@@ -85,21 +87,20 @@ def _generate_direct(
     predictions: List[str] = []
     for start in range(0, len(examples), batch_size):
         batch = examples[start : start + batch_size]
-        prompts = [
-            f"{data.get('source_prefix', '')}{example['source']}{data.get('target_prefix', '')}" for example in batch
-        ]
-        encoded = tokenizer(
-            prompts,
+        features = []
+        for example in batch:
+            ids = prompt_token_ids(tokenizer, str(example["source"]), data)
+            features.append({"input_ids": ids, "attention_mask": [1] * len(ids)})
+        encoded = tokenizer.pad(
+            features,
             return_tensors="pt",
-            truncation=True,
             padding=True,
-            max_length=int(data.get("max_source_length", 3072)),
         ).to(device)
         generated = model.generate(
             input_ids=encoded["input_ids"],
             attention_mask=encoded["attention_mask"],
             max_new_tokens=int(generation.get("max_new_tokens", 256)),
-            min_new_tokens=int(generation.get("min_new_tokens", 16)),
+            min_new_tokens=int(generation.get("min_new_tokens", 0)),
             do_sample=False,
             repetition_penalty=float(generation.get("repetition_penalty", 1.1)),
             no_repeat_ngram_size=int(generation.get("no_repeat_ngram_size", 3)),
@@ -112,8 +113,41 @@ def _generate_direct(
     return [prediction.strip() for prediction in predictions]
 
 
-def evaluate(config_path: str, checkpoint_path: str, output_path: str, max_samples: int | None) -> None:
+def evaluate_examples(
+    model: Any,
+    tokenizer: Any,
+    examples: List[Dict[str, Any]],
+    config: Dict[str, Any],
+    device: torch.device,
+    kind: str,
+) -> tuple[Dict[str, float], List[str], List[str]]:
+    data = config.get("data", {}) or {}
+    if bool(data.get("clean_wikihow_metadata", False)):
+        examples = [
+            {
+                **example,
+                "source": clean_wikihow_metadata(str(example["source"])),
+                "target": clean_wikihow_metadata(str(example["target"])),
+            }
+            for example in examples
+        ]
+    if kind == "encoder_decoder":
+        predictions = _generate_encoder_decoder(model, tokenizer, examples, config, device)
+    else:
+        predictions = _generate_direct(model, tokenizer, examples, config, device)
+    references = [str(example["target"]) for example in examples]
+    return _rouge(predictions, references), predictions, references
+
+
+def evaluate(
+    config_path: str,
+    checkpoint_path: str,
+    output_path: str,
+    max_samples: int | None,
+    model_size: str | None = None,
+) -> None:
     config = load_config(config_path)
+    apply_model_size(config, model_size)
     model, tokenizer, _, _, _ = build_experiment(config)
     load_checkpoint(model, checkpoint_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -124,12 +158,22 @@ def evaluate(config_path: str, checkpoint_path: str, output_path: str, max_sampl
     if max_samples is not None:
         examples = examples[:max_samples]
     kind = str((config.get("experiment", {}) or {}).get("kind", "encoder_decoder"))
-    if kind == "encoder_decoder":
-        predictions = _generate_encoder_decoder(model, tokenizer, examples, config, device)
-    else:
-        predictions = _generate_direct(model, tokenizer, examples, config, device)
-    references = [str(example["target"]) for example in examples]
-    metrics = _rouge(predictions, references)
+    dtype_name = str((config.get("model", {}) or {}).get("dtype", "bfloat16"))
+    inference_dtype = torch_dtype(dtype_name)
+    use_autocast = device.type == "cuda" and inference_dtype in {torch.bfloat16, torch.float16}
+    with torch.autocast(
+        device_type=device.type,
+        dtype=inference_dtype,
+        enabled=use_autocast,
+    ):
+        metrics, predictions, references = evaluate_examples(
+            model,
+            tokenizer,
+            examples,
+            config,
+            device,
+            kind,
+        )
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -153,8 +197,9 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-samples", type=int, default=None)
+    parser.add_argument("--model-size", choices=sorted(QWEN35_MODEL_SIZES), default=None)
     args = parser.parse_args()
-    evaluate(args.config, args.checkpoint, args.output, args.max_samples)
+    evaluate(args.config, args.checkpoint, args.output, args.max_samples, args.model_size)
 
 
 if __name__ == "__main__":

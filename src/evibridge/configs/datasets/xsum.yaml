@@ -1,0 +1,24 @@
+_base_: ../base.yaml
+
+experiment:
+  name: evibridge_xsum
+  output_dir: runs/evibridge/xsum
+
+data:
+  train_file: data/xsum/train.jsonl
+  validation_file: data/xsum/validation.jsonl
+  test_file: data/xsum/test.jsonl
+  source_prefix: "Summarize the central event in one concise factual sentence.\nArticle:\n"
+  target_prefix: "\nSummary:\n"
+  evidence_unit: sentence
+  clean_wikihow_metadata: false
+  max_source_length: 2048
+  max_target_length: 128
+  oracle_max_units: 5
+  oracle_budget_mode: fixed
+  oracle_fixed_units: 3
+  oracle_rouge1_weight: 0.7
+  oracle_rouge2_weight: 0.3
+
+generation:
+  max_new_tokens: 96

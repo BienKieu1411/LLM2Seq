@@ -25,6 +25,7 @@ class MaskPolicyConfig:
     random_seed: int = 42
     init_probability: float = 0.25
     temperature: float = 1.0
+    curriculum_ratio: float = 0.2
     hard_eval: bool = True
     budget_weight: float = 0.05
     binary_weight: float = 0.01
@@ -42,6 +43,7 @@ class MaskPolicyConfig:
             random_seed=int(raw.get("random_seed", 42)),
             init_probability=float(raw.get("init_probability", 0.25)),
             temperature=float(raw.get("temperature", 1.0)),
+            curriculum_ratio=float(raw.get("curriculum_ratio", 0.2)),
             hard_eval=bool(raw.get("hard_eval", True)),
             budget_weight=float(raw.get("budget_weight", 0.05)),
             binary_weight=float(raw.get("binary_weight", 0.01)),
@@ -108,6 +110,11 @@ class LayerMaskPolicy(nn.Module):
         self.num_layers = int(num_layers)
         self.policy_config = config
         self.register_buffer("_device_anchor", torch.zeros(()), persistent=False)
+        # Progress is controlled by the trainer.  A value of zero keeps the
+        # encoder exactly causal during interface warm-up; one enables the
+        # complete learned bidirectional budget.
+        self.register_buffer("_training_progress", torch.ones(()), persistent=False)
+        self._force_causal = False
         self.groups = balanced_layer_groups(self.num_layers, config.num_groups)
         self._layer_to_group = {
             layer_index: group_index for group_index, layers in enumerate(self.groups) for layer_index in layers
@@ -145,6 +152,21 @@ class LayerMaskPolicy(nn.Module):
         temperature = max(self.policy_config.temperature, 1e-4)
         return torch.sigmoid(self.gate_logits / temperature)
 
+    def set_progress(self, progress: float) -> None:
+        self._training_progress.fill_(min(max(float(progress), 0.0), 1.0))
+
+    def set_force_causal(self, enabled: bool) -> None:
+        self._force_causal = bool(enabled)
+
+    def curriculum_scale(self) -> torch.Tensor:
+        ratio = max(float(self.policy_config.curriculum_ratio), 1e-8)
+        return torch.clamp(self._training_progress / ratio, min=0.0, max=1.0)
+
+    def effective_probabilities(self) -> torch.Tensor:
+        if self.mode != "learnable" or not self.training:
+            return self.probabilities()
+        return self.probabilities() * self.curriculum_scale()
+
     def topk_groups(self) -> Tuple[int, ...]:
         budget = self.policy_config.budget_groups
         if budget == 0:
@@ -157,10 +179,14 @@ class LayerMaskPolicy(nn.Module):
 
     def route(self, layer_index: int) -> Route:
         group_index = self.group_for_layer(layer_index)
+        if self._force_causal:
+            return "causal"
         if self.mode == "causal":
             return "causal"
         if self.mode in {"full", "fixed"}:
             return "bidirectional" if group_index in self._fixed_groups else "causal"
+        if self.training and float(self.curriculum_scale().item()) == 0.0:
+            return "causal"
         if not self.training and self.policy_config.hard_eval:
             return "bidirectional" if group_index in self.topk_groups() else "causal"
         return "mix"
@@ -168,7 +194,7 @@ class LayerMaskPolicy(nn.Module):
     def gate_for_layer(self, layer_index: int) -> torch.Tensor:
         if self.gate_logits is None:
             raise RuntimeError("Soft gates only exist when mask.mode=learnable")
-        return self.probabilities()[self.group_for_layer(layer_index)]
+        return self.effective_probabilities()[self.group_for_layer(layer_index)]
 
     def regularization(self) -> Dict[str, torch.Tensor]:
         """Return normalized budget and binary penalties plus their weighted sum."""
@@ -177,9 +203,10 @@ class LayerMaskPolicy(nn.Module):
             zero = torch.zeros((), device=self._device_anchor.device)
             return {"loss_gate": zero, "loss_budget": zero, "loss_binary": zero}
 
-        probabilities = self.probabilities()
+        probabilities = self.effective_probabilities()
         num_groups = float(self.policy_config.num_groups)
-        budget_error = (probabilities.sum() - self.policy_config.budget_groups) / num_groups
+        target_budget = float(self.policy_config.budget_groups) * self.curriculum_scale()
+        budget_error = (probabilities.sum() - target_budget) / num_groups
         loss_budget = budget_error.square()
         loss_binary = (probabilities * (1.0 - probabilities)).mean()
         loss_gate = self.policy_config.budget_weight * loss_budget + self.policy_config.binary_weight * loss_binary
@@ -198,12 +225,18 @@ class LayerMaskPolicy(nn.Module):
 
     def describe(self) -> Dict[str, object]:
         probabilities = [round(float(value), 6) for value in self.probabilities().detach().cpu().tolist()]
+        effective = [
+            round(float(value), 6) for value in self.effective_probabilities().detach().cpu().tolist()
+        ]
         return {
             "mode": self.mode,
             "num_layers": self.num_layers,
             "groups": [list(group) for group in self.groups],
             "budget_groups": self.policy_config.budget_groups,
             "probabilities": probabilities,
+            "effective_probabilities": effective,
+            "curriculum_progress": round(float(self._training_progress.item()), 6),
+            "force_causal": self._force_causal,
             "selected_groups": list(self.topk_groups()),
             "selected_layers": list(self.selected_layers()),
         }
