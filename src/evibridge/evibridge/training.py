@@ -16,7 +16,7 @@ import torch.nn as nn
 from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 
 from .checkpoint import load_checkpoint, save_checkpoint
 from .config import QWEN35_MODEL_SIZES, apply_model_size, dump_config, load_config
@@ -40,6 +40,8 @@ def build_experiment(config: Dict[str, Any]) -> Tuple[nn.Module, Any, Any, Any, 
 
     model_config = config.get("model", {}) or {}
     data_config = config.get("data", {}) or {}
+    train_limit = int(data_config.get("max_train_samples", 0))
+    validation_limit = int(data_config.get("max_validation_samples", 0))
     model_name = str(model_config.get("encoder_name", "Qwen/Qwen3.5-0.8B"))
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     if tokenizer.pad_token_id is None:
@@ -55,9 +57,14 @@ def build_experiment(config: Dict[str, Any]) -> Tuple[nn.Module, Any, Any, Any, 
             tokenizer,
             data_config,
             precompute_evidence=bool(data_config.get("precompute_evidence_on_load", True)),
+            max_examples=train_limit,
         )
         validation_dataset = EvidenceSeq2SeqDataset(
-            data_config["validation_file"], tokenizer, data_config, precompute_evidence=False
+            data_config["validation_file"],
+            tokenizer,
+            data_config,
+            precompute_evidence=False,
+            max_examples=validation_limit,
         )
         collator = EvidenceSeq2SeqCollator(
             tokenizer.pad_token_id,
@@ -66,21 +73,16 @@ def build_experiment(config: Dict[str, Any]) -> Tuple[nn.Module, Any, Any, Any, 
         )
     elif kind == "direct_causal":
         model = DirectCausalBaseline(model_config)
-        train_dataset = DirectSummarizationDataset(data_config["train_file"], tokenizer, data_config)
-        validation_dataset = DirectSummarizationDataset(data_config["validation_file"], tokenizer, data_config)
+        train_dataset = DirectSummarizationDataset(
+            data_config["train_file"], tokenizer, data_config, max_examples=train_limit
+        )
+        validation_dataset = DirectSummarizationDataset(
+            data_config["validation_file"], tokenizer, data_config, max_examples=validation_limit
+        )
         collator = DirectCollator(tokenizer.pad_token_id)
     else:
         raise ValueError(f"Unknown experiment.kind: {kind}")
 
-    train_limit = int(data_config.get("max_train_samples", 0))
-    validation_limit = int(data_config.get("max_validation_samples", 0))
-    if train_limit > 0:
-        train_dataset = Subset(train_dataset, range(min(train_limit, len(train_dataset))))
-    if validation_limit > 0:
-        validation_dataset = Subset(
-            validation_dataset,
-            range(min(validation_limit, len(validation_dataset))),
-        )
     return model, tokenizer, train_dataset, validation_dataset, collator
 
 

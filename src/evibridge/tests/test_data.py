@@ -1,11 +1,30 @@
+import json
+import tempfile
+from pathlib import Path
+
 import torch
 
 from evibridge.data import (
     EvidenceSeq2SeqCollator,
+    DirectSummarizationDataset,
     clean_wikihow_metadata,
     greedy_evidence_labels,
     split_evidence_units,
 )
+
+
+def test_dataset_limit_is_applied_before_item_processing():
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "train.jsonl"
+        path.write_text(
+            "".join(
+                json.dumps({"source": f"source {index}", "target": f"target {index}"}) + "\n"
+                for index in range(5)
+            ),
+            encoding="utf-8",
+        )
+        dataset = DirectSummarizationDataset(path, tokenizer=object(), data_config={}, max_examples=2)
+        assert len(dataset) == 2
 
 
 def test_oracle_evidence_selects_summary_bearing_sentences():

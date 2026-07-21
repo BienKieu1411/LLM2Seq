@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .bridge import EvidenceBridge
+from .mtp import CascadedFuturePredictor
 from .pretrained_decoder import PretrainedQwenDecoder
 from .source_encoder import CausalSourceEncoder
 
@@ -40,6 +41,8 @@ class EviBridgeSeq2Seq(nn.Module):
         objectives = config.get("objectives", {}) or {}
         self.evidence_weight = float(objectives.get("evidence_weight", 0.2))
         self.diversity_weight = float(objectives.get("diversity_weight", 0.01))
+        self.mtp_config = config.get("mtp", {}) or {}
+        self.mtp_predictor: Optional[CascadedFuturePredictor] = None
 
     @property
     def lm_head(self) -> nn.Module:
@@ -128,6 +131,25 @@ class EviBridgeSeq2Seq(nn.Module):
         for parameter in self.bridge.parameters():
             parameter.requires_grad = True
 
+    def enable_mtp(self) -> CascadedFuturePredictor:
+        """Attach the phase-3 predictor without duplicating embedding/LM-head weights."""
+
+        if self.mtp_predictor is None:
+            self.mtp_predictor = CascadedFuturePredictor(
+                self.decoder.hidden_size,
+                self.mtp_config,
+            )
+            reference = next(self.decoder.parameters())
+            self.mtp_predictor.to(device=reference.device)
+        return self.mtp_predictor
+
+    def set_mtp_only_trainable(self) -> None:
+        predictor = self.enable_mtp()
+        for parameter in self.parameters():
+            parameter.requires_grad = False
+        for parameter in predictor.parameters():
+            parameter.requires_grad = True
+
     def trainable_parameters(self) -> int:
         return sum(parameter.numel() for parameter in self.parameters() if parameter.requires_grad)
 
@@ -139,6 +161,7 @@ class EviBridgeSeq2Seq(nn.Module):
                 f"  causal source encoder: {self.encoder.model_name}",
                 f"  bridge mode: {self.bridge.mode}",
                 f"  evidence slots: {self.bridge.num_slots}",
+                f"  MTP draft depths: {self.mtp_predictor.num_draft_tokens if self.mtp_predictor is not None else 0}",
                 f"  decoder layers copied from: {list(self.decoder.layer_indices)}",
                 f"  total parameters: {total:,}",
                 f"  trainable parameters: {self.trainable_parameters():,}",

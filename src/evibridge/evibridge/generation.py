@@ -35,6 +35,8 @@ def autoregressive_generate(
         unit_ids=unit_ids,
         return_attention_mask=True,
     )
+    if hasattr(model.decoder, "prepare_cross_attention_cache"):
+        model.decoder.prepare_cross_attention_cache(memory)
     if bos_token_id is None:
         bos_token_id = eos_token_id or 0
     generated = torch.full(
@@ -111,4 +113,6 @@ def autoregressive_generate(
             if finished.all():
                 break
 
+    if hasattr(model.decoder, "clear_cross_attention_cache"):
+        model.decoder.clear_cross_attention_cache()
     return generated[:, 1:]

@@ -74,9 +74,8 @@ L = L_summary + 0.2 L_evidence + 0.01 L_slot-diversity
 
 `L_evidence` uses greedy ROUGE-1/2 oracle evidence units computed from the training
 reference. References are never used at inference. The evidence oracle is
-precomputed in RAM once at startup for the full run; this takes roughly one
-minute on the current WikiLingua split and prevents repeated CPU search during
-the ten epochs.
+precomputed in RAM once at startup for the full run, which prevents repeated
+CPU search during later epochs.
 
 ## Why this is not LaMaTE
 
@@ -95,11 +94,11 @@ makes the distinction testable rather than rhetorical.
 
 ## Training schedule
 
-The full configuration runs exactly ten epochs and saves only `final.pt`:
+The current 0.8B pilot saves only `final.pt` for the main model:
 
-1. epochs 1-2: freeze pretrained source/decoder weights; train the evidence
+1. epochs 1-3: freeze pretrained source/decoder weights; train the evidence
    bridge, decoder cross-attention, cross-norms, and residual gates;
-2. epochs 3-10: full fine-tune source and decoder with differential learning
+2. epochs 4-7: full fine-tune source and decoder with differential learning
    rates;
 3. calculate ROUGE once after training.
 
@@ -107,6 +106,25 @@ Defaults use bf16, TF32, fused AdamW, gradient checkpointing, physical batch
 32, accumulation 1, source length 3072, and a complete 24-layer pretrained
 decoder. The 0.8B configuration is the pilot; `configs/paper_2b.yaml` is the
 quality-oriented B200 run.
+
+### Optional Phase 3: verified multi-token decoding
+
+After `final.pt`, Phase 3 freezes the complete summarizer and trains four
+cascaded future-token blocks for three epochs. It changes decoding efficiency,
+not the model-quality objective. A rank-128 vocabulary projection reuses a
+fixed slice of the pretrained LM head, avoiding four full Qwen vocabulary
+projections and avoiding a second vocabulary matrix in the checkpoint.
+
+Drafts are never trusted directly. The main decoder verifies each proposed
+block; rejected suffixes are rolled back and the verified correction is used.
+This includes explicit rollback of Qwen3.5 linear-attention recurrent states,
+not only ordinary KV tensors. Consequently verified greedy output must match
+standard greedy AR token-for-token. Evaluation aborts if it does not.
+
+The intended 2-3x speedup is an empirical gate, not a hard-coded claim.
+`eval-mtp` reports synchronized wall-clock speed, acceptance, replay calls,
+fallback rate, and exact AR match. It automatically falls back to AR after a
+low-acceptance probe.
 
 ## Environment
 
@@ -162,6 +180,35 @@ bash run.sh eval \
   --checkpoint runs/overfit_128/final.pt \
   --output runs/overfit_128/train_predictions.jsonl \
   --max-samples 128
+```
+
+For a faster plumbing check of both main training stages on exactly 100
+examples, while retaining the full 24-layer Qwen3.5-0.8B decoder:
+
+```bash
+bash run.sh train --config configs/smoke_100.yaml
+bash run.sh eval \
+  --config runs/evibridge/smoke_100/resolved_config.yaml \
+  --checkpoint runs/evibridge/smoke_100/final.pt \
+  --output runs/evibridge/smoke_100/smoke_predictions.jsonl \
+  --max-samples 20
+```
+
+Then smoke-test Phase 3 on 100 training examples and compare it with greedy AR:
+
+```bash
+bash run.sh train-mtp \
+  --config runs/evibridge/smoke_100/resolved_config.yaml \
+  --checkpoint runs/evibridge/smoke_100/final.pt \
+  --output runs/evibridge/smoke_100/phase3_mtp.pt \
+  --max-samples 100 --epochs 1
+
+bash run.sh eval-mtp \
+  --config runs/evibridge/smoke_100/resolved_config.yaml \
+  --checkpoint runs/evibridge/smoke_100/final.pt \
+  --mtp-checkpoint runs/evibridge/smoke_100/phase3_mtp.pt \
+  --output runs/evibridge/smoke_100/mtp_predictions.jsonl \
+  --max-samples 20
 ```
 
 0.8B decision pilot:

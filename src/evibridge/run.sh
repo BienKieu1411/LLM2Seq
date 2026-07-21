@@ -17,8 +17,10 @@ if [[ $# -gt 0 ]]; then shift; fi
 case "${COMMAND}" in
   train) exec "${PYTHON_BIN}" -m evibridge.training "$@" ;;
   eval) exec "${PYTHON_BIN}" -m evibridge.evaluate "$@" ;;
+  train-mtp) exec "${PYTHON_BIN}" -m evibridge.mtp_training "$@" ;;
+  eval-mtp) exec "${PYTHON_BIN}" -m evibridge.mtp_evaluate "$@" ;;
   ablate) exec "${PYTHON_BIN}" -m evibridge.run_ablations "$@" ;;
   prepare-lrsum) exec "${PYTHON_BIN}" "${SCRIPT_DIR}/scripts/prepare_lrsum.py" "$@" ;;
   test) exec "${PYTHON_BIN}" "${SCRIPT_DIR}/tests/run_tests.py" "$@" ;;
-  *) echo "Unknown command: ${COMMAND} (train|eval|ablate|prepare-lrsum|test)" >&2; exit 2 ;;
+  *) echo "Unknown command: ${COMMAND} (train|eval|train-mtp|eval-mtp|ablate|prepare-lrsum|test)" >&2; exit 2 ;;
 esac

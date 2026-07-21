@@ -61,6 +61,8 @@ class QwenCrossAttention(nn.Module):
         self.q_norm = HeadRMSNorm(self.head_dim, eps)
         self.k_norm = HeadRMSNorm(self.head_dim, eps)
         self.dropout = float(dropout)
+        self._cached_key: Optional[torch.Tensor] = None
+        self._cached_value: Optional[torch.Tensor] = None
 
     @torch.no_grad()
     def initialize_from_self_attention(self, source: nn.Module) -> None:
@@ -98,15 +100,21 @@ class QwenCrossAttention(nn.Module):
         batch_size, query_length, _ = hidden_states.shape
         key_length = encoder_hidden_states.shape[1]
         query = self.q_proj(hidden_states).view(batch_size, query_length, self.num_heads, self.head_dim)
-        key = self.k_proj(encoder_hidden_states).view(
-            batch_size, key_length, self.num_kv_heads, self.head_dim
-        )
-        value = self.v_proj(encoder_hidden_states).view(
-            batch_size, key_length, self.num_kv_heads, self.head_dim
-        )
+        if self._cached_key is not None and self._cached_value is not None and not self.training:
+            key = self._cached_key
+            value = self._cached_value
+            if key.shape[0] != batch_size or key.shape[2] != key_length:
+                raise RuntimeError("Stale cross-attention memory cache; prepare it for the current source")
+        else:
+            key = self.k_proj(encoder_hidden_states).view(
+                batch_size, key_length, self.num_kv_heads, self.head_dim
+            )
+            value = self.v_proj(encoder_hidden_states).view(
+                batch_size, key_length, self.num_kv_heads, self.head_dim
+            )
+            key = self.k_norm(key).transpose(1, 2)
+            value = value.transpose(1, 2)
         query = self.q_norm(query).transpose(1, 2)
-        key = self.k_norm(key).transpose(1, 2)
-        value = value.transpose(1, 2)
         repeats = self.num_heads // self.num_kv_heads
         if repeats > 1:
             key = key.repeat_interleave(repeats, dim=1)
@@ -125,6 +133,22 @@ class QwenCrossAttention(nn.Module):
         )
         attended = attended.transpose(1, 2).reshape(batch_size, query_length, -1)
         return self.o_proj(attended)
+
+    @torch.no_grad()
+    def prepare_memory_cache(self, encoder_hidden_states: torch.Tensor) -> None:
+        batch_size, key_length, _ = encoder_hidden_states.shape
+        key = self.k_proj(encoder_hidden_states).view(
+            batch_size, key_length, self.num_kv_heads, self.head_dim
+        )
+        value = self.v_proj(encoder_hidden_states).view(
+            batch_size, key_length, self.num_kv_heads, self.head_dim
+        )
+        self._cached_key = self.k_norm(key).transpose(1, 2).contiguous()
+        self._cached_value = value.transpose(1, 2).contiguous()
+
+    def clear_memory_cache(self) -> None:
+        self._cached_key = None
+        self._cached_value = None
 
 
 class CrossAttentionInjectedLayer(GradientCheckpointingLayer):
@@ -274,6 +298,22 @@ class PretrainedQwenDecoder(nn.Module):
             for parameter in layer.cross_attn.parameters():
                 parameter.requires_grad = True
             layer.cross_gate.requires_grad = True
+
+    @torch.no_grad()
+    def prepare_cross_attention_cache(self, encoder_hidden_states: torch.Tensor) -> None:
+        """Project static encoder K/V once instead of once per generated token."""
+
+        self.clear_cross_attention_cache()
+        for layer in self.backbone.layers:
+            layer.cross_attn.prepare_memory_cache(encoder_hidden_states)
+
+    def clear_cross_attention_cache(self) -> None:
+        for layer in self.backbone.layers:
+            layer.cross_attn.clear_memory_cache()
+
+    @property
+    def embed_tokens(self) -> nn.Module:
+        return self.backbone.embed_tokens
 
     @property
     def hidden_size(self) -> int:

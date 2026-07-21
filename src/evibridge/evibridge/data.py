@@ -254,8 +254,11 @@ class EvidenceSeq2SeqDataset(Dataset):
         tokenizer: Any,
         data_config: Dict[str, Any],
         precompute_evidence: bool = False,
+        max_examples: int = 0,
     ):
         self.examples = read_jsonl(path)
+        if max_examples > 0:
+            self.examples = self.examples[: int(max_examples)]
         self.tokenizer = tokenizer
         self.data_config = data_config
         self.max_target_length = int(data_config.get("max_target_length", 384))
@@ -366,8 +369,16 @@ class EvidenceSeq2SeqCollator:
 
 
 class DirectSummarizationDataset(Dataset):
-    def __init__(self, path: str | Path, tokenizer: Any, data_config: Dict[str, Any]):
+    def __init__(
+        self,
+        path: str | Path,
+        tokenizer: Any,
+        data_config: Dict[str, Any],
+        max_examples: int = 0,
+    ):
         self.examples = read_jsonl(path)
+        if max_examples > 0:
+            self.examples = self.examples[: int(max_examples)]
         self.tokenizer = tokenizer
         self.data_config = data_config
         self.max_target_length = int(data_config.get("max_target_length", 384))
