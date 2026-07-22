@@ -114,7 +114,9 @@ document alone produces both salience and plan states.
   bridge, planning tokens, salience head, cross-attention, cross norms, and
   cross-residual/plan-selection gates at `1e-4`.
 - Epochs 3-10: full fine-tune every parameter with one common LR inside the run.
-- Save only `final.pt`; evaluate once after training.
+- Run teacher-forced validation after every epoch, select the lowest summary CE
+  as `best.pt`, and retain the terminal weights as `last.pt`. No per-epoch
+  checkpoint history is kept.
 
 The full stage and T5Gemma baseline both use AdamW
 `betas=(0.9, 0.95)`, `eps=1e-8`, weight decay `0.01`, 5% linear warm-up,
@@ -137,7 +139,7 @@ The 4B profile quantizes only optimizer states to fit two fully trainable 4B
 backbones and their activations on one B200. All profiles retain FP32
 master/model parameters and gradients so `5e-6`–`1e-5` updates are not rounded
 away; forward/backward matrix compute uses BF16 autocast. Evaluation casts the
-final checkpoint to BF16.
+selected best checkpoint to BF16.
 
 ## Parameter counts
 
@@ -207,10 +209,10 @@ bash run.sh train --config configs/qwen3_1_7b.yaml
 bash run.sh train --config configs/qwen3_4b.yaml
 ```
 
-Training refuses to start when the selected output directory still contains a
-`final.pt` or an incomplete-run marker. This prevents a crashed rerun from
+Training refuses to start when the selected output directory still contains
+`best.pt`, `last.pt`, legacy `final.pt`, or an incomplete-run marker. This prevents a crashed rerun from
 being mistaken for a new result. To intentionally rerun the exact same config,
-pass `--overwrite-output-dir`; the old final checkpoint is removed before any
+pass `--overwrite-output-dir`; the old checkpoints are removed before any
 new training begins:
 
 ```bash
@@ -249,7 +251,7 @@ bash run.sh train --config configs/smoke_100.yaml
 
 bash run.sh eval \
   --config runs/genbridge/qwen3_0_6b_overfit_100/resolved_config.yaml \
-  --checkpoint runs/genbridge/qwen3_0_6b_overfit_100/final.pt \
+  --checkpoint runs/genbridge/qwen3_0_6b_overfit_100/last.pt \
   --output runs/genbridge/qwen3_0_6b_overfit_100/predictions.jsonl \
   --max-samples 100
 
@@ -257,7 +259,9 @@ bash run.sh check-smoke \
   --metrics runs/genbridge/qwen3_0_6b_overfit_100/predictions.metrics.json
 ```
 
-The final command is a plumbing gate: it rejects empty/repetitive output,
+The smoke check deliberately uses `last.pt`, because its purpose is to verify
+that the optimization path can overfit the 100 seen examples. Paper evaluation
+uses validation-selected `best.pt`. The final command is a plumbing gate: it rejects empty/repetitive output,
 common-prefix collapse, an ignored encoder, or very low overfit ROUGE. It is
 not a substitute for held-out paper evaluation.
 
@@ -272,12 +276,12 @@ The symmetric and mixed smoke runs write to separate `*_overfit_100`
 directories to avoid stale checkpoints. Do not reuse a checkpoint trained by
 an earlier smoke schedule.
 
-Evaluate the final checkpoint once:
+Evaluate the validation-selected checkpoint once on the test set:
 
 ```bash
 bash run.sh eval \
   --config runs/genbridge/qwen3_0_6b/resolved_config.yaml \
-  --checkpoint runs/genbridge/qwen3_0_6b/final.pt \
+  --checkpoint runs/genbridge/qwen3_0_6b/best.pt \
   --output runs/genbridge/qwen3_0_6b/test_predictions.jsonl
 ```
 

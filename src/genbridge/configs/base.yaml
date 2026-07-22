@@ -97,6 +97,10 @@ training:
   optimizer: adamw_torch
   seed: 42
   log_every_steps: 10
+  # Run teacher-forced validation after every epoch. The checkpoint with the
+  # lowest summary-token CE is best.pt; the terminal weights are last.pt.
+  eval_batch_size: 8
+  eval_num_workers: 4
 
 data:
   train_file: data/wikilingua/train.jsonl
@@ -124,6 +128,7 @@ data:
   oracle_rouge2_weight: 0.5
   # Compute the oracle once before training; avoids repeating CPU ROUGE search every epoch.
   precompute_evidence_on_load: true
+  precompute_validation_evidence_on_load: true
 
 generation:
   # Match the WikiLingua T5Gemma evaluation batch for comparable throughput.

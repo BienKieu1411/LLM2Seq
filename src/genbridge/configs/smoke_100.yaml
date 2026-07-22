@@ -2,7 +2,7 @@ _base_: base.yaml
 
 experiment:
   name: genbridge_qwen3_0_6b_overfit_100
-  # A fresh directory prevents evaluation from loading a stale final.pt left
+  # A fresh directory prevents evaluation from loading stale checkpoints left
   # by the earlier 8/300-update smoke experiments.
   output_dir: runs/genbridge/qwen3_0_6b_overfit_100
 
@@ -29,6 +29,7 @@ training:
   num_workers: 2
   full_lr: 5.0e-5
   log_every_steps: 1
+  eval_batch_size: 2
 
 data:
   max_train_samples: 100

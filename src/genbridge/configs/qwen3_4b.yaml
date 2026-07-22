@@ -18,6 +18,7 @@ training:
   gradient_accumulation_steps: 16
   optimizer: adamw_8bit
   full_lr: 5.0e-6
+  eval_batch_size: 2
 
 generation:
   batch_size: 2

@@ -152,7 +152,9 @@ def build_experiment(
             data_config["validation_file"],
             tokenizer,
             data_config,
-            precompute_evidence=False,
+            precompute_evidence=bool(
+                data_config.get("precompute_validation_evidence_on_load", True)
+            ),
             max_examples=validation_limit,
         )
         collator = EvidenceSeq2SeqCollator(
@@ -282,6 +284,68 @@ def _forward(model: nn.Module, batch: Dict[str, torch.Tensor], kind: str) -> Dic
     )
 
 
+@torch.inference_mode()
+def evaluate_teacher_forced(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    kind: str,
+    amp_dtype: torch.dtype,
+    use_amp: bool,
+) -> Dict[str, float]:
+    """Measure held-out teacher-forced loss without autoregressive decoding.
+
+    Checkpoint selection uses token-weighted CE rather than the combined
+    auxiliary objective.  CE is comparable across batches with different
+    target lengths and directly measures summary-token prediction, while the
+    salience/planning losses remain diagnostics rather than deciding which
+    checkpoint is called best.
+    """
+
+    model.eval()
+    ce_sum = 0.0
+    supervised_tokens = 0
+    example_count = 0
+    component_sums: Dict[str, float] = {}
+    for batch in loader:
+        batch = {name: value.to(device, non_blocking=True) for name, value in batch.items()}
+        with autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
+            outputs = _forward(model, batch, kind)
+        labels = batch["labels"][:, 1:] if kind == "direct_causal" else batch["labels"]
+        token_count = int(labels.ne(-100).sum().item())
+        if token_count <= 0:
+            raise ValueError("Validation batch contains no supervised summary tokens")
+        batch_examples = int(labels.shape[0])
+        loss_ce = outputs.get("loss_ce", outputs["loss"])
+        ce_sum += float(loss_ce.detach().float().item()) * token_count
+        supervised_tokens += token_count
+        example_count += batch_examples
+        for key in (
+            "loss",
+            "loss_salience",
+            "loss_plan_alignment",
+            "loss_plan_diversity",
+        ):
+            if key in outputs:
+                component_sums[key] = component_sums.get(key, 0.0) + (
+                    float(outputs[key].detach().float().item()) * batch_examples
+                )
+    if supervised_tokens == 0 or example_count == 0:
+        raise ValueError("Validation loader is empty")
+    metrics = {
+        "eval_loss_ce": ce_sum / supervised_tokens,
+        "eval_supervised_tokens": float(supervised_tokens),
+        "eval_examples": float(example_count),
+    }
+    metrics.update(
+        {
+            f"eval_{key}": value / example_count
+            for key, value in component_sums.items()
+        }
+    )
+    return metrics
+
+
 def train(
     config_path: str,
     resume: Optional[str] = None,
@@ -296,14 +360,23 @@ def train(
     kind = str(experiment.get("kind", "encoder_decoder"))
     output_dir = Path(str(experiment.get("output_dir", "runs/genbridge/base")))
     output_dir.mkdir(parents=True, exist_ok=True)
-    final_path = output_dir / "final.pt"
+    best_path = output_dir / "best.pt"
+    last_path = output_dir / "last.pt"
+    legacy_final_path = output_dir / "final.pt"
     running_marker = output_dir / "RUNNING"
-    if resume and Path(resume).resolve() == final_path.resolve():
+    canonical_checkpoints = (best_path, last_path, legacy_final_path)
+    if resume and Path(resume).resolve() in {
+        path.resolve() for path in canonical_checkpoints
+    }:
         raise ValueError(
-            "Cannot resume from final.pt into its own output directory because a new run "
+            "Cannot resume from a canonical checkpoint into its own output directory because a new run "
             "must never coexist with a stale final result. Use a different output_dir."
         )
-    occupied = [path for path in (final_path, running_marker) if path.exists()]
+    occupied = [
+        path
+        for path in (*canonical_checkpoints, running_marker)
+        if path.exists()
+    ]
     if occupied and not overwrite_output_dir:
         raise FileExistsError(
             "Refusing to mix a new run with existing artifacts: "
@@ -349,7 +422,7 @@ def train(
     if bool(training.get("tf32", True)) and torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
 
-    model, _, train_dataset, _, collator = build_experiment(config)
+    model, _, train_dataset, validation_dataset, collator = build_experiment(config)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     if bool(training.get("require_fp32_master_weights", True)):
@@ -397,6 +470,22 @@ def train(
             shuffle=True,
             **loader_kwargs,
         )
+    generation = config.get("generation", {}) or {}
+    eval_batch_size = int(
+        training.get("eval_batch_size", generation.get("batch_size", 8))
+    )
+    if eval_batch_size <= 0:
+        raise ValueError("training.eval_batch_size must be positive")
+    eval_workers = int(training.get("eval_num_workers", workers))
+    eval_loader = DataLoader(
+        validation_dataset,
+        batch_size=eval_batch_size,
+        shuffle=False,
+        num_workers=eval_workers,
+        collate_fn=collator,
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=eval_workers > 0,
+    )
     epochs = int(training.get("epochs", 10))
     interface_epochs = int(training.get("interface_warmup_epochs", 2)) if kind == "encoder_decoder" else 0
     if resume and bool(training.get("skip_interface_warmup_on_resume", True)):
@@ -447,10 +536,18 @@ def train(
         batch_size * accumulation,
     )
     LOGGER.info(
+        "Checkpoint selection: %d validation examples, batch=%d, metric=eval_loss_ce (minimize)",
+        len(validation_dataset),
+        eval_batch_size,
+    )
+    LOGGER.info(
         "Precision: FP32 master parameters, %s autocast compute",
         "BF16" if use_bf16 else "FP16" if use_fp16 else "FP32",
     )
 
+    best_metric = math.inf
+    best_epoch = 0
+    last_validation_metrics: Dict[str, float] = {}
     for epoch in range(1, epochs + 1):
         if length_sampler is not None:
             length_sampler.set_epoch(epoch)
@@ -508,12 +605,72 @@ def train(
                 break
         completed_epoch = epoch
         LOGGER.info("completed epoch=%d stage=%s global_step=%d", epoch, stage, global_step)
+        last_validation_metrics = evaluate_teacher_forced(
+            model,
+            eval_loader,
+            device,
+            kind,
+            amp_dtype,
+            use_bf16 or use_fp16,
+        )
+        selection_value = float(last_validation_metrics["eval_loss_ce"])
+        if not math.isfinite(selection_value):
+            raise RuntimeError(
+                f"Non-finite validation CE at epoch {epoch}: {selection_value}"
+            )
+        LOGGER.info(
+            "validation %s",
+            json.dumps(
+                {
+                    "epoch": epoch,
+                    "step": global_step,
+                    "stage": stage,
+                    **last_validation_metrics,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        if selection_value < best_metric:
+            best_metric = selection_value
+            best_epoch = epoch
+            save_checkpoint(
+                model,
+                best_path,
+                config,
+                epoch,
+                global_step,
+                validation_metrics=last_validation_metrics,
+                checkpoint_role="best",
+            )
+            LOGGER.info(
+                "New best checkpoint: %s (epoch=%d eval_loss_ce=%.8f)",
+                best_path,
+                epoch,
+                best_metric,
+            )
         if global_step >= total_steps:
             break
 
-    save_checkpoint(model, final_path, config, completed_epoch, global_step)
+    save_checkpoint(
+        model,
+        last_path,
+        config,
+        completed_epoch,
+        global_step,
+        validation_metrics=last_validation_metrics,
+        checkpoint_role="last",
+    )
+    if best_epoch == 0 or not best_path.exists():
+        raise RuntimeError("Training completed without producing best.pt")
     running_marker.unlink(missing_ok=True)
-    LOGGER.info("Training complete: %s", final_path)
+    LOGGER.info(
+        "Training complete: best=%s (epoch=%d eval_loss_ce=%.8f), last=%s (epoch=%d)",
+        best_path,
+        best_epoch,
+        best_metric,
+        last_path,
+        completed_epoch,
+    )
 
 
 def main() -> None:

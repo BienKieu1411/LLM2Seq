@@ -17,6 +17,7 @@ training:
   gradient_accumulation_steps: 4
   optimizer: adamw_torch
   full_lr: 8.0e-6
+  eval_batch_size: 4
 
 generation:
   batch_size: 4

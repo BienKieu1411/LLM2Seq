@@ -69,7 +69,7 @@ def main() -> None:
                 "--config",
                 str(output_dir / "resolved_config.yaml"),
                 "--checkpoint",
-                str(output_dir / "final.pt"),
+                str(output_dir / "best.pt"),
                 "--output",
                 str(output_dir / "test_predictions.jsonl"),
             ]
