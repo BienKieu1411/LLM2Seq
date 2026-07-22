@@ -27,7 +27,9 @@ def heter_sum_graph_rouge(
     if not predictions:
         return {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0, **({"rougeLsum": 0.0} if include_rouge_lsum else {})}
 
-    normalize = lambda text: unicodedata.normalize("NFC", str(text)).lower().strip()
+    def normalize(text: str) -> str:
+        return unicodedata.normalize("NFC", str(text)).lower().strip()
+
     hypotheses = [normalize(text) or "<empty>" for text in predictions]
     targets = [normalize(text) or "<empty-reference>" for text in references]
     scores = Rouge().get_scores(hypotheses, targets, avg=True)

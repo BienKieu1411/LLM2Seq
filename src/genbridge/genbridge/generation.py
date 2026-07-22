@@ -139,16 +139,12 @@ def autoregressive_generate(
                 latest = torch.stack([values[:, -1] for values in gate_values], dim=0)
                 active = (~finished).float().unsqueeze(0)
                 if plan_layer_sums is None:
-                    plan_layer_sums = torch.zeros(
-                        latest.shape[0], device=latest.device, dtype=torch.float32
-                    )
+                    plan_layer_sums = torch.zeros(latest.shape[0], device=latest.device, dtype=torch.float32)
                     plan_layer_counts = torch.zeros_like(plan_layer_sums)
                 plan_layer_sums += (latest * active).sum(dim=1)
                 plan_layer_counts += active.sum(dim=1).expand_as(plan_layer_counts)
                 plan_step_sums.append((latest * active).sum())
-                plan_step_counts.append(
-                    active.sum() * float(latest.shape[0])
-                )
+                plan_step_counts.append(active.sum() * float(latest.shape[0]))
 
         # Match Transformers' MinNewTokensLengthLogitsProcessor: EOS remains
         # blocked while the number of already generated tokens is below the
@@ -210,15 +206,9 @@ def autoregressive_generate(
     if not return_diagnostics:
         return output
     diagnostics = {
-        "plan_gate_layer_sums": (
-            plan_layer_sums.detach().cpu().tolist() if plan_layer_sums is not None else []
-        ),
-        "plan_gate_layer_counts": (
-            plan_layer_counts.detach().cpu().tolist() if plan_layer_counts is not None else []
-        ),
+        "plan_gate_layer_sums": (plan_layer_sums.detach().cpu().tolist() if plan_layer_sums is not None else []),
+        "plan_gate_layer_counts": (plan_layer_counts.detach().cpu().tolist() if plan_layer_counts is not None else []),
         "plan_gate_step_sums": [float(value.detach().cpu()) for value in plan_step_sums],
-        "plan_gate_step_counts": [
-            float(value.detach().cpu()) for value in plan_step_counts
-        ],
+        "plan_gate_step_counts": [float(value.detach().cpu()) for value in plan_step_counts],
     }
     return output, diagnostics

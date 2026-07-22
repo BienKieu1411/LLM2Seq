@@ -74,8 +74,7 @@ class LengthBucketBatchSampler(Sampler[list[int]]):
             bucket = shuffled[start : start + self.bucket_size]
             bucket.sort(key=self.lengths.__getitem__, reverse=True)
             batches.extend(
-                bucket[offset : offset + self.batch_size]
-                for offset in range(0, len(bucket), self.batch_size)
+                bucket[offset : offset + self.batch_size] for offset in range(0, len(bucket), self.batch_size)
             )
         order = torch.randperm(len(batches), generator=generator).tolist()
         yield from (batches[index] for index in order)
@@ -95,10 +94,7 @@ def assert_tokenizers_compatible(source_tokenizer: Any, decoder_tokenizer: Any) 
         source_id = getattr(source_tokenizer, field, None)
         decoder_id = getattr(decoder_tokenizer, field, None)
         if source_id != decoder_id:
-            raise ValueError(
-                f"Mixed encoder/decoder tokenizers disagree on {field}: "
-                f"{source_id} != {decoder_id}"
-            )
+            raise ValueError(f"Mixed encoder/decoder tokenizers disagree on {field}: {source_id} != {decoder_id}")
 
 
 def set_seed(seed: int) -> None:
@@ -152,9 +148,7 @@ def build_experiment(
             data_config["validation_file"],
             tokenizer,
             data_config,
-            precompute_evidence=bool(
-                data_config.get("precompute_validation_evidence_on_load", True)
-            ),
+            precompute_evidence=bool(data_config.get("precompute_validation_evidence_on_load", True)),
             max_examples=validation_limit,
         )
         collator = EvidenceSeq2SeqCollator(
@@ -181,11 +175,7 @@ def build_experiment(
 
 
 def _component(name: str) -> str:
-    if (
-        name.startswith("bridge.")
-        or name.endswith("fusion_logits")
-        or name.endswith("summary_tokens")
-    ):
+    if name.startswith("bridge.") or name.endswith("fusion_logits") or name.endswith("summary_tokens"):
         return "bridge"
     if ".cross_attn" in name or ".plan_gate" in name or name.endswith("cross_gate"):
         return "interface"
@@ -206,9 +196,7 @@ def build_optimizer(
         learning_rate = float(training.get("full_lr", 1e-5))
     else:
         raise ValueError(f"Unknown optimizer stage: {stage}")
-    rates = {
-        name: learning_rate for name in ("encoder", "decoder", "bridge", "interface")
-    }
+    rates = {name: learning_rate for name in ("encoder", "decoder", "bridge", "interface")}
     decay = float(training.get("weight_decay", 0.01))
     grouped: Dict[tuple[str, bool], list[nn.Parameter]] = {}
     for name, parameter in model.named_parameters():
@@ -245,9 +233,7 @@ def build_optimizer(
         try:
             from bitsandbytes.optim import AdamW8bit
         except ImportError as exc:
-            raise ImportError(
-                "The 4B full-finetune profile requires bitsandbytes for 8-bit optimizer states"
-            ) from exc
+            raise ImportError("The 4B full-finetune profile requires bitsandbytes for 8-bit optimizer states") from exc
         optimizer = AdamW8bit(groups, betas=betas, eps=epsilon)
     else:
         raise ValueError("training.optimizer must be adamw_torch or adamw_8bit")
@@ -337,12 +323,7 @@ def evaluate_teacher_forced(
         "eval_supervised_tokens": float(supervised_tokens),
         "eval_examples": float(example_count),
     }
-    metrics.update(
-        {
-            f"eval_{key}": value / example_count
-            for key, value in component_sums.items()
-        }
-    )
+    metrics.update({f"eval_{key}": value / example_count for key, value in component_sums.items()})
     return metrics
 
 
@@ -365,18 +346,12 @@ def train(
     legacy_final_path = output_dir / "final.pt"
     running_marker = output_dir / "RUNNING"
     canonical_checkpoints = (best_path, last_path, legacy_final_path)
-    if resume and Path(resume).resolve() in {
-        path.resolve() for path in canonical_checkpoints
-    }:
+    if resume and Path(resume).resolve() in {path.resolve() for path in canonical_checkpoints}:
         raise ValueError(
             "Cannot resume from a canonical checkpoint into its own output directory because a new run "
             "must never coexist with a stale final result. Use a different output_dir."
         )
-    occupied = [
-        path
-        for path in (*canonical_checkpoints, running_marker)
-        if path.exists()
-    ]
+    occupied = [path for path in (*canonical_checkpoints, running_marker) if path.exists()]
     if occupied and not overwrite_output_dir:
         raise FileExistsError(
             "Refusing to mix a new run with existing artifacts: "
@@ -471,9 +446,7 @@ def train(
             **loader_kwargs,
         )
     generation = config.get("generation", {}) or {}
-    eval_batch_size = int(
-        training.get("eval_batch_size", generation.get("batch_size", 8))
-    )
+    eval_batch_size = int(training.get("eval_batch_size", generation.get("batch_size", 8)))
     if eval_batch_size <= 0:
         raise ValueError("training.eval_batch_size must be positive")
     eval_workers = int(training.get("eval_num_workers", workers))
@@ -558,7 +531,10 @@ def train(
                 model.set_training_stage(stage)
             optimizer, scheduler = build_optimizer(model, training, full_steps, stage)
             optimizer.zero_grad(set_to_none=True)
-            LOGGER.info("Switched to full fine-tuning; trainable=%d", sum(p.numel() for p in model.parameters() if p.requires_grad))
+            LOGGER.info(
+                "Switched to full fine-tuning; trainable=%d",
+                sum(p.numel() for p in model.parameters() if p.requires_grad),
+            )
         model.train()
         for batch_index, batch in enumerate(loader, start=1):
             batch = {name: value.to(device, non_blocking=True) for name, value in batch.items()}
@@ -615,9 +591,7 @@ def train(
         )
         selection_value = float(last_validation_metrics["eval_loss_ce"])
         if not math.isfinite(selection_value):
-            raise RuntimeError(
-                f"Non-finite validation CE at epoch {epoch}: {selection_value}"
-            )
+            raise RuntimeError(f"Non-finite validation CE at epoch {epoch}: {selection_value}")
         LOGGER.info(
             "validation %s",
             json.dumps(

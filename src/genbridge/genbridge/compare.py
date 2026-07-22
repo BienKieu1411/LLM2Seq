@@ -58,9 +58,7 @@ def _aligned_rows(
         candidate_reference = str(candidate[example_id]["reference"])
         baseline_reference = str(baseline[example_id]["reference"])
         if candidate_reference != baseline_reference:
-            raise ValueError(
-                f"Reference mismatch for id {example_id!r}; refusing an unpaired comparison"
-            )
+            raise ValueError(f"Reference mismatch for id {example_id!r}; refusing an unpaired comparison")
         candidate_predictions.append(str(candidate[example_id]["prediction"]))
         baseline_predictions.append(str(baseline[example_id]["prediction"]))
         references.append(candidate_reference)

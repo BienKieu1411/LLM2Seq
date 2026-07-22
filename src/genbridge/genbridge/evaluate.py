@@ -49,10 +49,7 @@ def _generation_diagnostics(
         tokens = str(text).split()
         if len(tokens) < order:
             return 0.0
-        ngrams = [
-            tuple(tokens[index : index + order])
-            for index in range(len(tokens) - order + 1)
-        ]
+        ngrams = [tuple(tokens[index : index + order]) for index in range(len(tokens) - order + 1)]
         return 1.0 - len(set(ngrams)) / len(ngrams)
 
     count = max(1, len(predictions))
@@ -60,13 +57,9 @@ def _generation_diagnostics(
     reference_lengths = [word_count(text) for text in references]
     source_lengths = [word_count(text) for text in sources]
     length_ratios = [
-        prediction / max(1, reference)
-        for prediction, reference in zip(prediction_lengths, reference_lengths)
+        prediction / max(1, reference) for prediction, reference in zip(prediction_lengths, reference_lengths)
     ]
-    compression_ratios = [
-        prediction / max(1, source)
-        for prediction, source in zip(prediction_lengths, source_lengths)
-    ]
+    compression_ratios = [prediction / max(1, source) for prediction, source in zip(prediction_lengths, source_lengths)]
     normalized_predictions = [" ".join(text.lower().split()) for text in predictions]
     nonempty = [text for text in normalized_predictions if text]
     prefixes = Counter(" ".join(text.split()[:5]) for text in nonempty)
@@ -136,12 +129,8 @@ def _salience_diagnostics(
         "salience_recall": round(100.0 * recall, 4),
         "salience_f1": round(100.0 * f1, 4),
         "salience_average_precision": round(100.0 * average_precision, 4),
-        "salience_predicted_positive_rate": round(
-            100.0 * sum(predicted) / len(predicted), 4
-        ),
-        "salience_oracle_positive_rate": round(
-            100.0 * sum(positive) / len(positive), 4
-        ),
+        "salience_predicted_positive_rate": round(100.0 * sum(predicted) / len(predicted), 4),
+        "salience_oracle_positive_rate": round(100.0 * sum(positive) / len(positive), 4),
         "salience_scored_units": len(labels),
     }
 
@@ -213,14 +202,8 @@ def _plan_gate_diagnostics(
 ) -> Dict[str, Any]:
     if not layer_sums or not step_sums:
         return {}
-    per_layer = [
-        total / max(1.0, count)
-        for total, count in zip(layer_sums, layer_counts)
-    ]
-    per_step = [
-        total / max(1.0, count)
-        for total, count in zip(step_sums, step_counts)
-    ]
+    per_layer = [total / max(1.0, count) for total, count in zip(layer_sums, layer_counts)]
+    per_step = [total / max(1.0, count) for total, count in zip(step_sums, step_counts)]
     early_boundary = min(16, len(step_sums))
     early_sum = sum(step_sums[:early_boundary])
     early_count = sum(step_counts[:early_boundary])
@@ -270,9 +253,7 @@ def _generate_encoder_decoder(
         aligned_ids = []
         visible_units = []
         for example in batch:
-            ids, unit_ids, units = prompted_source_features(
-                tokenizer, str(example["source"]), data
-            )
+            ids, unit_ids, units = prompted_source_features(tokenizer, str(example["source"]), data)
             token_features.append({"input_ids": ids, "attention_mask": [1] * len(ids)})
             aligned_ids.append(unit_ids)
             visible_units.append(units)
@@ -312,9 +293,7 @@ def _generate_encoder_decoder(
         batch_elapsed = time.perf_counter() - batch_start
         batch_lengths = _generated_lengths(generated, tokenizer.eos_token_id)
         generated_lengths.extend(batch_lengths)
-        per_example_latencies.extend(
-            [batch_elapsed / max(1, len(batch))] * len(batch)
-        )
+        per_example_latencies.extend([batch_elapsed / max(1, len(batch))] * len(batch))
         predictions.extend(tokenizer.batch_decode(generated, skip_special_tokens=True))
         batch_layer_sums = generation_diagnostics["plan_gate_layer_sums"]
         batch_layer_counts = generation_diagnostics["plan_gate_layer_counts"]
@@ -324,23 +303,15 @@ def _generate_encoder_decoder(
                 plan_layer_counts = [0.0] * len(batch_layer_counts)
             if len(batch_layer_sums) != len(plan_layer_sums):
                 raise RuntimeError("Cross-attention layer count changed between batches")
-            plan_layer_sums = [
-                total + float(value)
-                for total, value in zip(plan_layer_sums, batch_layer_sums)
-            ]
-            plan_layer_counts = [
-                total + float(value)
-                for total, value in zip(plan_layer_counts, batch_layer_counts)
-            ]
+            plan_layer_sums = [total + float(value) for total, value in zip(plan_layer_sums, batch_layer_sums)]
+            plan_layer_counts = [total + float(value) for total, value in zip(plan_layer_counts, batch_layer_counts)]
         batch_step_sums = generation_diagnostics["plan_gate_step_sums"]
         batch_step_counts = generation_diagnostics["plan_gate_step_counts"]
         if len(plan_step_sums) < len(batch_step_sums):
             extension = len(batch_step_sums) - len(plan_step_sums)
             plan_step_sums.extend([0.0] * extension)
             plan_step_counts.extend([0.0] * extension)
-        for index, (total, count) in enumerate(
-            zip(batch_step_sums, batch_step_counts)
-        ):
+        for index, (total, count) in enumerate(zip(batch_step_sums, batch_step_counts)):
             plan_step_sums[index] += float(total)
             plan_step_counts[index] += float(count)
         # References are consulted only after the complete model generation
@@ -359,9 +330,7 @@ def _generate_encoder_decoder(
                 )
                 width = min(len(oracle), bridge_output.salience_logits.shape[1])
                 for probability, label in zip(
-                    torch.sigmoid(
-                        bridge_output.salience_logits[row, :width].float()
-                    ).tolist(),
+                    torch.sigmoid(bridge_output.salience_logits[row, :width].float()).tolist(),
                     oracle[:width],
                 ):
                     if label >= 0:
@@ -448,9 +417,7 @@ def _generate_direct(
         continuation = generated[:, prompt_length:]
         batch_lengths = _generated_lengths(continuation, tokenizer.eos_token_id)
         generated_lengths.extend(batch_lengths)
-        per_example_latencies.extend(
-            [batch_elapsed / max(1, len(features))] * len(features)
-        )
+        per_example_latencies.extend([batch_elapsed / max(1, len(features))] * len(features))
         predictions.extend(tokenizer.batch_decode(continuation, skip_special_tokens=True))
     return (
         [prediction.strip() for prediction in predictions],
@@ -483,9 +450,7 @@ def evaluate_examples(
             model, tokenizer, examples, config, device
         )
     else:
-        predictions, performance_metrics = _generate_direct(
-            model, tokenizer, examples, config, device
-        )
+        predictions, performance_metrics = _generate_direct(model, tokenizer, examples, config, device)
     references = [str(example["target"]) for example in examples]
     sources = [str(example["source"]) for example in examples]
     metrics = _rouge(predictions, references)
@@ -505,9 +470,7 @@ def evaluate(
     checkpoint = Path(checkpoint_path)
     running_marker = checkpoint.parent / "RUNNING"
     if running_marker.exists():
-        raise RuntimeError(
-            f"Refusing to evaluate {checkpoint}: {running_marker} indicates an incomplete run"
-        )
+        raise RuntimeError(f"Refusing to evaluate {checkpoint}: {running_marker} indicates an incomplete run")
     config = load_config(config_path)
     apply_model_size(config, model_size)
     evaluation_config = config.get("evaluation", {}) or {}
@@ -533,48 +496,30 @@ def evaluate(
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
     with torch.autocast(device_type=device.type, dtype=dtype, enabled=use_autocast):
-        metrics, predictions, references = evaluate_examples(
-            model, tokenizer, examples, config, device, kind
-        )
+        metrics, predictions, references = evaluate_examples(model, tokenizer, examples, config, device, kind)
     if kind == "encoder_decoder":
         metrics["cross_gate_mean"] = round(float(model.decoder.cross_gate_mean().item()), 6)
-        metrics["cross_residual_ratio"] = round(
-            float(model.decoder.cross_residual_ratio_mean().item()), 6
-        )
-        metrics["plan_gate_last_step_mean"] = round(
-            float(model.decoder.plan_gate_mean().item()), 6
-        )
+        metrics["cross_residual_ratio"] = round(float(model.decoder.cross_residual_ratio_mean().item()), 6)
+        metrics["plan_gate_last_step_mean"] = round(float(model.decoder.plan_gate_mean().item()), 6)
         metrics["plan_gate_mean"] = metrics.get(
             "plan_gate_generation_mean",
             metrics["plan_gate_last_step_mean"],
         )
-        metrics["plan_gate_cross_layer_indices"] = list(
-            model.decoder.cross_attention_indices
-        )
-        metrics["token_adapter_gate"] = round(
-            float(torch.tanh(model.bridge.token_adapter_gate.float()).item()), 6
-        )
-        metrics["plan_adapter_gate"] = round(
-            float(torch.tanh(model.bridge.plan_adapter_gate.float()).item()), 6
-        )
+        metrics["plan_gate_cross_layer_indices"] = list(model.decoder.cross_attention_indices)
+        metrics["token_adapter_gate"] = round(float(torch.tanh(model.bridge.token_adapter_gate.float()).item()), 6)
+        metrics["plan_adapter_gate"] = round(float(torch.tanh(model.bridge.plan_adapter_gate.float()).item()), 6)
         if hasattr(model.bridge, "unit_broadcast_gate"):
             metrics["unit_broadcast_gate"] = round(
                 float(torch.tanh(model.bridge.unit_broadcast_gate.float()).item()), 6
             )
-    metrics["eval_batch_size"] = int(
-        (config.get("generation", {}) or {}).get("batch_size", 4)
-    )
+    metrics["eval_batch_size"] = int((config.get("generation", {}) or {}).get("batch_size", 4))
     metrics["peak_gpu_memory_mb"] = (
-        round(torch.cuda.max_memory_allocated(device) / (1024**2), 2)
-        if device.type == "cuda"
-        else 0.0
+        round(torch.cuda.max_memory_allocated(device) / (1024**2), 2) if device.type == "cuda" else 0.0
     )
     metrics["rouge_backend"] = "rouge==1.0.0 (HeterSumGraph)"
     metrics["rouge_preprocessing"] = "NFC + lowercase + stored whitespace tokenization"
     training_manifest = (
-        checkpoint_payload.get("config", {}).get("_data_manifest")
-        if isinstance(checkpoint_payload, dict)
-        else None
+        checkpoint_payload.get("config", {}).get("_data_manifest") if isinstance(checkpoint_payload, dict) else None
     )
     if training_manifest:
         metrics["training_data_manifest"] = training_manifest
@@ -583,10 +528,13 @@ def evaluate(
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as handle:
         for example, prediction, reference in zip(examples, predictions, references):
-            handle.write(json.dumps({"id": example.get("id"), "prediction": prediction, "reference": reference}, ensure_ascii=False) + "\n")
-    output.with_suffix(".metrics.json").write_text(
-        json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+            handle.write(
+                json.dumps(
+                    {"id": example.get("id"), "prediction": prediction, "reference": reference}, ensure_ascii=False
+                )
+                + "\n"
+            )
+    output.with_suffix(".metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(metrics, ensure_ascii=False, indent=2))
 
 

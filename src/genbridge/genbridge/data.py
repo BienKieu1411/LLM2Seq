@@ -139,9 +139,9 @@ def _counter_overlap(
     rouge1_weight: float = 0.5,
     rouge2_weight: float = 0.5,
 ) -> float:
-    return rouge1_weight * _counter_f1(
-        candidate_unigrams, reference_unigrams
-    ) + rouge2_weight * _counter_f1(candidate_bigrams, reference_bigrams)
+    return rouge1_weight * _counter_f1(candidate_unigrams, reference_unigrams) + rouge2_weight * _counter_f1(
+        candidate_bigrams, reference_bigrams
+    )
 
 
 def greedy_evidence_labels(
@@ -388,9 +388,7 @@ class EvidenceSeq2SeqDataset(Dataset):
         example = self.examples[index]
         source = _configured_text(example["source"], self.data_config)
         target = _configured_text(example["target"], self.data_config)
-        source_ids, unit_ids, units = prompted_source_features(
-            self.tokenizer, source, self.data_config
-        )
+        source_ids, unit_ids, units = prompted_source_features(self.tokenizer, source, self.data_config)
         cached = self.evidence_cache[index] if self.evidence_cache is not None else None
         # Equal unit counts do not prove that no truncation occurred: the last
         # source sentence can be only partially visible while remaining the
@@ -503,8 +501,12 @@ class EvidenceSeq2SeqCollator:
             "attention_mask": self._left_pad_1d((item["attention_mask"] for item in features), source_length, 0),
             "unit_ids": self._left_pad_1d((item["unit_ids"] for item in features), source_length, 0),
             "evidence_labels": self._pad_1d((item["evidence_labels"] for item in features), evidence_length, -1.0),
-            "decoder_input_ids": self._pad_1d((item["decoder_input_ids"] for item in features), target_length, self.pad_token_id),
-            "decoder_attention_mask": self._pad_1d((torch.ones_like(item["decoder_input_ids"]) for item in features), target_length, 0),
+            "decoder_input_ids": self._pad_1d(
+                (item["decoder_input_ids"] for item in features), target_length, self.pad_token_id
+            ),
+            "decoder_attention_mask": self._pad_1d(
+                (torch.ones_like(item["decoder_input_ids"]) for item in features), target_length, 0
+            ),
             "labels": self._pad_1d((item["labels"] for item in features), target_length, -100),
         }
 

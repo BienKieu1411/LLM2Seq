@@ -40,10 +40,7 @@ def test_generation_diagnostics_expose_repetition_and_empty_outputs():
 
 
 def test_generation_diagnostics_detect_common_prefix_collapse():
-    predictions = [
-        f"hãy đi khám bệnh ngay phần khác {index}"
-        for index in range(10)
-    ]
+    predictions = [f"hãy đi khám bệnh ngay phần khác {index}" for index in range(10)]
     metrics = _generation_diagnostics(
         predictions,
         ["tóm tắt tham chiếu"] * 10,

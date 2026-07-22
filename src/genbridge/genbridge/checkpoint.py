@@ -18,10 +18,7 @@ def _full_state_dict(model: nn.Module) -> Dict[str, torch.Tensor]:
     self-contained model states independent of ``requires_grad``.
     """
 
-    return {
-        name: tensor.detach().cpu()
-        for name, tensor in model.state_dict().items()
-    }
+    return {name: tensor.detach().cpu() for name, tensor in model.state_dict().items()}
 
 
 def _component_manifest(state: Dict[str, torch.Tensor]) -> Dict[str, Dict[str, int]]:
@@ -49,14 +46,10 @@ def save_checkpoint(
     expected_state_names = set(model.state_dict())
     if set(state) != expected_state_names:  # pragma: no cover - defensive
         missing = sorted(expected_state_names - set(state))
-        raise RuntimeError(
-            "Checkpoint serialization omitted model tensors: " + ", ".join(missing[:20])
-        )
+        raise RuntimeError("Checkpoint serialization omitted model tensors: " + ", ".join(missing[:20]))
     parameter_names = set(dict(model.named_parameters()))
     stores_full_parameter_state = parameter_names.issubset(state)
-    stores_pretrained = any(
-        name.startswith(("encoder.model.", "decoder.backbone.", "model.")) for name in state
-    )
+    stores_pretrained = any(name.startswith(("encoder.model.", "decoder.backbone.", "model.")) for name in state)
     payload = {
         "model_state_dict": state,
         "epoch": int(epoch),
@@ -71,9 +64,7 @@ def save_checkpoint(
         "component_manifest": _component_manifest(state),
     }
     if validation_metrics is not None:
-        payload["validation_metrics"] = {
-            str(name): float(value) for name, value in validation_metrics.items()
-        }
+        payload["validation_metrics"] = {str(name): float(value) for name, value in validation_metrics.items()}
     if checkpoint_role is not None:
         if checkpoint_role not in {"best", "last"}:
             raise ValueError("checkpoint_role must be 'best' or 'last'")

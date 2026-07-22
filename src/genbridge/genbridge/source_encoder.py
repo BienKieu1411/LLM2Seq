@@ -42,9 +42,7 @@ class CausalSourceEncoder(nn.Module):
         self.num_summary_tokens = int(model_config.get("num_summary_tokens", 16))
         if self.num_summary_tokens < 1:
             raise ValueError("model.num_summary_tokens must be positive")
-        self.summary_tokens = nn.Parameter(
-            torch.empty(self.num_summary_tokens, self.hidden_size)
-        )
+        self.summary_tokens = nn.Parameter(torch.empty(self.num_summary_tokens, self.hidden_size))
         nn.init.normal_(
             self.summary_tokens,
             mean=0.0,
@@ -63,9 +61,7 @@ class CausalSourceEncoder(nn.Module):
         if self.use_layer_fusion:
             requested = list(fusion.get("indices", [-1, -5, -9, -13]))
             self.fusion_indices = self._resolve_indices(requested)
-            self.fusion_logits = nn.Parameter(
-                torch.zeros(len(self.fusion_indices), dtype=torch.float32)
-            )
+            self.fusion_logits = nn.Parameter(torch.zeros(len(self.fusion_indices), dtype=torch.float32))
         else:
             self.fusion_indices = (self.num_layers,)
             self.register_parameter("fusion_logits", None)
@@ -109,9 +105,7 @@ class CausalSourceEncoder(nn.Module):
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
         token_embeddings = self._input_embeddings(input_ids)
-        plans = self.summary_tokens.to(token_embeddings.dtype).unsqueeze(0).expand(
-            input_ids.shape[0], -1, -1
-        )
+        plans = self.summary_tokens.to(token_embeddings.dtype).unsqueeze(0).expand(input_ids.shape[0], -1, -1)
         inputs_embeds = torch.cat([token_embeddings, plans], dim=1)
         plan_mask = torch.ones(
             input_ids.shape[0],
@@ -136,12 +130,8 @@ class CausalSourceEncoder(nn.Module):
             return_dict=True,
         )
         if self.use_layer_fusion:
-            weights = torch.softmax(self.fusion_logits.float(), dim=0).to(
-                outputs.last_hidden_state.dtype
-            )
-            selected = torch.stack(
-                [outputs.hidden_states[index] for index in self.fusion_indices], dim=0
-            )
+            weights = torch.softmax(self.fusion_logits.float(), dim=0).to(outputs.last_hidden_state.dtype)
+            selected = torch.stack([outputs.hidden_states[index] for index in self.fusion_indices], dim=0)
             hidden_states = (weights[:, None, None, None] * selected).sum(dim=0)
         else:
             hidden_states = outputs.last_hidden_state

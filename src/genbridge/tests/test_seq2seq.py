@@ -434,9 +434,7 @@ def test_tiny_qwen3_forward_backward_and_cached_decode():
         assert generated.shape == (2, 2)
         assert len(generation_diagnostics["plan_gate_layer_sums"]) == 1
         assert len(generation_diagnostics["plan_gate_step_sums"]) == 2
-        assert all(
-            count > 0 for count in generation_diagnostics["plan_gate_step_counts"]
-        )
+        assert all(count > 0 for count in generation_diagnostics["plan_gate_step_counts"])
 
 
 def test_tiny_qwen3_forward_backward_uses_gated_dual_memory():

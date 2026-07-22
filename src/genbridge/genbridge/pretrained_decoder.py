@@ -18,14 +18,11 @@ def normalized_layer_indices(num_source_layers: int, num_decoder_layers: int) ->
     """Select depth-uniform pretrained blocks without architecture surgery."""
 
     if not 1 <= num_decoder_layers <= num_source_layers:
-        raise ValueError(
-            f"num_decoder_layers must be in [1, {num_source_layers}], got {num_decoder_layers}"
-        )
+        raise ValueError(f"num_decoder_layers must be in [1, {num_source_layers}], got {num_decoder_layers}")
     if num_decoder_layers == 1:
         return (num_source_layers - 1,)
     indices = tuple(
-        round(index * (num_source_layers - 1) / (num_decoder_layers - 1))
-        for index in range(num_decoder_layers)
+        round(index * (num_source_layers - 1) / (num_decoder_layers - 1)) for index in range(num_decoder_layers)
     )
     if len(set(indices)) != len(indices):  # pragma: no cover - defensive for unusual rounding rules
         raise RuntimeError(f"Layer selection produced duplicates: {indices}")
@@ -118,17 +115,11 @@ class QwenCrossAttention(nn.Module):
         if cached is not None:
             key, value = cached
             if key.shape[0] != batch_size or key.shape[2] != key_length:
-                raise RuntimeError(
-                    f"Stale {cache_key} cross-attention cache; prepare it for the current source"
-                )
+                raise RuntimeError(f"Stale {cache_key} cross-attention cache; prepare it for the current source")
         else:
             normalized_memory = self.memory_norm(encoder_hidden_states)
-            key = self.k_proj(normalized_memory).view(
-                batch_size, key_length, self.num_kv_heads, self.head_dim
-            )
-            value = self.v_proj(normalized_memory).view(
-                batch_size, key_length, self.num_kv_heads, self.head_dim
-            )
+            key = self.k_proj(normalized_memory).view(batch_size, key_length, self.num_kv_heads, self.head_dim)
+            value = self.v_proj(normalized_memory).view(batch_size, key_length, self.num_kv_heads, self.head_dim)
             key = self.k_norm(key).transpose(1, 2)
             value = value.transpose(1, 2)
         query = self.q_norm(query).transpose(1, 2)
@@ -159,12 +150,8 @@ class QwenCrossAttention(nn.Module):
     ) -> None:
         batch_size, key_length, _ = encoder_hidden_states.shape
         normalized_memory = self.memory_norm(encoder_hidden_states)
-        key = self.k_proj(normalized_memory).view(
-            batch_size, key_length, self.num_kv_heads, self.head_dim
-        )
-        value = self.v_proj(normalized_memory).view(
-            batch_size, key_length, self.num_kv_heads, self.head_dim
-        )
+        key = self.k_proj(normalized_memory).view(batch_size, key_length, self.num_kv_heads, self.head_dim)
+        value = self.v_proj(normalized_memory).view(batch_size, key_length, self.num_kv_heads, self.head_dim)
         self._memory_cache[cache_key] = (
             self.k_norm(key).transpose(1, 2).contiguous(),
             value.transpose(1, 2).contiguous(),
@@ -276,9 +263,7 @@ class CrossAttentionInjectedLayer(GradientCheckpointingLayer):
                 )
                 # A query-dependent scalar gate chooses content planning versus
                 # source grounding separately for every generated position.
-                plan_gate = torch.sigmoid(self.plan_gate(normalized_states).float()).to(
-                    token_context.dtype
-                )
+                plan_gate = torch.sigmoid(self.plan_gate(normalized_states).float()).to(token_context.dtype)
                 cross_states = token_context + plan_gate * (plan_context - token_context)
                 self.last_plan_gate_mean = plan_gate.detach().float().mean()
                 self.last_plan_gate_values = plan_gate.detach().float().squeeze(-1)
@@ -469,8 +454,7 @@ class PretrainedQwenDecoder(nn.Module):
         return tuple(
             float(layer.last_plan_gate_mean.item())
             for layer in self.backbone.layers
-            if isinstance(layer, CrossAttentionInjectedLayer)
-            and layer.last_plan_gate_mean is not None
+            if isinstance(layer, CrossAttentionInjectedLayer) and layer.last_plan_gate_mean is not None
         )
 
     def plan_gate_values(self) -> Tuple[torch.Tensor, ...]:
@@ -479,8 +463,7 @@ class PretrainedQwenDecoder(nn.Module):
         return tuple(
             layer.last_plan_gate_values
             for layer in self.backbone.layers
-            if isinstance(layer, CrossAttentionInjectedLayer)
-            and layer.last_plan_gate_values is not None
+            if isinstance(layer, CrossAttentionInjectedLayer) and layer.last_plan_gate_values is not None
         )
 
     def cross_gate_mean(self) -> torch.Tensor:
@@ -497,8 +480,7 @@ class PretrainedQwenDecoder(nn.Module):
         ratios = [
             layer.last_cross_residual_ratio
             for layer in self.backbone.layers
-            if isinstance(layer, CrossAttentionInjectedLayer)
-            and layer.last_cross_residual_ratio is not None
+            if isinstance(layer, CrossAttentionInjectedLayer) and layer.last_cross_residual_ratio is not None
         ]
         if not ratios:
             return next(self.parameters()).new_zeros((), dtype=torch.float32)
@@ -508,8 +490,7 @@ class PretrainedQwenDecoder(nn.Module):
         gates = [
             layer.last_plan_gate_mean
             for layer in self.backbone.layers
-            if isinstance(layer, CrossAttentionInjectedLayer)
-            and layer.last_plan_gate_mean is not None
+            if isinstance(layer, CrossAttentionInjectedLayer) and layer.last_plan_gate_mean is not None
         ]
         if not gates:
             return next(self.parameters()).new_zeros((), dtype=torch.float32)

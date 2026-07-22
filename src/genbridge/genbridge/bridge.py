@@ -89,15 +89,9 @@ class BidirectionalRotarySelfAttention(nn.Module):
     ) -> torch.Tensor:
         batch_size, sequence_length, _ = hidden_states.shape
         query, key, value = self.qkv_proj(hidden_states).chunk(3, dim=-1)
-        query = query.view(
-            batch_size, sequence_length, self.num_heads, self.head_dim
-        ).transpose(1, 2)
-        key = key.view(
-            batch_size, sequence_length, self.num_heads, self.head_dim
-        ).transpose(1, 2)
-        value = value.view(
-            batch_size, sequence_length, self.num_heads, self.head_dim
-        ).transpose(1, 2)
+        query = query.view(batch_size, sequence_length, self.num_heads, self.head_dim).transpose(1, 2)
+        key = key.view(batch_size, sequence_length, self.num_heads, self.head_dim).transpose(1, 2)
+        value = value.view(batch_size, sequence_length, self.num_heads, self.head_dim).transpose(1, 2)
         if self.use_rope:
             query, key = self._apply_rope(query, key, position_ids)
         # PyTorch SDPA boolean masks use True for entries that participate in
@@ -111,9 +105,7 @@ class BidirectionalRotarySelfAttention(nn.Module):
             dropout_p=self.dropout if self.training else 0.0,
             is_causal=False,
         )
-        attended = attended.transpose(1, 2).reshape(
-            batch_size, sequence_length, self.hidden_size
-        )
+        attended = attended.transpose(1, 2).reshape(batch_size, sequence_length, self.hidden_size)
         attended = self.out_proj(attended)
         return attended.masked_fill(~attention_mask.bool().unsqueeze(-1), 0)
 
@@ -397,15 +389,11 @@ class SummaryBridge(nn.Module):
         token_adapter_gate_init = float(config.get("token_adapter_gate_init", 0.1))
         if not 0.0 < token_adapter_gate_init < 1.0:
             raise ValueError("bridge.token_adapter_gate_init must be in (0, 1)")
-        self.token_adapter_gate = nn.Parameter(
-            torch.tensor(math.atanh(token_adapter_gate_init), dtype=torch.float32)
-        )
+        self.token_adapter_gate = nn.Parameter(torch.tensor(math.atanh(token_adapter_gate_init), dtype=torch.float32))
         plan_adapter_gate_init = float(config.get("plan_adapter_gate_init", 0.1))
         if not 0.0 < plan_adapter_gate_init < 1.0:
             raise ValueError("bridge.plan_adapter_gate_init must be in (0, 1)")
-        self.plan_adapter_gate = nn.Parameter(
-            torch.tensor(math.atanh(plan_adapter_gate_init), dtype=torch.float32)
-        )
+        self.plan_adapter_gate = nn.Parameter(torch.tensor(math.atanh(plan_adapter_gate_init), dtype=torch.float32))
         self.token_type = nn.Parameter(torch.zeros(decoder_size))
         self.plan_type = nn.Parameter(torch.zeros(decoder_size))
 
@@ -473,9 +461,7 @@ class SummaryBridge(nn.Module):
             ) * self.unit_to_token(unit_context)
 
             if self.mode in {"genbridge", "plan_only"}:
-                weighted_values = unit_states * (
-                    0.5 + torch.sigmoid(salience_logits)
-                ).unsqueeze(-1)
+                weighted_values = unit_states * (0.5 + torch.sigmoid(salience_logits)).unsqueeze(-1)
                 planned, _ = self.plan_attention(
                     plan_hidden,
                     # Keep semantic addressing in the keys stable; salience
@@ -489,15 +475,11 @@ class SummaryBridge(nn.Module):
 
         plan_adapter_gate = torch.tanh(self.plan_adapter_gate).to(plan_hidden.dtype)
         plan_memory = self.plan_output_norm(
-            self.plan_skip(plan_states)
-            + plan_adapter_gate * self.plan_out(plan_hidden)
-            + self.plan_type
+            self.plan_skip(plan_states) + plan_adapter_gate * self.plan_out(plan_hidden) + self.plan_type
         )
         adapter_gate = torch.tanh(self.token_adapter_gate).to(token_hidden.dtype)
         token_memory = self.token_output_norm(
-            self.token_skip(token_states)
-            + adapter_gate * self.token_out(token_hidden)
-            + self.token_type
+            self.token_skip(token_states) + adapter_gate * self.token_out(token_hidden) + self.token_type
         )
         plan_mask = torch.ones(
             plan_memory.shape[:2],

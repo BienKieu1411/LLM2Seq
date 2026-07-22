@@ -22,8 +22,7 @@ def test_dataset_limit_is_applied_before_item_processing():
         path = Path(directory) / "train.jsonl"
         path.write_text(
             "".join(
-                json.dumps({"source": f"source {index}", "target": f"target {index}"}) + "\n"
-                for index in range(5)
+                json.dumps({"source": f"source {index}", "target": f"target {index}"}) + "\n" for index in range(5)
             ),
             encoding="utf-8",
         )

@@ -13,7 +13,16 @@ GROUPS = {
     # Fast decision gate before committing the 1.7B paper run.
     "pilot": ["direct_qwen", "causal_ed", "lamate_style", "concat_memory", "genbridge"],
     # Minimal table needed to defend the architecture against LaMaTE.
-    "main": ["direct_qwen", "causal_ed", "lamate_style", "hierarchical", "no_salience_loss", "plan_only", "concat_memory", "genbridge"],
+    "main": [
+        "direct_qwen",
+        "causal_ed",
+        "lamate_style",
+        "hierarchical",
+        "no_salience_loss",
+        "plan_only",
+        "concat_memory",
+        "genbridge",
+    ],
     "analysis": [
         "adapter_2layers",
         "adapter_8layers",

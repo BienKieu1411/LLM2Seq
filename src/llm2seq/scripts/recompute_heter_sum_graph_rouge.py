@@ -17,7 +17,6 @@ from typing import Any, Dict, Iterable, Tuple
 
 from rouge import Rouge
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RUNS = {
     "wikilingua/qwen_base": (
@@ -123,10 +122,7 @@ def recompute(output: Path, update_metrics: bool = False) -> Dict[str, Any]:
                 )
         print(
             name,
-            " ".join(
-                f"{metric}={values['f']:.4f}"
-                for metric, values in normalized_scores.items()
-            ),
+            " ".join(f"{metric}={values['f']:.4f}" for metric, values in normalized_scores.items()),
             flush=True,
         )
 

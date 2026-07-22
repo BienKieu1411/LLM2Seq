@@ -22,6 +22,7 @@ def heter_sum_graph_rouge(
         if include_rouge_lsum:
             result["rougeLsum"] = 0.0
         return result
+
     def normalize(text: str) -> str:
         return unicodedata.normalize("NFC", str(text)).lower().strip()
 

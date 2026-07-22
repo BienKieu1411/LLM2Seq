@@ -17,13 +17,9 @@ def _join_text(value: Any, separator: str) -> str:
     if isinstance(value, str):
         return value.strip()
     if isinstance(value, list):
-        return separator.join(
-            part for part in (_join_text(item, separator) for item in value) if part
-        )
+        return separator.join(part for part in (_join_text(item, separator) for item in value) if part)
     if isinstance(value, dict):
-        return separator.join(
-            part for part in (_join_text(item, separator) for item in value.values()) if part
-        )
+        return separator.join(part for part in (_join_text(item, separator) for item in value.values()) if part)
     return str(value).strip()
 
 

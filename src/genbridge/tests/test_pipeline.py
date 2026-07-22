@@ -34,12 +34,8 @@ def test_pipeline_evaluates_best_and_last_separately(tmp_path=None):
         assert "--overwrite-output-dir" in commands[0]
         assert commands[1][commands[1].index("--checkpoint") + 1].endswith("best.pt")
         assert commands[2][commands[2].index("--checkpoint") + 1].endswith("last.pt")
-        assert commands[1][commands[1].index("--output") + 1].endswith(
-            "best_test_predictions.jsonl"
-        )
-        assert commands[2][commands[2].index("--output") + 1].endswith(
-            "last_test_predictions.jsonl"
-        )
+        assert commands[1][commands[1].index("--output") + 1].endswith("best_test_predictions.jsonl")
+        assert commands[2][commands[2].index("--output") + 1].endswith("last_test_predictions.jsonl")
         assert commands[1][-2:] == ["--max-samples", "17"]
 
 
@@ -50,8 +46,7 @@ def test_eval_only_pipeline_skips_training():
         root = Path(directory)
         config = root / "config.yaml"
         config.write_text(
-            "experiment:\n"
-            f"  output_dir: {root / 'run'}\n",
+            f"experiment:\n  output_dir: {root / 'run'}\n",
             encoding="utf-8",
         )
         _, commands = pipeline_commands(

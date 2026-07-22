@@ -26,7 +26,9 @@ def test_main_config_uses_four_adapter_layers_and_fp32_master_weights():
 def test_config_inheritance_and_model_scale_override():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        (root / "base.yaml").write_text("model:\n  encoder_name: old\nexperiment:\n  output_dir: runs/base\n", encoding="utf-8")
+        (root / "base.yaml").write_text(
+            "model:\n  encoder_name: old\nexperiment:\n  output_dir: runs/base\n", encoding="utf-8"
+        )
         (root / "child.yaml").write_text("_base_: base.yaml\ntraining:\n  epochs: 10\n", encoding="utf-8")
         config = load_config(root / "child.yaml")
         apply_model_size(config, "1.7B")
@@ -53,11 +55,7 @@ def test_qwen3_06b_profile_uses_its_native_28_layers():
 
 
 def test_embedding_encoder_ablation_keeps_regular_generative_decoder():
-    path = (
-        Path(__file__).resolve().parents[1]
-        / "configs"
-        / "qwen3_embedding_enc0_6b_dec0_6b.yaml"
-    )
+    path = Path(__file__).resolve().parents[1] / "configs" / "qwen3_embedding_enc0_6b_dec0_6b.yaml"
     config = load_config(path)
     assert config["model"]["encoder_name"] == "Qwen/Qwen3-Embedding-0.6B"
     assert config["model"]["allow_mixed_checkpoints"] is True

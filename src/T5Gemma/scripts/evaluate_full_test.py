@@ -147,15 +147,11 @@ def compute_metrics(
             "too_long_rate": round(100.0 * safe_mean([1.0 if ratio > 1.5 else 0.0 for ratio in length_ratios]), 4),
             "repeated_trigram_rate_mean": round(100.0 * safe_mean(repeat_rates), 4),
             "unique_prediction_rate": round(
-                100.0
-                * len(set(nonempty_predictions))
-                / max(1, len(nonempty_predictions)),
+                100.0 * len(set(nonempty_predictions)) / max(1, len(nonempty_predictions)),
                 4,
             ),
             "dominant_prefix_5gram_rate": round(
-                100.0
-                * max(prefixes.values(), default=0)
-                / max(1, len(nonempty_predictions)),
+                100.0 * max(prefixes.values(), default=0) / max(1, len(nonempty_predictions)),
                 4,
             ),
         }
@@ -232,9 +228,7 @@ def maybe_upload_eval_outputs(raw_cfg: Dict[str, Any], output_dir: Path) -> None
     hf_cfg = raw_cfg.get("huggingface", {})
     if not bool(hf_cfg.get("enabled", False)):
         return
-    raise RuntimeError(
-        "Hugging Face uploads are hard-disabled; set huggingface.enabled=false"
-    )
+    raise RuntimeError("Hugging Face uploads are hard-disabled; set huggingface.enabled=false")
 
 
 def main() -> None:
@@ -291,14 +285,10 @@ def main() -> None:
     if local_checkpoint.exists():
         running_marker = local_checkpoint.parent / "RUNNING"
         if running_marker.exists():
-            raise RuntimeError(
-                f"Refusing to evaluate {local_checkpoint}: {running_marker} indicates an incomplete run"
-            )
+            raise RuntimeError(f"Refusing to evaluate {local_checkpoint}: {running_marker} indicates an incomplete run")
         checkpoint_manifest_path = local_checkpoint / "checkpoint_manifest.json"
         if checkpoint_manifest_path.exists():
-            checkpoint_manifest = json.loads(
-                checkpoint_manifest_path.read_text(encoding="utf-8")
-            )
+            checkpoint_manifest = json.loads(checkpoint_manifest_path.read_text(encoding="utf-8"))
     print(f"Loading full fine-tuned checkpoint: {checkpoint_label}")
     tokenizer = AutoTokenizer.from_pretrained(
         checkpoint_source,

@@ -133,15 +133,18 @@ class GenBridgeSeq2Seq(nn.Module):
         selected_logits = self.lm_head(decoder_states[supervised])
         loss_ce = F.cross_entropy(selected_logits.float(), labels[supervised])
         target_mask = labels.ne(-100)
-        target_state = (
-            decoder_states.float() * target_mask.unsqueeze(-1)
-        ).sum(dim=1) / target_mask.sum(dim=1, keepdim=True).clamp_min(1)
+        target_state = (decoder_states.float() * target_mask.unsqueeze(-1)).sum(dim=1) / target_mask.sum(
+            dim=1, keepdim=True
+        ).clamp_min(1)
         plan_state = bridge_output.plan_memory.float().mean(dim=1)
-        loss_plan_alignment = 1.0 - F.cosine_similarity(
-            plan_state,
-            target_state.detach(),
-            dim=-1,
-        ).mean()
+        loss_plan_alignment = (
+            1.0
+            - F.cosine_similarity(
+                plan_state,
+                target_state.detach(),
+                dim=-1,
+            ).mean()
+        )
         if not self.bridge.use_plan_alignment:
             loss_plan_alignment = loss_plan_alignment.detach() * 0.0
         loss = (
@@ -164,9 +167,7 @@ class GenBridgeSeq2Seq(nn.Module):
             "plan_adapter_gate": torch.tanh(self.bridge.plan_adapter_gate.float()).detach(),
         }
         if hasattr(self.bridge, "unit_broadcast_gate"):
-            result["unit_broadcast_gate"] = torch.tanh(
-                self.bridge.unit_broadcast_gate.float()
-            ).detach()
+            result["unit_broadcast_gate"] = torch.tanh(self.bridge.unit_broadcast_gate.float()).detach()
         if bridge_output.salience_logits is not None and evidence_labels is not None:
             width = min(
                 bridge_output.salience_logits.shape[1],
@@ -174,20 +175,14 @@ class GenBridgeSeq2Seq(nn.Module):
             )
             valid = evidence_labels[:, :width].ge(0)
             if bool(valid.any()):
-                probabilities = torch.sigmoid(
-                    bridge_output.salience_logits[:, :width][valid].float()
-                )
+                probabilities = torch.sigmoid(bridge_output.salience_logits[:, :width][valid].float())
                 predictions = probabilities.ge(0.5)
                 gold = evidence_labels[:, :width][valid].gt(0.5)
                 true_positive = (predictions & gold).sum().float()
                 result["salience_probability_mean"] = probabilities.mean().detach()
                 result["salience_predicted_positive_rate"] = predictions.float().mean().detach()
-                result["salience_precision"] = (
-                    true_positive / predictions.sum().float().clamp_min(1.0)
-                ).detach()
-                result["salience_recall"] = (
-                    true_positive / gold.sum().float().clamp_min(1.0)
-                ).detach()
+                result["salience_precision"] = (true_positive / predictions.sum().float().clamp_min(1.0)).detach()
+                result["salience_recall"] = (true_positive / gold.sum().float().clamp_min(1.0)).detach()
         return result
 
     def set_training_stage(self, stage: str) -> None:
@@ -202,9 +197,7 @@ class GenBridgeSeq2Seq(nn.Module):
         if full:
             frozen = [name for name, parameter in self.named_parameters() if not parameter.requires_grad]
             if frozen:
-                raise RuntimeError(
-                    "Full-finetune stage left parameters frozen: " + ", ".join(frozen[:20])
-                )
+                raise RuntimeError("Full-finetune stage left parameters frozen: " + ", ".join(frozen[:20]))
 
     def trainable_parameters(self) -> int:
         return sum(parameter.numel() for parameter in self.parameters() if parameter.requires_grad)

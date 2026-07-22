@@ -53,9 +53,7 @@ def load_config(path: str | Path) -> Dict[str, Any]:
     if not isinstance(current, dict):
         raise TypeError(f"Config root must be a mapping: {path}")
     base_ref = current.pop("_base_", None)
-    merged = current if base_ref is None else _deep_merge(
-        load_config((path.parent / str(base_ref)).resolve()), current
-    )
+    merged = current if base_ref is None else _deep_merge(load_config((path.parent / str(base_ref)).resolve()), current)
     merged.setdefault("_meta", {})["config_path"] = str(path)
     return merged
 
@@ -81,9 +79,7 @@ def apply_model_size(config: Dict[str, Any], model_size: str | None) -> Dict[str
     # These profiles all keep an effective batch of 32. Explicit values in a
     # dedicated model config can still override them after loading.
     config.setdefault("training", {})["batch_size"] = int(profile["batch_size"])
-    config.setdefault("training", {})["gradient_accumulation_steps"] = int(
-        profile["gradient_accumulation_steps"]
-    )
+    config.setdefault("training", {})["gradient_accumulation_steps"] = int(profile["gradient_accumulation_steps"])
     config.setdefault("training", {})["optimizer"] = str(profile["optimizer"])
     config.setdefault("training", {})["full_lr"] = float(profile["full_lr"])
     if previous and previous != name:
