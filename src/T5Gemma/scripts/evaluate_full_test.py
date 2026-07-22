@@ -228,39 +228,13 @@ def resolve_checkpoint_source(raw_cfg: Dict[str, Any], checkpoint: Optional[str]
 
 
 def maybe_upload_eval_outputs(raw_cfg: Dict[str, Any], output_dir: Path) -> None:
+    del output_dir
     hf_cfg = raw_cfg.get("huggingface", {})
-    if not bool(hf_cfg.get("enabled", False)) or not bool(hf_cfg.get("push_eval_outputs", True)):
+    if not bool(hf_cfg.get("enabled", False)):
         return
-    repo_id = os.environ.get("HF_REPO_ID") or hf_cfg.get("repo_id")
-    token = os.environ.get("HF_TOKEN")
-    if not repo_id or not token:
-        print("Skipping eval output upload because HF_REPO_ID or HF_TOKEN is not set.", file=sys.stderr)
-        return
-    from huggingface_hub import HfApi
-
-    repo_type = hf_cfg.get("repo_type", "model")
-    base_path = str(hf_cfg.get("path_in_repo", "checkpoints/t5gemma2_1b_1b_full_wikilingua")).strip("/")
-    path_in_repo = f"{base_path}/eval_outputs/full_test"
-    try:
-        api = HfApi(token=token)
-        api.create_repo(
-            repo_id=repo_id,
-            repo_type=repo_type,
-            private=bool(hf_cfg.get("private", False)),
-            exist_ok=True,
-        )
-        api.upload_folder(
-            repo_id=repo_id,
-            repo_type=repo_type,
-            folder_path=str(output_dir),
-            path_in_repo=path_in_repo,
-            commit_message="Upload T5Gemma full-test evaluation outputs",
-        )
-        print(f"Uploaded eval outputs -> {repo_id}/{path_in_repo}")
-    except Exception as exc:
-        if bool(hf_cfg.get("fail_on_error", True)):
-            raise
-        print(f"HF eval upload failed: {exc}", file=sys.stderr)
+    raise RuntimeError(
+        "Hugging Face uploads are hard-disabled; set huggingface.enabled=false"
+    )
 
 
 def main() -> None:

@@ -10,8 +10,8 @@ decoder:
 
 training:
   # 125 interface updates followed by 625 full-finetune updates.
-  epochs: 30
-  interface_warmup_epochs: 5
+  epochs: 15
+  interface_warmup_epochs: 3
   batch_size: 4
   gradient_accumulation_steps: 1
   num_workers: 2

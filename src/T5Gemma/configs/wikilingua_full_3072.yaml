@@ -4,13 +4,15 @@ project:
   output_dir: runs/t5gemma2_1b_1b_full_wikilingua
 
 huggingface:
-  enabled: true
+  # HF_TOKEN may still be used to download the gated base checkpoint. Uploads
+  # are hard-disabled in the training/evaluation code and all artifacts stay local.
+  enabled: false
   repo_id: null
   repo_type: model
   path_in_repo: checkpoints/t5gemma2_1b_1b_full_wikilingua
-  push_final: true
-  push_eval_outputs: true
-  fail_on_error: true
+  push_final: false
+  push_eval_outputs: false
+  fail_on_error: false
   private: false
 
 model:

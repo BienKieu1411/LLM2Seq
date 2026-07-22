@@ -9,7 +9,9 @@ the other project models: NFC normalization, lowercase text, stored whitespace
 tokenization, and macro-averaged F1 on the 0--100 scale.
 
 The folder is standalone. Gemma-family checkpoints are gated on Hugging Face,
-so accept the model license and configure `HF_TOKEN` before running.
+so accept the model license and configure `HF_TOKEN` for downloading the base
+model. All trained checkpoints and evaluation outputs remain local; upload
+paths are hard-disabled.
 
 ## Main files
 

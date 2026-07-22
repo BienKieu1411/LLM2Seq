@@ -18,7 +18,6 @@ from typing import Any, Dict, List
 import numpy as np
 import torch
 import yaml
-from huggingface_hub import HfApi
 from torch.utils.data import Dataset
 from transformers import (
     AutoModelForSeq2SeqLM,
@@ -211,46 +210,13 @@ def safe_copy_config(config_path: Path, output_dir: Path) -> None:
     shutil.copy2(config_path, output_dir / "training_config.yaml")
 
 
-def get_hf_settings(cfg: Dict[str, Any]) -> Dict[str, Any]:
+def assert_hf_uploads_disabled(cfg: Dict[str, Any]) -> None:
     hf_cfg = cfg.get("huggingface", {})
-    return {
-        "enabled": bool(hf_cfg.get("enabled", False)),
-        "repo_id": os.environ.get("HF_REPO_ID") or hf_cfg.get("repo_id"),
-        "repo_type": hf_cfg.get("repo_type", "model"),
-        "token": os.environ.get("HF_TOKEN"),
-        "path_in_repo": str(hf_cfg.get("path_in_repo", "checkpoints/t5gemma2_1b_1b_full_wikilingua")).strip("/"),
-        "push_final": bool(hf_cfg.get("push_final", True)),
-        "fail_on_error": bool(hf_cfg.get("fail_on_error", True)),
-        "private": bool(hf_cfg.get("private", False)),
-    }
-
-
-def upload_folder(folder: Path, hf: Dict[str, Any], path_in_repo: str, message: str) -> None:
-    if not hf["enabled"]:
-        return
-    if not hf["repo_id"] or not hf["token"]:
-        logging.warning("Skipping HF upload because HF_REPO_ID or HF_TOKEN is not set.")
-        return
-    try:
-        api = HfApi(token=hf["token"])
-        api.create_repo(
-            repo_id=hf["repo_id"],
-            repo_type=hf["repo_type"],
-            private=hf["private"],
-            exist_ok=True,
+    if bool(hf_cfg.get("enabled", False)):
+        raise RuntimeError(
+            "Hugging Face uploads are hard-disabled for this local-only experiment. "
+            "HF_TOKEN may be used only to download the gated base checkpoint."
         )
-        api.upload_folder(
-            repo_id=hf["repo_id"],
-            repo_type=hf["repo_type"],
-            folder_path=str(folder),
-            path_in_repo=path_in_repo.strip("/"),
-            commit_message=message,
-        )
-        logging.info("Uploaded %s -> %s/%s", folder, hf["repo_id"], path_in_repo)
-    except Exception as exc:
-        if hf["fail_on_error"]:
-            raise
-        logging.warning("HF upload failed: %s", exc)
 
 
 def log_model_summary(model: torch.nn.Module, cfg: Dict[str, Any], train_size: int, eval_size: int) -> None:
@@ -295,6 +261,7 @@ def main() -> None:
     config_path = Path(args.config)
     with config_path.open("r", encoding="utf-8") as f:
         cfg: Dict[str, Any] = yaml.safe_load(f)
+    assert_hf_uploads_disabled(cfg)
 
     if "lora" in cfg:
         raise ValueError("This is a full fine-tuning pipeline; remove the obsolete 'lora' config block.")
@@ -451,11 +418,6 @@ def main() -> None:
     if epochs_dir.exists():
         shutil.rmtree(epochs_dir, ignore_errors=True)
         logging.info("Deleted all epoch checkpoints after phase completion to save disk space.")
-
-    hf = get_hf_settings(cfg)
-    if hf["push_final"]:
-        upload_folder(final_folder, hf, f"{hf['path_in_repo']}/final_model", "T5Gemma full fine-tuned model")
-
 
 if __name__ == "__main__":
     main()

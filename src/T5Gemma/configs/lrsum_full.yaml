@@ -4,13 +4,14 @@ project:
   output_dir: runs/lrsum_t5gemma2_1b_1b_full
 
 huggingface:
-  enabled: true
+  # Local-only experiment: HF_TOKEN is for gated model download, never upload.
+  enabled: false
   repo_id: null
   repo_type: model
   path_in_repo: checkpoints/lrsum_t5gemma2_1b_1b_full
-  push_final: true
-  push_eval_outputs: true
-  fail_on_error: true
+  push_final: false
+  push_eval_outputs: false
+  fail_on_error: false
   private: false
 
 model:

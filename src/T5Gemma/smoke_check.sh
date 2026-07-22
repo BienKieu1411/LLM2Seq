@@ -28,8 +28,7 @@ done
 "${PYTHON_BIN}" -m py_compile \
   "${T5GEMMA_ROOT}/scripts/prepare_wikilingua_json.py" \
   "${T5GEMMA_ROOT}/scripts/train_full.py" \
-  "${T5GEMMA_ROOT}/scripts/evaluate_full_test.py" \
-  "${T5GEMMA_ROOT}/scripts/push_to_hf.py"
+  "${T5GEMMA_ROOT}/scripts/evaluate_full_test.py"
 
 bash -n "${T5GEMMA_ROOT}/scripts/load_env.sh"
 bash -n "${T5GEMMA_ROOT}/scripts/train.sh"
