@@ -6,8 +6,6 @@ experiment:
 
 model:
   encoder_name: Qwen/Qwen3-1.7B
-  # Qwen3 0.6B and 1.7B have an identical tokenizer. The loader verifies the
-  # complete token-to-id mapping and special-token IDs before training.
   allow_mixed_checkpoints: true
 
 decoder:
@@ -15,11 +13,10 @@ decoder:
   num_layers: 28
 
 training:
-  # Conservative B200 setting; effective batch remains 32.
   batch_size: 8
   gradient_accumulation_steps: 4
   optimizer: adamw_torch
-  full_lr: 8.0e-6
+  full_lr: 5.0e-5
 
 generation:
-  batch_size: 4
+  batch_size: 64

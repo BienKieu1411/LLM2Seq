@@ -198,6 +198,19 @@ bash run.sh prepare-lrsum
 
 ## Running
 
+The one-command paper pipeline trains once and evaluates both checkpoint roles
+on the identical test set:
+
+```bash
+bash run.sh pipeline --config configs/qwen3_0_6b.yaml
+```
+
+Use `--overwrite-output-dir` only for an intentional rerun. The pipeline writes
+`best_test_predictions.jsonl`/`.metrics.json` and
+`last_test_predictions.jsonl`/`.metrics.json`. The paper result must use
+`best.pt`, selected solely by validation CE; `last.pt` is reported only as an
+overfitting diagnostic and must not be selected using test ROUGE.
+
 The symmetric scale configs are:
 
 ```bash
@@ -310,7 +323,7 @@ paper comparison:
 
 ```bash
 bash run.sh compare \
-  --candidate runs/genbridge/qwen3_0_6b/test_predictions.jsonl \
+  --candidate runs/genbridge/qwen3_0_6b/best_test_predictions.jsonl \
   --baseline ../T5Gemma/eval_outputs/full_test/predictions.jsonl \
   --output runs/comparisons/genbridge_vs_t5gemma.json
 ```

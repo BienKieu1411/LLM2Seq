@@ -12,13 +12,11 @@ decoder:
   num_layers: 36
 
 training:
-  # Two independent 4B backbones are fully trainable. Quantizing only Adam's
-  # optimizer states is required to leave B200 memory for activations.
-  batch_size: 2
-  gradient_accumulation_steps: 16
+  batch_size: 64
+  gradient_accumulation_steps: 1
   optimizer: adamw_8bit
-  full_lr: 5.0e-6
-  eval_batch_size: 2
+  full_lr: 5.0e-5
+  eval_batch_size: 32
 
 generation:
-  batch_size: 2
+  batch_size: 64

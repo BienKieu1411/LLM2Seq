@@ -13,11 +13,10 @@ decoder:
   num_layers: 28
 
 training:
-  # Same effective batch and LR as the reverse allocation.
   batch_size: 8
   gradient_accumulation_steps: 4
   optimizer: adamw_torch
-  full_lr: 8.0e-6
+  full_lr: 5.0e-5
 
 generation:
-  batch_size: 4
+  batch_size: 64

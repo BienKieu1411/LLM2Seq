@@ -67,21 +67,16 @@ objectives:
   plan_diversity_weight: 0.01
 
 training:
-  # Epochs 1-2 train only the new adapter/interface. Epochs 3-10 full-FT every
-  # encoder and decoder parameter; there is no LoRA path in this package.
-  epochs: 10
-  interface_warmup_epochs: 2
+  epochs: 15
+  interface_warmup_epochs: 3
   skip_interface_warmup_on_resume: true
-  batch_size: 32
+  batch_size: 128
   gradient_accumulation_steps: 1
   num_workers: 4
-  # Random mega-buckets are length-sorted before batching. This preserves
-  # shuffle while sharply reducing padding in the bidirectional O(L^2) bridge.
   group_by_length: true
   length_bucket_multiplier: 50
   adapter_warmup_lr: 1.0e-4
-  # One common LR for every parameter after warm-up.
-  full_lr: 1.0e-5
+  full_lr: 5.0e-5
   warmup_ratio: 0.05
   min_lr_ratio: 0.0
   adam_beta1: 0.9
@@ -97,9 +92,7 @@ training:
   optimizer: adamw_torch
   seed: 42
   log_every_steps: 10
-  # Run teacher-forced validation after every epoch. The checkpoint with the
-  # lowest summary-token CE is best.pt; the terminal weights are last.pt.
-  eval_batch_size: 8
+  eval_batch_size: 128
   eval_num_workers: 4
 
 data:
@@ -108,13 +101,10 @@ data:
   test_file: data/wikilingua/test.jsonl
   source_prefix: "Tóm tắt thành các bước hành động ngắn, đúng thứ tự; không thêm thông tin.\nVăn bản:\n"
   target_prefix: "\nCác bước:\n"
-  # Teacher forcing and autoregressive decoding start from the same concise
-  # Vietnamese task anchor; it is not included in scored predictions.
   use_decoder_chat_template: true
   enable_thinking: false
   decoder_instruction: "Hãy tạo bản tóm tắt dạng các bước hành động ngắn, đúng thứ tự, chỉ dựa trên văn bản đã mã hóa."
   decoder_prefix: "Các bước:\n"
-  # Dataset profile: the model pools configurable evidence units, not WikiHow-only steps.
   evidence_unit: sentence
   sentence_separator: "\n"
   use_chat_template: true
@@ -126,18 +116,15 @@ data:
   oracle_fixed_units: 3
   oracle_rouge1_weight: 0.5
   oracle_rouge2_weight: 0.5
-  # Compute the oracle once before training; avoids repeating CPU ROUGE search every epoch.
   precompute_evidence_on_load: true
   precompute_validation_evidence_on_load: true
 
 generation:
-  # Match the WikiLingua T5Gemma evaluation batch for comparable throughput.
-  batch_size: 8
+  batch_size: 128
   min_new_tokens: 16
   max_new_tokens: 256
   repetition_penalty: 1.05
   no_repeat_ngram_size: 3
 
 evaluation:
-  # The final FP32 checkpoint is safely cast to BF16 for inference only.
   model_dtype: bfloat16

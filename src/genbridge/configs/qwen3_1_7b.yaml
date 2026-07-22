@@ -12,12 +12,11 @@ decoder:
   num_layers: 28
 
 training:
-  # Effective batch is 32 on one B200.
-  batch_size: 8
-  gradient_accumulation_steps: 4
+  batch_size: 64
+  gradient_accumulation_steps: 1
   optimizer: adamw_torch
-  full_lr: 8.0e-6
-  eval_batch_size: 4
+  full_lr: 5.0e-5
+  eval_batch_size: 64s
 
 generation:
-  batch_size: 4
+  batch_size: 128

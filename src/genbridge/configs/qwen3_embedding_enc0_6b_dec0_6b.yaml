@@ -6,8 +6,6 @@ experiment:
 
 model:
   encoder_name: Qwen/Qwen3-Embedding-0.6B
-  # The actual tokenizer mapping and special IDs are checked before weights
-  # load; Qwen3-Embedding-0.6B currently matches the Qwen3-0.6B decoder.
   allow_mixed_checkpoints: true
 
 decoder:

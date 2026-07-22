@@ -15,6 +15,7 @@ cd "${SCRIPT_DIR}"
 COMMAND="${1:-train}"
 if [[ $# -gt 0 ]]; then shift; fi
 case "${COMMAND}" in
+  pipeline) exec "${PYTHON_BIN}" -m genbridge.run_pipeline "$@" ;;
   train) exec "${PYTHON_BIN}" -m genbridge.training "$@" ;;
   eval) exec "${PYTHON_BIN}" -m genbridge.evaluate "$@" ;;
   compare) exec "${PYTHON_BIN}" -m genbridge.compare "$@" ;;
@@ -24,5 +25,5 @@ case "${COMMAND}" in
   count-params) exec "${PYTHON_BIN}" "${SCRIPT_DIR}/scripts/count_parameters.py" "$@" ;;
   check-smoke) exec "${PYTHON_BIN}" -m genbridge.smoke_gate "$@" ;;
   test) exec "${PYTHON_BIN}" "${SCRIPT_DIR}/tests/run_tests.py" "$@" ;;
-  *) echo "Unknown command: ${COMMAND} (train|eval|compare|ablate|prepare-wikilingua|prepare-lrsum|count-params|check-smoke|test)" >&2; exit 2 ;;
+  *) echo "Unknown command: ${COMMAND} (pipeline|train|eval|compare|ablate|prepare-wikilingua|prepare-lrsum|count-params|check-smoke|test)" >&2; exit 2 ;;
 esac
