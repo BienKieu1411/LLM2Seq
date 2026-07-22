@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate full-test predictions and metrics for the T5Gemma LoRA baseline."""
+"""Generate full-test predictions and metrics for fully fine-tuned T5Gemma."""
 
 from __future__ import annotations
 
@@ -10,12 +10,12 @@ import os
 import statistics
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import yaml
-from peft import PeftModel
 from sacrebleu import corpus_bleu, corpus_chrf
 from tqdm.auto import tqdm
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
@@ -25,6 +25,7 @@ T5GEMMA_ROOT = Path(__file__).resolve().parents[1]
 try:
     from .rouge_metric import heter_sum_graph_rouge
 except ImportError:  # Direct execution: python scripts/evaluate_full_test.py
+    sys.path.insert(0, str(T5GEMMA_ROOT / "scripts"))
     from rouge_metric import heter_sum_graph_rouge
 
 
@@ -131,6 +132,9 @@ def compute_metrics(
     ref_words = [word_count(ref) for ref in references]
     length_ratios = [pred_len / max(1, ref_len) for pred_len, ref_len in zip(pred_words, ref_words)]
     repeat_rates = [repeated_ngram_rate(pred, n=3) for pred in predictions]
+    normalized_predictions = [" ".join(pred.lower().split()) for pred in predictions]
+    nonempty_predictions = [pred for pred in normalized_predictions if pred]
+    prefixes = Counter(" ".join(pred.split()[:5]) for pred in nonempty_predictions)
     metrics.update(
         {
             "prediction_words_mean": round(safe_mean(pred_words), 4),
@@ -142,6 +146,18 @@ def compute_metrics(
             "too_short_rate": round(100.0 * safe_mean([1.0 if ratio < 0.5 else 0.0 for ratio in length_ratios]), 4),
             "too_long_rate": round(100.0 * safe_mean([1.0 if ratio > 1.5 else 0.0 for ratio in length_ratios]), 4),
             "repeated_trigram_rate_mean": round(100.0 * safe_mean(repeat_rates), 4),
+            "unique_prediction_rate": round(
+                100.0
+                * len(set(nonempty_predictions))
+                / max(1, len(nonempty_predictions)),
+                4,
+            ),
+            "dominant_prefix_5gram_rate": round(
+                100.0
+                * max(prefixes.values(), default=0)
+                / max(1, len(nonempty_predictions)),
+                4,
+            ),
         }
     )
 
@@ -182,12 +198,20 @@ def generation_value(args: argparse.Namespace, raw_cfg: Dict[str, Any], name: st
     return raw_cfg.get("generation", {}).get(name, default)
 
 
-def resolve_adapter_source(raw_cfg: Dict[str, Any], adapter: Optional[str]) -> Tuple[str, Optional[str], str]:
+def resolve_checkpoint_source(raw_cfg: Dict[str, Any], checkpoint: Optional[str]) -> Tuple[str, Optional[str], str]:
     local_candidates: List[Path] = []
-    if adapter:
-        local_candidates.append(Path(adapter))
+    if checkpoint:
+        explicit_path = Path(checkpoint)
+        if explicit_path.exists():
+            return str(explicit_path), None, str(explicit_path)
+        # Only org/repo-shaped values are interpreted as Hub model IDs. A
+        # missing local run path should fail clearly instead of being sent to
+        # huggingface_hub as a malformed repo ID.
+        if checkpoint.count("/") == 1 and not checkpoint.startswith((".", "/", "~")):
+            return checkpoint, None, checkpoint
+        raise FileNotFoundError(f"Full checkpoint not found: {checkpoint}")
     output_dir = Path(raw_cfg["project"]["output_dir"])
-    local_candidates.extend([output_dir / "best_adapter", output_dir / "final_adapter"])
+    local_candidates.append(output_dir / "final_model")
     for path in local_candidates:
         if path.exists():
             return str(path), None, str(path)
@@ -196,10 +220,10 @@ def resolve_adapter_source(raw_cfg: Dict[str, Any], adapter: Optional[str]) -> T
     repo_id = os.environ.get("HF_REPO_ID") or hf_cfg.get("repo_id")
     if not repo_id:
         raise FileNotFoundError(
-            f"No local adapter found in {[str(p) for p in local_candidates]} and HF_REPO_ID is not set."
+            f"No local full checkpoint found in {[str(p) for p in local_candidates]} and HF_REPO_ID is not set."
         )
-    path_in_repo = str(hf_cfg.get("path_in_repo", "checkpoints/t5gemma2_1b_1b_lora_wikilingua")).strip("/")
-    subfolder = f"{path_in_repo}/best_adapter"
+    path_in_repo = str(hf_cfg.get("path_in_repo", "checkpoints/t5gemma2_1b_1b_full_wikilingua")).strip("/")
+    subfolder = f"{path_in_repo}/final_model"
     return repo_id, subfolder, f"{repo_id}/{subfolder}"
 
 
@@ -215,7 +239,7 @@ def maybe_upload_eval_outputs(raw_cfg: Dict[str, Any], output_dir: Path) -> None
     from huggingface_hub import HfApi
 
     repo_type = hf_cfg.get("repo_type", "model")
-    base_path = str(hf_cfg.get("path_in_repo", "checkpoints/t5gemma2_1b_1b_lora_wikilingua")).strip("/")
+    base_path = str(hf_cfg.get("path_in_repo", "checkpoints/t5gemma2_1b_1b_full_wikilingua")).strip("/")
     path_in_repo = f"{base_path}/eval_outputs/full_test"
     try:
         api = HfApi(token=token)
@@ -244,7 +268,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--adapter", default=None)
+    parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--test_file", default=None)
     parser.add_argument("--output_dir", default="T5Gemma/eval_outputs/full_test")
     parser.add_argument("--limit", type=int, default=-1)
@@ -280,35 +304,45 @@ def main() -> None:
     token = os.environ.get("HF_TOKEN")
     model_name = raw_cfg["model"]["model_name_or_path"]
     trust_remote_code = bool(raw_cfg["model"].get("trust_remote_code", True))
-    dtype = torch_dtype_from_config(raw_cfg["model"].get("torch_dtype", "bfloat16"))
+    dtype = torch_dtype_from_config(
+        raw_cfg["model"].get(
+            "eval_torch_dtype",
+            raw_cfg["model"].get("torch_dtype", "bfloat16"),
+        )
+    )
 
+    checkpoint_source, checkpoint_subfolder, checkpoint_label = resolve_checkpoint_source(raw_cfg, args.checkpoint)
+    local_checkpoint = Path(checkpoint_source)
+    checkpoint_manifest: Dict[str, Any] = {}
+    if local_checkpoint.exists():
+        running_marker = local_checkpoint.parent / "RUNNING"
+        if running_marker.exists():
+            raise RuntimeError(
+                f"Refusing to evaluate {local_checkpoint}: {running_marker} indicates an incomplete run"
+            )
+        checkpoint_manifest_path = local_checkpoint / "checkpoint_manifest.json"
+        if checkpoint_manifest_path.exists():
+            checkpoint_manifest = json.loads(
+                checkpoint_manifest_path.read_text(encoding="utf-8")
+            )
+    print(f"Loading full fine-tuned checkpoint: {checkpoint_label}")
     tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
+        checkpoint_source,
+        subfolder=checkpoint_subfolder,
         trust_remote_code=trust_remote_code,
         token=token,
     )
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token or tokenizer.unk_token
 
-    base_model = AutoModelForSeq2SeqLM.from_pretrained(
-        model_name,
+    model = AutoModelForSeq2SeqLM.from_pretrained(
+        checkpoint_source,
+        subfolder=checkpoint_subfolder,
         torch_dtype=dtype,
         trust_remote_code=trust_remote_code,
         token=token,
     )
-    base_model.config.use_cache = bool(raw_cfg["model"].get("use_cache_for_eval", True))
-
-    adapter_source, adapter_subfolder, adapter_label = resolve_adapter_source(raw_cfg, args.adapter)
-    print(f"Loading LoRA adapter: {adapter_label}")
-    if adapter_subfolder:
-        model = PeftModel.from_pretrained(
-            base_model,
-            adapter_source,
-            subfolder=adapter_subfolder,
-            token=token,
-        )
-    else:
-        model = PeftModel.from_pretrained(base_model, adapter_source, token=token)
+    model.config.use_cache = bool(raw_cfg["model"].get("use_cache_for_eval", True))
     model.to(device)
     model.eval()
 
@@ -437,7 +471,7 @@ def main() -> None:
             "peak_gpu_memory_mb": round(torch.cuda.max_memory_allocated(device) / (1024**2), 2)
             if device.type == "cuda"
             else 0.0,
-            "adapter": adapter_label,
+            "checkpoint": checkpoint_label,
             "base_model": model_name,
             "config": str(config_path),
             "test_file": str(test_file),
@@ -447,13 +481,15 @@ def main() -> None:
             "eval_batch_size": batch_size,
         }
     )
+    if checkpoint_manifest.get("data_manifest"):
+        metrics["training_data_manifest"] = checkpoint_manifest["data_manifest"]
 
     with metrics_path.open("w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
     with run_info_path.open("w", encoding="utf-8") as f:
         json.dump(
             {
-                "adapter": adapter_label,
+                "checkpoint": checkpoint_label,
                 "base_model": model_name,
                 "device": str(device),
                 "torch": torch.__version__,

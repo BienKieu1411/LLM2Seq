@@ -1,0 +1,8 @@
+_base_: ../base.yaml
+
+experiment:
+  name: genbridge_adapter_2layers
+  output_dir: runs/genbridge/adapter_2layers
+
+bridge:
+  token_num_layers: 2

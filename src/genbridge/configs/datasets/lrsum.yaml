@@ -10,6 +10,7 @@ data:
   test_file: data/lrsum/test.jsonl
   source_prefix: "Tóm tắt bài báo bằng một câu nêu sự kiện chính; không thêm thông tin.\nBài báo:\n"
   target_prefix: "\nTóm tắt:\n"
+  decoder_instruction: "Hãy tạo một câu tóm tắt sự kiện chính, chỉ dựa trên bài báo đã mã hóa."
   decoder_prefix: "Tóm tắt:\n"
   evidence_unit: sentence
   clean_wikihow_metadata: false
@@ -23,5 +24,6 @@ data:
   oracle_rouge2_weight: 0.3
 
 generation:
+  batch_size: 32
   min_new_tokens: 16
   max_new_tokens: 192

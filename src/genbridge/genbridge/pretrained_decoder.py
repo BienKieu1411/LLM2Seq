@@ -48,7 +48,12 @@ class HeadRMSNorm(nn.Module):
 class QwenCrossAttention(nn.Module):
     """GQA cross-attention initialized from a native Qwen self-attention."""
 
-    def __init__(self, config: Any, dropout: float = 0.0):
+    def __init__(
+        self,
+        config: Any,
+        dropout: float = 0.0,
+        memory_norm: Optional[nn.Module] = None,
+    ):
         super().__init__()
         self.hidden_size = int(config.hidden_size)
         self.num_heads = int(config.num_attention_heads)
@@ -61,6 +66,10 @@ class QwenCrossAttention(nn.Module):
         eps = float(getattr(config, "rms_norm_eps", 1e-6))
         self.q_norm = HeadRMSNorm(self.head_dim, eps)
         self.k_norm = HeadRMSNorm(self.head_dim, eps)
+        # K/V are copied from native self-attention, where they consume the
+        # output of the layer's input RMSNorm. Preserve that exact contract for
+        # encoder memory instead of feeding an unrelated normalized space.
+        self.memory_norm = memory_norm if memory_norm is not None else nn.Identity()
         self.dropout = float(dropout)
         # Separate entries are required by dual-memory decoding.  The same
         # learned K/V projections are shared by both memories, but their
@@ -81,7 +90,8 @@ class QwenCrossAttention(nn.Module):
         source_q = source.q_proj.weight
         if source_q.shape[0] < self.q_proj.weight.shape[0]:
             raise ValueError(f"Q projection is too small: {source_q.shape} -> {self.q_proj.weight.shape}")
-        # Qwen3.5 packs an output gate after Q in q_proj; Qwen3 does not.
+        # Qwen3 uses the exact Q rows; slicing remains defensive for compatible
+        # checkpoints that append an output gate to the same projection.
         self.q_proj.weight.copy_(source_q[: self.q_proj.weight.shape[0]])
 
         for name in ("q_norm", "k_norm"):
@@ -89,8 +99,8 @@ class QwenCrossAttention(nn.Module):
             if source_norm is None or not hasattr(source_norm, "weight"):
                 continue
             weight = source_norm.weight.detach().float()
-            # Qwen3.5 stores a zero-centered residual scale (1 + weight), while
-            # Qwen3 stores the scale directly.
+            # Official Qwen3 stores the scale directly. The magnitude check is
+            # defensive for compatible zero-centered RMSNorm checkpoints.
             converted = 1.0 + weight if float(weight.abs().mean()) < 0.5 else weight
             getattr(self, name).weight.copy_(converted)
 
@@ -112,10 +122,11 @@ class QwenCrossAttention(nn.Module):
                     f"Stale {cache_key} cross-attention cache; prepare it for the current source"
                 )
         else:
-            key = self.k_proj(encoder_hidden_states).view(
+            normalized_memory = self.memory_norm(encoder_hidden_states)
+            key = self.k_proj(normalized_memory).view(
                 batch_size, key_length, self.num_kv_heads, self.head_dim
             )
-            value = self.v_proj(encoder_hidden_states).view(
+            value = self.v_proj(normalized_memory).view(
                 batch_size, key_length, self.num_kv_heads, self.head_dim
             )
             key = self.k_norm(key).transpose(1, 2)
@@ -147,10 +158,11 @@ class QwenCrossAttention(nn.Module):
         cache_key: str = "memory",
     ) -> None:
         batch_size, key_length, _ = encoder_hidden_states.shape
-        key = self.k_proj(encoder_hidden_states).view(
+        normalized_memory = self.memory_norm(encoder_hidden_states)
+        key = self.k_proj(normalized_memory).view(
             batch_size, key_length, self.num_kv_heads, self.head_dim
         )
-        value = self.v_proj(encoder_hidden_states).view(
+        value = self.v_proj(normalized_memory).view(
             batch_size, key_length, self.num_kv_heads, self.head_dim
         )
         self._memory_cache[cache_key] = (
@@ -173,15 +185,26 @@ class CrossAttentionInjectedLayer(GradientCheckpointingLayer):
         dropout: float,
         memory_attention: str,
         plan_gate_init: float,
+        cross_gate_init: float,
     ):
         super().__init__()
         self.base_layer = base_layer
-        self.cross_attn_norm = copy.deepcopy(base_layer.post_attention_layernorm)
-        self.cross_attn = QwenCrossAttention(config, dropout=dropout)
+        # q_proj was copied from native self-attention, so initialize its input
+        # normalization from the native self-attention norm as well. Using the
+        # FFN/post-attention norm silently breaks the copied-weight contract,
+        # especially in late Qwen3 layers whose learned RMS scales differ.
+        self.cross_attn_norm = copy.deepcopy(base_layer.input_layernorm)
+        self.cross_attn = QwenCrossAttention(
+            config,
+            dropout=dropout,
+            memory_norm=copy.deepcopy(base_layer.input_layernorm),
+        )
         reference_weight = source_attention.q_proj.weight
         self.cross_attn.to(device=reference_weight.device, dtype=reference_weight.dtype)
         self.cross_attn.initialize_from_self_attention(source_attention)
-        self.cross_gate = nn.Parameter(torch.tensor(0.01, dtype=torch.float32))
+        if not 0.0 < cross_gate_init < 1.0:
+            raise ValueError("decoder.cross_gate_init must be strictly between 0 and 1")
+        self.cross_gate = nn.Parameter(torch.tensor(cross_gate_init, dtype=torch.float32))
         self.memory_attention = memory_attention
         self.plan_gate: Optional[nn.Linear] = None
         if memory_attention == "gated_dual":
@@ -192,6 +215,8 @@ class CrossAttentionInjectedLayer(GradientCheckpointingLayer):
             nn.init.zeros_(self.plan_gate.weight)
             nn.init.constant_(self.plan_gate.bias, math.log(plan_gate_init / (1.0 - plan_gate_init)))
         self.last_plan_gate_mean: Optional[torch.Tensor] = None
+        self.last_plan_gate_values: Optional[torch.Tensor] = None
+        self.last_cross_residual_ratio: Optional[torch.Tensor] = None
 
     def forward(
         self,
@@ -256,6 +281,7 @@ class CrossAttentionInjectedLayer(GradientCheckpointingLayer):
                 )
                 cross_states = token_context + plan_gate * (plan_context - token_context)
                 self.last_plan_gate_mean = plan_gate.detach().float().mean()
+                self.last_plan_gate_values = plan_gate.detach().float().squeeze(-1)
             else:
                 cross_states = self.cross_attn(
                     normalized_states,
@@ -264,7 +290,13 @@ class CrossAttentionInjectedLayer(GradientCheckpointingLayer):
                     cache_key="memory",
                 )
                 self.last_plan_gate_mean = None
-            hidden_states = hidden_states + torch.tanh(self.cross_gate).to(hidden_states.dtype) * cross_states
+                self.last_plan_gate_values = None
+            scaled_cross = torch.tanh(self.cross_gate).to(hidden_states.dtype) * cross_states
+            with torch.no_grad():
+                cross_rms = scaled_cross.detach().float().square().mean().sqrt()
+                hidden_rms = hidden_states.detach().float().square().mean().sqrt().clamp_min(1e-8)
+                self.last_cross_residual_ratio = cross_rms / hidden_rms
+            hidden_states = hidden_states + scaled_cross
 
         residual = hidden_states
         hidden_states = self.base_layer.post_attention_layernorm(hidden_states)
@@ -308,6 +340,7 @@ class PretrainedQwenDecoder(nn.Module):
         if self.memory_attention not in {"concat", "gated_dual"}:
             raise ValueError("decoder.memory_attention must be concat or gated_dual")
         plan_gate_init = float(decoder_config.get("plan_gate_init", 0.1))
+        cross_gate_init = float(decoder_config.get("cross_gate_init", 0.01))
 
         selected_types = []
         wrapped_layers = []
@@ -330,6 +363,7 @@ class PretrainedQwenDecoder(nn.Module):
                     dropout=dropout,
                     memory_attention=self.memory_attention,
                     plan_gate_init=plan_gate_init,
+                    cross_gate_init=cross_gate_init,
                 )
                 cross_attention_indices.append(new_index)
             wrapped_layers.append(layer)
@@ -438,6 +472,48 @@ class PretrainedQwenDecoder(nn.Module):
             if isinstance(layer, CrossAttentionInjectedLayer)
             and layer.last_plan_gate_mean is not None
         )
+
+    def plan_gate_values(self) -> Tuple[torch.Tensor, ...]:
+        """Return latest per-example/query gates for generation analysis."""
+
+        return tuple(
+            layer.last_plan_gate_values
+            for layer in self.backbone.layers
+            if isinstance(layer, CrossAttentionInjectedLayer)
+            and layer.last_plan_gate_values is not None
+        )
+
+    def cross_gate_mean(self) -> torch.Tensor:
+        gates = [
+            torch.tanh(layer.cross_gate.float())
+            for layer in self.backbone.layers
+            if isinstance(layer, CrossAttentionInjectedLayer)
+        ]
+        if not gates:
+            return next(self.parameters()).new_zeros((), dtype=torch.float32)
+        return torch.stack(gates).mean()
+
+    def cross_residual_ratio_mean(self) -> torch.Tensor:
+        ratios = [
+            layer.last_cross_residual_ratio
+            for layer in self.backbone.layers
+            if isinstance(layer, CrossAttentionInjectedLayer)
+            and layer.last_cross_residual_ratio is not None
+        ]
+        if not ratios:
+            return next(self.parameters()).new_zeros((), dtype=torch.float32)
+        return torch.stack(ratios).mean()
+
+    def plan_gate_mean(self) -> torch.Tensor:
+        gates = [
+            layer.last_plan_gate_mean
+            for layer in self.backbone.layers
+            if isinstance(layer, CrossAttentionInjectedLayer)
+            and layer.last_plan_gate_mean is not None
+        ]
+        if not gates:
+            return next(self.parameters()).new_zeros((), dtype=torch.float32)
+        return torch.stack(gates).mean()
 
     @property
     def embed_tokens(self) -> nn.Module:

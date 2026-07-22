@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 import torch
 from torch.utils.data import Dataset
@@ -44,6 +45,43 @@ def read_jsonl(path: str | Path) -> List[Dict[str, Any]]:
     if not rows:
         raise ValueError(f"Dataset is empty: {path}")
     return rows
+
+
+def jsonl_fingerprint(path: str | Path, max_examples: int = 0) -> Dict[str, Any]:
+    """Hash the exact ID/source/target examples consumed by an experiment."""
+
+    path = Path(path)
+    digest = hashlib.sha256()
+    count = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for raw in handle:
+            if not raw.strip():
+                continue
+            if max_examples > 0 and count >= max_examples:
+                break
+            row = json.loads(raw)
+            canonical = {
+                "id": row.get("id"),
+                "source": row.get("source"),
+                "target": row.get("target"),
+            }
+            digest.update(
+                json.dumps(
+                    canonical,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            digest.update(b"\n")
+            count += 1
+    if count == 0:
+        raise ValueError(f"Dataset is empty: {path}")
+    return {
+        "path": str(path.resolve()),
+        "num_examples": count,
+        "sha256": digest.hexdigest(),
+    }
 
 
 def split_sentences(text: str) -> List[str]:
@@ -173,8 +211,10 @@ def greedy_evidence_labels(
         selected_bigrams += candidate_counters[best_index][1]
         current_score = best_score
     if not selected:
-        # Always supply a positive example when lexical overlap exists only at
-        # character/tokenization edge cases.
+        # Do not invent a positive sentence when an abstractive/noisy target
+        # has no lexical evidence at all.  ``-1`` is the established ignore
+        # label in the salience loss, while the summary CE still trains on the
+        # example normally.
         scores = [
             _counter_overlap(
                 unigrams,
@@ -186,6 +226,8 @@ def greedy_evidence_labels(
             )
             for unigrams, bigrams in candidate_counters
         ]
+        if max(scores) <= 0.0:
+            return [-1.0] * len(source_units)
         selected = [max(range(len(scores)), key=scores.__getitem__)]
     selected_set = set(selected)
     return [1.0 if index in selected_set else 0.0 for index in range(len(source_units))]
@@ -207,6 +249,7 @@ def prompted_source_features(
             [{"role": "user", "content": f"{source_prefix}{sentinel}"}],
             tokenize=False,
             add_generation_prompt=True,
+            enable_thinking=bool(data_config.get("enable_thinking", False)),
         )
         if sentinel not in rendered:
             raise RuntimeError("Tokenizer chat template changed the source sentinel")
@@ -231,7 +274,13 @@ def prompted_source_features(
         encoded = complete[:remaining]
         if not encoded:
             break
-        used_units.append(unit)
+        if len(encoded) < len(complete):
+            # Oracle supervision must describe the text that the encoder
+            # actually receives, not a hidden tail removed by truncation.
+            visible_unit = tokenizer.decode(encoded, skip_special_tokens=True).strip()
+            used_units.append(visible_unit or unit)
+        else:
+            used_units.append(unit)
         current_id = len(used_units)
         source_ids.extend(encoded)
         unit_ids.extend([current_id] * len(encoded))
@@ -255,6 +304,33 @@ def decoder_prompt_ids(tokenizer: Any, data_config: Dict[str, Any]) -> List[int]
     decoder without putting reference information into inference.
     """
 
+    prefix = str(data_config.get("decoder_prefix", ""))
+    use_chat_template = bool(data_config.get("use_decoder_chat_template", True))
+    if use_chat_template and getattr(tokenizer, "chat_template", None):
+        instruction = str(
+            data_config.get(
+                "decoder_instruction",
+                "Hãy tạo bản tóm tắt ngắn, chỉ dựa trên văn bản đã mã hóa.",
+            )
+        ).strip()
+        rendered_ids = tokenizer.apply_chat_template(
+            [{"role": "user", "content": instruction}],
+            tokenize=True,
+            add_generation_prompt=True,
+            enable_thinking=bool(data_config.get("enable_thinking", False)),
+        )
+        if isinstance(rendered_ids, Mapping):
+            rendered_ids = rendered_ids["input_ids"]
+        if isinstance(rendered_ids, torch.Tensor):
+            rendered_ids = rendered_ids.tolist()
+        if rendered_ids and isinstance(rendered_ids[0], list):
+            rendered_ids = rendered_ids[0]
+        prefix_ids = tokenizer(prefix, add_special_tokens=False)["input_ids"] if prefix else []
+        seed = [int(token_id) for token_id in [*rendered_ids, *prefix_ids]]
+        if not seed:
+            raise ValueError("Decoder chat template produced an empty prompt")
+        return seed
+
     start_id = tokenizer.bos_token_id
     if start_id is None:
         start_id = tokenizer.pad_token_id
@@ -262,7 +338,6 @@ def decoder_prompt_ids(tokenizer: Any, data_config: Dict[str, Any]) -> List[int]
         start_id = tokenizer.eos_token_id
     if start_id is None:
         raise ValueError("Tokenizer has no BOS/PAD/EOS decoder start token")
-    prefix = str(data_config.get("decoder_prefix", ""))
     prefix_ids = tokenizer(prefix, add_special_tokens=False)["input_ids"] if prefix else []
     return [int(start_id), *[int(token_id) for token_id in prefix_ids]]
 
@@ -317,7 +392,11 @@ class EvidenceSeq2SeqDataset(Dataset):
             self.tokenizer, source, self.data_config
         )
         cached = self.evidence_cache[index] if self.evidence_cache is not None else None
-        if cached is not None and len(cached) == len(units):
+        # Equal unit counts do not prove that no truncation occurred: the last
+        # source sentence can be only partially visible while remaining the
+        # last unit. Reuse an oracle only when its exact source units match.
+        full_units = split_evidence_units(source, self.data_config)
+        if cached is not None and units == full_units:
             evidence = cached
         elif index in self.truncated_evidence_cache:
             evidence = self.truncated_evidence_cache[index]
@@ -335,10 +414,15 @@ class EvidenceSeq2SeqDataset(Dataset):
         decoder_seed = decoder_prompt_ids(self.tokenizer, self.data_config)
         ignored_prefix_length = len(decoder_seed) - 1
         eos_length = int(self.tokenizer.eos_token_id is not None)
-        target_budget = max(
-            1,
-            self.max_target_length - ignored_prefix_length - eos_length,
-        )
+        if self.max_target_length <= eos_length:
+            raise ValueError(
+                "data.max_target_length must leave room for at least one target token "
+                f"and EOS; got {self.max_target_length}"
+            )
+        # ``max_target_length`` is the summary budget, matching T5Gemma and
+        # standard seq2seq conventions. The fixed decoder instruction is
+        # conditioning context and must not silently consume summary capacity.
+        target_budget = self.max_target_length - eos_length
         target_ids = self.tokenizer(
             target,
             add_special_tokens=False,
@@ -370,10 +454,22 @@ class EvidenceSeq2SeqDataset(Dataset):
 
 
 class EvidenceSeq2SeqCollator:
-    def __init__(self, pad_token_id: int, max_source_length: int, max_target_length: int):
+    def __init__(
+        self,
+        pad_token_id: int,
+        max_source_length: int,
+        max_target_length: int,
+        decoder_prompt_length: int = 1,
+    ):
         self.pad_token_id = int(pad_token_id)
         self.max_source_length = int(max_source_length)
         self.max_target_length = int(max_target_length)
+        if decoder_prompt_length < 1:
+            raise ValueError("decoder_prompt_length must be positive")
+        # Labels ignore all fixed prompt positions except its final token,
+        # which predicts the first summary token. Keep that context outside the
+        # output length budget instead of truncating target labels in collate.
+        self.max_decoder_length = self.max_target_length + int(decoder_prompt_length) - 1
 
     @staticmethod
     def _pad_1d(tensors: Iterable[torch.Tensor], length: int, value: float) -> torch.Tensor:
@@ -395,7 +491,10 @@ class EvidenceSeq2SeqCollator:
 
     def __call__(self, features: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
         source_length = min(max(item["input_ids"].numel() for item in features), self.max_source_length)
-        target_length = min(max(item["labels"].numel() for item in features), self.max_target_length)
+        target_length = min(
+            max(item["labels"].numel() for item in features),
+            self.max_decoder_length,
+        )
         evidence_length = max(1, max(item["evidence_labels"].numel() for item in features))
         return {
             # Source batches are left padded so learned suffix planning tokens

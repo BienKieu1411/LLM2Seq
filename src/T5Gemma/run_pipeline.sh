@@ -10,11 +10,10 @@ echo "=== Prepare WikiLingua ==="
   --input_dir "${WIKI_DIR}" \
   --output_dir "${DATA_DIR}"
 
-echo "=== Train T5Gemma LoRA ==="
+echo "=== Full fine-tune T5Gemma ==="
 bash "${T5GEMMA_ROOT}/scripts/train.sh"
 
 if [[ "${RUN_EVAL,,}" == "true" || "${RUN_EVAL}" == "1" || "${RUN_EVAL,,}" == "yes" ]]; then
   echo "=== Evaluate Full Test ==="
   bash "${T5GEMMA_ROOT}/scripts/evaluate.sh"
 fi
-

@@ -2,14 +2,17 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
 import torch
 
 from genbridge.data import (
     DirectSummarizationDataset,
     EvidenceSeq2SeqCollator,
+    EvidenceSeq2SeqDataset,
     clean_wikihow_metadata,
     decoder_prompt_ids,
     greedy_evidence_labels,
+    prompted_source_features,
     split_evidence_units,
 )
 
@@ -39,6 +42,15 @@ def test_oracle_evidence_selects_summary_bearing_sentences():
     assert labels[1] == 1.0
     assert labels[3] == 1.0
     assert labels[2] == 0.0
+
+
+def test_oracle_ignores_salience_when_reference_has_no_lexical_evidence():
+    labels = greedy_evidence_labels(
+        ["Luộc nước.", "Cho mì vào nồi."],
+        "Completely unrelated English target.",
+        3,
+    )
+    assert labels == [-1.0, -1.0]
 
 
 def test_fixed_budget_can_supervise_multiple_units_for_one_sentence_target():
@@ -128,3 +140,172 @@ def test_decoder_prompt_uses_task_prefix_after_fallback_start_token():
         11,
         12,
     ]
+
+
+def test_decoder_prompt_uses_non_thinking_chat_template_when_available():
+    class Tokenizer:
+        bos_token_id = None
+        pad_token_id = 7
+        eos_token_id = 8
+        chat_template = "qwen-template"
+
+        def __init__(self):
+            self.messages = None
+            self.template_kwargs = None
+
+        def apply_chat_template(self, messages, **kwargs):
+            self.messages = messages
+            self.template_kwargs = kwargs
+            return {"input_ids": [20, 21, 22], "attention_mask": [1, 1, 1]}
+
+        def __call__(self, text, add_special_tokens=False):
+            assert text == "Các bước:\n"
+            assert not add_special_tokens
+            return {"input_ids": [10, 11]}
+
+    tokenizer = Tokenizer()
+    seed = decoder_prompt_ids(
+        tokenizer,
+        {
+            "decoder_instruction": "Chỉ sinh bản tóm tắt.",
+            "decoder_prefix": "Các bước:\n",
+            "enable_thinking": False,
+        },
+    )
+    assert seed == [20, 21, 22, 10, 11]
+    assert tokenizer.messages == [{"role": "user", "content": "Chỉ sinh bản tóm tắt."}]
+    assert tokenizer.template_kwargs == {
+        "tokenize": True,
+        "add_generation_prompt": True,
+        "enable_thinking": False,
+    }
+
+
+def test_truncated_evidence_unit_matches_visible_source_tokens():
+    class Tokenizer:
+        chat_template = None
+
+        def __call__(self, text, add_special_tokens=False):
+            mapping = {
+                "P": [90],
+                "S": [91],
+                "A.": [1, 2],
+                "B.": [3, 4, 5],
+            }
+            return {"input_ids": mapping[text]}
+
+        def decode(self, token_ids, skip_special_tokens=True):
+            assert skip_special_tokens
+            assert token_ids == [3, 4]
+            return "B phần nhìn thấy"
+
+    ids, unit_ids, units = prompted_source_features(
+        Tokenizer(),
+        "A. B.",
+        {
+            "source_prefix": "P",
+            "target_prefix": "S",
+            "sentence_separator": "",
+            "max_source_length": 6,
+            "use_chat_template": False,
+        },
+    )
+    assert ids == [90, 1, 2, 3, 4, 91]
+    assert unit_ids == [0, 1, 1, 2, 2, 0]
+    assert units == ["A.", "B phần nhìn thấy"]
+
+
+def test_precomputed_oracle_is_recomputed_for_partially_visible_last_unit():
+    class Tokenizer:
+        chat_template = None
+        bos_token_id = None
+        pad_token_id = 7
+        eos_token_id = 8
+
+        def __call__(self, text, add_special_tokens=False, **kwargs):
+            mapping = {
+                "P": [90],
+                "S": [91],
+                "A.": [1, 2],
+                "B tail.": [3, 4, 5],
+                "tail": [6],
+            }
+            return {"input_ids": mapping[text]}
+
+        def decode(self, token_ids, skip_special_tokens=True):
+            assert token_ids == [3, 4]
+            return "B"
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "train.jsonl"
+        path.write_text(
+            json.dumps(
+                {"id": "x", "source": "A. B tail.", "target": "tail"},
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        dataset = EvidenceSeq2SeqDataset(
+            path,
+            Tokenizer(),
+            {
+                "source_prefix": "P",
+                "target_prefix": "S",
+                "decoder_prefix": "",
+                "sentence_separator": "",
+                "max_source_length": 6,
+                "max_target_length": 8,
+                "use_chat_template": False,
+                "use_decoder_chat_template": False,
+                "oracle_max_units": 3,
+            },
+            precompute_evidence=True,
+        )
+        # The full-text oracle selects "B tail.", but "tail" is truncated
+        # away. The cached full-text label must not leak into supervision.
+        assert dataset.evidence_cache == [[0.0, 1.0]]
+        assert dataset[0]["evidence_labels"].tolist() == [-1.0, -1.0]
+
+
+def test_decoder_prompt_does_not_consume_target_budget():
+    class Tokenizer:
+        chat_template = None
+        bos_token_id = None
+        pad_token_id = 7
+        eos_token_id = 8
+
+        def __call__(self, text, add_special_tokens=False, **kwargs):
+            return {"input_ids": [1]}
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "train.jsonl"
+        path.write_text(
+            json.dumps({"source": "Nguồn.", "target": "Đích."}, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        dataset = EvidenceSeq2SeqDataset(
+            path,
+            Tokenizer(),
+            {
+                "source_prefix": "P",
+                "target_prefix": "S",
+                "decoder_prefix": "prefix",
+                "max_source_length": 8,
+                "max_target_length": 2,
+                "use_chat_template": False,
+                "use_decoder_chat_template": False,
+            },
+        )
+        feature = dataset[0]
+        # One ignored prompt position plus two summary positions (token + EOS).
+        assert feature["labels"].tolist() == [-100, 1, 8]
+        collator = EvidenceSeq2SeqCollator(
+            pad_token_id=7,
+            max_source_length=8,
+            max_target_length=2,
+            decoder_prompt_length=2,
+        )
+        batch = collator([feature])
+        assert batch["labels"].shape[1] == 3
+        assert batch["labels"].tolist() == [[-100, 1, 8]]

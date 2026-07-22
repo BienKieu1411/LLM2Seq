@@ -26,7 +26,7 @@ def count_profile(size: str) -> dict[str, int | str]:
             {
                 "mode": "genbridge",
                 "hidden_size": 512,
-                "token_num_layers": 2,
+                "token_num_layers": 4,
                 "unit_num_layers": 1,
                 "num_heads": 8,
                 "ffn_size": 2048,
@@ -39,10 +39,12 @@ def count_profile(size: str) -> dict[str, int | str]:
     bridge_parameters = sum(parameter.numel() for parameter in bridge.parameters())
     plan_tokens = 16 * int(config.hidden_size)
     cross_layers = (int(config.num_hidden_layers) + 3) // 4
-    # Added module = shared GQA projections/norms + copied decoder RMSNorm +
-    # scalar residual gate + query-dependent plan gate (H -> 1).
+    # Added module = shared GQA projections/head norms + copied decoder query
+    # RMSNorm + copied encoder-memory RMSNorm + scalar residual gate +
+    # query-dependent plan gate (H -> 1).
     cross_per_layer = (
         sum(parameter.numel() for parameter in cross_attention.parameters())
+        + int(config.hidden_size)
         + int(config.hidden_size)
         + 1
         + int(config.hidden_size)

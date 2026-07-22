@@ -24,6 +24,8 @@ def save_checkpoint(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     state = trainable_state_dict(model)
+    parameter_names = set(dict(model.named_parameters()))
+    stores_full_parameter_state = parameter_names.issubset(state)
     stores_pretrained = any(
         name.startswith(("encoder.model.", "decoder.backbone.", "model.")) for name in state
     )
@@ -35,6 +37,8 @@ def save_checkpoint(
             "config": config,
             "compact_checkpoint": not stores_pretrained,
             "stores_pretrained_weights": stores_pretrained,
+            "stores_full_parameter_state": stores_full_parameter_state,
+            "saved_parameter_count": len(parameter_names & set(state)),
         },
         path,
     )
@@ -47,6 +51,20 @@ def load_checkpoint(model: nn.Module, path: str | Path) -> Dict[str, Any]:
     unknown = [name for name in state if name not in target_names]
     if unknown:
         raise RuntimeError(f"Checkpoint tensors do not exist in target model: {unknown[:20]}")
+    strict_parameters = bool(
+        payload.get(
+            "stores_full_parameter_state",
+            payload.get("stores_pretrained_weights", False),
+        )
+    )
+    if strict_parameters:
+        expected_parameters = set(dict(model.named_parameters()))
+        missing_parameters = sorted(expected_parameters - set(state))
+        if missing_parameters:
+            raise RuntimeError(
+                "Full checkpoint is incompatible with the current architecture; "
+                "missing parameter tensors: " + ", ".join(missing_parameters[:20])
+            )
     incompatible = model.load_state_dict(state, strict=False)
     if incompatible.unexpected_keys:
         raise RuntimeError(f"Unexpected checkpoint tensors: {incompatible.unexpected_keys[:20]}")

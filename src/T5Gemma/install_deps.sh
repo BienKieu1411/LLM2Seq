@@ -4,17 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/scripts/load_env.sh"
 
-TORCH_VERSION="${TORCH_VERSION:-2.5.1}"
-TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.20.1}"
-TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-2.5.1}"
-TORCH_CUDA_INDEX="${TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu124}"
-
-"${PYTHON_BIN}" -m pip uninstall -y torch torchvision torchaudio || true
-"${PYTHON_BIN}" -m pip install \
-  "torch==${TORCH_VERSION}" \
-  "torchvision==${TORCHVISION_VERSION}" \
-  "torchaudio==${TORCHAUDIO_VERSION}" \
-  --index-url "${TORCH_CUDA_INDEX}"
+# Preserve the configured bienkieu_env by default. CUDA 12.4 wheels predate
+# native Blackwell support and must never replace a working B200 installation.
+INSTALL_TORCH="${INSTALL_TORCH:-false}"
+TORCH_CUDA_INDEX="${TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu128}"
+if [[ "${INSTALL_TORCH,,}" == "true" || "${INSTALL_TORCH}" == "1" || "${INSTALL_TORCH,,}" == "yes" ]]; then
+  "${PYTHON_BIN}" -m pip install --upgrade torch --index-url "${TORCH_CUDA_INDEX}"
+fi
 
 "${PYTHON_BIN}" -m pip install -r "${T5GEMMA_ROOT}/requirements.txt"
 
@@ -35,8 +31,12 @@ print("gpu:", name)
 print("gpu capability:", capability)
 print("supported arch list:", arch_list)
 
-if "45GB" in name.upper() and capability < (8, 9):
-    raise SystemExit(f"Expected an Ada/45GB-class GPU capability around sm_89, got {capability}.")
-if "45GB" in name.upper() and "sm_89" not in arch_list and "compute_89" not in arch_list:
-    raise SystemExit("Installed PyTorch wheel does not advertise sm_89 support for 45GB-class GPUs.")
+if "B200" in name.upper():
+    cuda_version = tuple(int(part) for part in torch.version.cuda.split(".")[:2])
+    if capability < (10, 0):
+        raise SystemExit(f"Expected B200 compute capability sm_100, got {capability}.")
+    if cuda_version < (12, 8):
+        raise SystemExit(f"B200 requires a Blackwell-capable wheel (CUDA >= 12.8), got {torch.version.cuda}.")
+    if not any(arch in arch_list for arch in ("sm_100", "compute_100")):
+        raise SystemExit(f"PyTorch wheel does not advertise sm_100 support: {arch_list}")
 PY

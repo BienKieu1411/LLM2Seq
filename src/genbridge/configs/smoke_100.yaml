@@ -1,8 +1,10 @@
 _base_: base.yaml
 
 experiment:
-  name: genbridge_qwen3_0_6b_smoke_100
-  output_dir: runs/genbridge/qwen3_0_6b_smoke_100
+  name: genbridge_qwen3_0_6b_overfit_100
+  # A fresh directory prevents evaluation from loading a stale final.pt left
+  # by the earlier 8/300-update smoke experiments.
+  output_dir: runs/genbridge/qwen3_0_6b_overfit_100
 
 # Replace both values with the same local checkpoint directory when the model
 # has already been downloaded. The directory must contain config.json,
@@ -13,16 +15,19 @@ model:
 decoder:
   pretrained_name: Qwen/Qwen3-0.6B
   num_layers: 28
+  # The tiny overfit run has far fewer updates than full WikiLingua; expose a
+  # measurable source signal immediately so conditioning can be verified.
+  cross_gate_init: 0.1
 
 training:
-  # Qualitative overfit test: 75 interface updates then 225 full-FT updates.
+  # Qualitative overfit test: 125 interface updates then 625 full-FT updates.
   # The paper configs remain 2 warm-up + 8 full epochs at effective batch 32.
-  epochs: 12
-  interface_warmup_epochs: 3
+  epochs: 30
+  interface_warmup_epochs: 5
   batch_size: 4
   gradient_accumulation_steps: 1
   num_workers: 2
-  full_lr: 2.0e-5
+  full_lr: 5.0e-5
   log_every_steps: 1
 
 data:

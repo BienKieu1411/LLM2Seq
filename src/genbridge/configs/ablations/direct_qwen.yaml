@@ -1,7 +1,7 @@
 _base_: ../base.yaml
 
 experiment:
-  name: direct_qwen35_full_ft
+  name: direct_qwen3_full_ft
   kind: direct_causal
   output_dir: runs/genbridge/direct_qwen
 

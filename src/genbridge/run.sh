@@ -17,10 +17,12 @@ if [[ $# -gt 0 ]]; then shift; fi
 case "${COMMAND}" in
   train) exec "${PYTHON_BIN}" -m genbridge.training "$@" ;;
   eval) exec "${PYTHON_BIN}" -m genbridge.evaluate "$@" ;;
+  compare) exec "${PYTHON_BIN}" -m genbridge.compare "$@" ;;
   ablate) exec "${PYTHON_BIN}" -m genbridge.run_ablations "$@" ;;
   prepare-wikilingua) exec "${PYTHON_BIN}" "${SCRIPT_DIR}/scripts/prepare_wikilingua.py" "$@" ;;
   prepare-lrsum) exec "${PYTHON_BIN}" "${SCRIPT_DIR}/scripts/prepare_lrsum.py" "$@" ;;
   count-params) exec "${PYTHON_BIN}" "${SCRIPT_DIR}/scripts/count_parameters.py" "$@" ;;
+  check-smoke) exec "${PYTHON_BIN}" -m genbridge.smoke_gate "$@" ;;
   test) exec "${PYTHON_BIN}" "${SCRIPT_DIR}/tests/run_tests.py" "$@" ;;
-  *) echo "Unknown command: ${COMMAND} (train|eval|ablate|prepare-wikilingua|prepare-lrsum|count-params|test)" >&2; exit 2 ;;
+  *) echo "Unknown command: ${COMMAND} (train|eval|compare|ablate|prepare-wikilingua|prepare-lrsum|count-params|check-smoke|test)" >&2; exit 2 ;;
 esac

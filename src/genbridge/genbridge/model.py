@@ -23,8 +23,16 @@ class GenBridgeSeq2Seq(nn.Module):
         model_config = config.get("model", {}) or {}
         decoder_config = config.get("decoder", {}) or {}
         bridge_config = config.get("bridge", {}) or {}
+        encoder_name = str(model_config.get("encoder_name", "Qwen/Qwen3-0.6B"))
+        decoder_name = str(decoder_config.get("pretrained_name", encoder_name))
+        allow_mixed = bool(model_config.get("allow_mixed_checkpoints", False))
+        if decoder_name != encoder_name and not allow_mixed:
+            raise ValueError(
+                "Different encoder/decoder checkpoints require "
+                "model.allow_mixed_checkpoints=true. The training pipeline will then verify "
+                "that their token-to-id vocabularies and special-token IDs are identical."
+            )
         self.encoder = CausalSourceEncoder(model_config)
-        decoder_name = str(decoder_config.get("pretrained_name", self.encoder.model_name))
         self.decoder = PretrainedQwenDecoder(
             decoder_name,
             decoder_config,
@@ -142,14 +150,45 @@ class GenBridgeSeq2Seq(nn.Module):
             + self.plan_alignment_weight * loss_plan_alignment.float()
             + self.plan_diversity_weight * bridge_output.loss_plan_diversity.float()
         )
-        return {
+        result = {
             "logits": selected_logits,
             "loss": loss,
             "loss_ce": loss_ce,
             "loss_salience": bridge_output.loss_salience,
             "loss_plan_alignment": loss_plan_alignment,
             "loss_plan_diversity": bridge_output.loss_plan_diversity,
+            "cross_gate_mean": self.decoder.cross_gate_mean().detach(),
+            "cross_residual_ratio": self.decoder.cross_residual_ratio_mean().detach(),
+            "plan_gate_mean": self.decoder.plan_gate_mean().detach(),
+            "token_adapter_gate": torch.tanh(self.bridge.token_adapter_gate.float()).detach(),
+            "plan_adapter_gate": torch.tanh(self.bridge.plan_adapter_gate.float()).detach(),
         }
+        if hasattr(self.bridge, "unit_broadcast_gate"):
+            result["unit_broadcast_gate"] = torch.tanh(
+                self.bridge.unit_broadcast_gate.float()
+            ).detach()
+        if bridge_output.salience_logits is not None and evidence_labels is not None:
+            width = min(
+                bridge_output.salience_logits.shape[1],
+                evidence_labels.shape[1],
+            )
+            valid = evidence_labels[:, :width].ge(0)
+            if bool(valid.any()):
+                probabilities = torch.sigmoid(
+                    bridge_output.salience_logits[:, :width][valid].float()
+                )
+                predictions = probabilities.ge(0.5)
+                gold = evidence_labels[:, :width][valid].gt(0.5)
+                true_positive = (predictions & gold).sum().float()
+                result["salience_probability_mean"] = probabilities.mean().detach()
+                result["salience_predicted_positive_rate"] = predictions.float().mean().detach()
+                result["salience_precision"] = (
+                    true_positive / predictions.sum().float().clamp_min(1.0)
+                ).detach()
+                result["salience_recall"] = (
+                    true_positive / gold.sum().float().clamp_min(1.0)
+                ).detach()
+        return result
 
     def set_training_stage(self, stage: str) -> None:
         if stage not in {"interface_warmup", "full_finetune"}:

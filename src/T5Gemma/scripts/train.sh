@@ -7,13 +7,17 @@ cd "${PROJECT_ROOT}"
 
 mkdir -p "${LOG_DIR}"
 ts="$(date +%Y%m%d_%H%M%S)"
-log_file="${LOG_DIR}/${ts}_train_lora.log"
+log_file="${LOG_DIR}/${ts}_train_full.log"
 
-echo "=== T5Gemma LoRA train ==="
+echo "=== T5Gemma full fine-tune ==="
 echo "Config: ${CONFIG}"
 echo "Log: ${log_file}"
 
-"${PYTHON_BIN}" "${T5GEMMA_ROOT}/scripts/train_lora.py" \
-  --config "${CONFIG}" \
-  2>&1 | tee "${log_file}"
+train_args=(--config "${CONFIG}")
+if [[ "${OVERWRITE_OUTPUT_DIR,,}" == "true" || "${OVERWRITE_OUTPUT_DIR}" == "1" || "${OVERWRITE_OUTPUT_DIR,,}" == "yes" ]]; then
+  train_args+=(--overwrite-output-dir)
+fi
 
+"${PYTHON_BIN}" "${T5GEMMA_ROOT}/scripts/train_full.py" \
+  "${train_args[@]}" \
+  2>&1 | tee "${log_file}"

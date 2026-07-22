@@ -1,0 +1,23 @@
+_base_: base.yaml
+
+experiment:
+  name: genbridge_qwen3_enc0_6b_dec1_7b
+  output_dir: runs/genbridge/qwen3_enc0_6b_dec1_7b
+
+model:
+  encoder_name: Qwen/Qwen3-0.6B
+  allow_mixed_checkpoints: true
+
+decoder:
+  pretrained_name: Qwen/Qwen3-1.7B
+  num_layers: 28
+
+training:
+  # Same effective batch and LR as the reverse allocation.
+  batch_size: 8
+  gradient_accumulation_steps: 4
+  optimizer: adamw_torch
+  full_lr: 8.0e-6
+
+generation:
+  batch_size: 4

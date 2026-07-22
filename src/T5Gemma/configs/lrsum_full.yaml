@@ -1,15 +1,14 @@
 project:
-  name: lrsum_t5gemma2_1b_1b_lora
+  name: lrsum_t5gemma2_1b_1b_full_finetune
   task: summarization
-  output_dir: runs/lrsum_t5gemma2_1b_1b_lora
+  output_dir: runs/lrsum_t5gemma2_1b_1b_full
 
 huggingface:
   enabled: true
   repo_id: null
   repo_type: model
-  path_in_repo: checkpoints/lrsum_t5gemma2_1b_1b_lora
-  push_each_epoch: true
-  push_final_best: true
+  path_in_repo: checkpoints/lrsum_t5gemma2_1b_1b_full
+  push_final: true
   push_eval_outputs: true
   fail_on_error: true
   private: false
@@ -17,38 +16,21 @@ huggingface:
 model:
   model_name_or_path: google/t5gemma-2-1b-1b
   trust_remote_code: true
-  torch_dtype: bfloat16
+  # FP32 optimizer/master weights; Trainer still uses BF16 autocast compute.
+  torch_dtype: float32
+  eval_torch_dtype: bfloat16
   use_cache_for_eval: true
 
-lora:
-  enabled: true
-  r: 16
-  alpha: 32
-  dropout: 0.05
-  bias: none
-  target_modules:
-    - q_proj
-    - k_proj
-    - v_proj
-    - o_proj
-    - gate_proj
-    - up_proj
-    - down_proj
-    - q
-    - k
-    - v
-    - o
-    - wi
-    - wi_0
-    - wi_1
-    - wo
-
 training:
-  num_train_epochs: 3
-  per_device_train_batch_size: 32
+  mode: full_finetune
+  num_train_epochs: 10
+  per_device_train_batch_size: 16
   per_device_eval_batch_size: 8
-  gradient_accumulation_steps: 1
-  learning_rate: 1.0e-4
+  gradient_accumulation_steps: 2
+  learning_rate: 1.0e-5
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_epsilon: 1.0e-8
   warmup_ratio: 0.05
   weight_decay: 0.01
   max_grad_norm: 1.0
@@ -56,24 +38,26 @@ training:
   optim: adamw_torch_fused
   bf16: true
   fp16: false
+  require_fp32_master_weights: true
   tf32: true
   gradient_checkpointing: true
   group_by_length: true
   dataloader_num_workers: 2
   logging_steps: 2
+  eval_strategy: "no"
   seed: 42
 
 data:
   train_file: T5Gemma/data/processed/lrsum/train.jsonl
   # eval_file: null
   test_file: T5Gemma/data/processed/lrsum/test.jsonl
-  source_prefix: "Tóm tắt văn bản sau:\n"
+  source_prefix: "Tóm tắt bài báo bằng một câu nêu sự kiện chính; không thêm thông tin.\nBài báo:\n"
   max_source_length: 3072
   max_target_length: 256
 
 generation:
   max_new_tokens: 256
-  min_new_tokens: 32
+  min_new_tokens: 16
   num_beams: 1
   do_sample: false
   early_stopping: true

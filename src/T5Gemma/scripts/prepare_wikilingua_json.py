@@ -5,8 +5,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List
+
+_WIKIHOW_IMAGE_OBJECT = re.compile(
+    r'\{\s*"\s*smallUrl\s*"[^{}]*\}',
+    flags=re.IGNORECASE,
+)
+
+
+def clean_wikihow_metadata(text: str) -> str:
+    cleaned = _WIKIHOW_IMAGE_OBJECT.sub(" ", str(text))
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\s+([.,;:!?])", r"\1", cleaned)
+    return cleaned.strip()
 
 
 def decode_separator(value: str) -> str:
@@ -87,6 +100,8 @@ def convert_split(
                 example.get("tgt") or example.get("target") or example.get("summary"),
                 list_sep=target_joiner,
             )
+            source = clean_wikihow_metadata(source)
+            target = clean_wikihow_metadata(target)
             if not source or not target:
                 skipped += 1
                 continue

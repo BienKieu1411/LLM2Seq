@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Fine-tune T5Gemma on WikiLingua with LoRA adapter checkpoints only."""
+"""Full fine-tune T5Gemma for abstractive summarization."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import inspect
 import json
 import logging
@@ -11,15 +12,13 @@ import os
 import random
 import shutil
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import numpy as np
 import torch
 import yaml
 from huggingface_hub import HfApi
-from peft import LoraConfig, TaskType, get_peft_model
 from torch.utils.data import Dataset
 from transformers import (
     AutoModelForSeq2SeqLM,
@@ -27,9 +26,6 @@ from transformers import (
     DataCollatorForSeq2Seq,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
-    TrainerCallback,
-    TrainerControl,
-    TrainerState,
 )
 
 T5GEMMA_ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +73,37 @@ def load_jsonl(path: Path) -> List[Dict[str, Any]]:
             if line:
                 examples.append(json.loads(line))
     return examples
+
+
+def jsonl_fingerprint(path: Path) -> Dict[str, Any]:
+    digest = hashlib.sha256()
+    count = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for raw in handle:
+            if not raw.strip():
+                continue
+            row = json.loads(raw)
+            digest.update(
+                json.dumps(
+                    {
+                        "id": row.get("id"),
+                        "source": row.get("source"),
+                        "target": row.get("target"),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            digest.update(b"\n")
+            count += 1
+    if count == 0:
+        raise ValueError(f"Dataset is empty: {path}")
+    return {
+        "path": str(path.resolve()),
+        "num_examples": count,
+        "sha256": digest.hexdigest(),
+    }
 
 
 class SummarizationDataset(Dataset):
@@ -129,49 +156,6 @@ def torch_dtype_from_config(name: str) -> torch.dtype:
     raise ValueError(f"Unsupported torch dtype: {name}")
 
 
-def module_suffix_present(model: torch.nn.Module, suffix: str) -> bool:
-    for name, module in model.named_modules():
-        if isinstance(module, torch.nn.Linear) and (name == suffix or name.endswith(f".{suffix}")):
-            return True
-    return False
-
-
-def resolve_lora_targets(model: torch.nn.Module, requested: List[str]) -> List[str]:
-    requested = [item for item in requested if item and item != "auto"]
-    selected = [name for name in requested if module_suffix_present(model, name)]
-    if selected:
-        skipped = [name for name in requested if name not in selected]
-        if skipped:
-            logging.info("Skipping absent LoRA target modules: %s", ", ".join(skipped))
-        return selected
-
-    candidates = [
-        "q_proj",
-        "k_proj",
-        "v_proj",
-        "o_proj",
-        "gate_proj",
-        "up_proj",
-        "down_proj",
-        "q",
-        "k",
-        "v",
-        "o",
-        "wi",
-        "wi_0",
-        "wi_1",
-        "wo",
-    ]
-    selected = [name for name in candidates if module_suffix_present(model, name)]
-    if not selected:
-        linear_suffixes = sorted(
-            {name.rsplit(".", 1)[-1] for name, mod in model.named_modules() if isinstance(mod, torch.nn.Linear)}
-        )
-        raise RuntimeError(f"Could not infer LoRA targets. Linear module suffixes: {linear_suffixes[:80]}")
-    logging.info("Auto-selected LoRA target modules: %s", ", ".join(selected))
-    return selected
-
-
 def make_training_arguments(cfg: Dict[str, Any], output_dir: Path) -> Seq2SeqTrainingArguments:
     train_cfg = cfg["training"]
     kwargs: Dict[str, Any] = {
@@ -181,6 +165,9 @@ def make_training_arguments(cfg: Dict[str, Any], output_dir: Path) -> Seq2SeqTra
         "per_device_eval_batch_size": int(train_cfg.get("per_device_eval_batch_size", 4)),
         "gradient_accumulation_steps": int(train_cfg.get("gradient_accumulation_steps", 1)),
         "learning_rate": float(train_cfg["learning_rate"]),
+        "adam_beta1": float(train_cfg.get("adam_beta1", 0.9)),
+        "adam_beta2": float(train_cfg.get("adam_beta2", 0.95)),
+        "adam_epsilon": float(train_cfg.get("adam_epsilon", 1e-8)),
         "warmup_ratio": float(train_cfg.get("warmup_ratio", 0.03)),
         "weight_decay": float(train_cfg.get("weight_decay", 0.0)),
         "max_grad_norm": float(train_cfg.get("max_grad_norm", 1.0)),
@@ -193,6 +180,7 @@ def make_training_arguments(cfg: Dict[str, Any], output_dir: Path) -> Seq2SeqTra
         "logging_steps": int(train_cfg.get("logging_steps", 10)),
         "logging_strategy": "steps",
         "save_strategy": "no",
+        "save_safetensors": True,
         "report_to": [],
         "predict_with_generate": False,
         "group_by_length": bool(train_cfg.get("group_by_length", False)),
@@ -203,17 +191,14 @@ def make_training_arguments(cfg: Dict[str, Any], output_dir: Path) -> Seq2SeqTra
     }
     params = inspect.signature(Seq2SeqTrainingArguments.__init__).parameters
     valid_kwargs = {k: v for k, v in kwargs.items() if k in params}
-    eval_strat = "epoch" if cfg["data"].get("eval_file") else "no"
+    # Full checkpoints are large. Evaluation is performed once from final_model
+    # by the pipeline, not implicitly at every training epoch.
+    eval_strat = str(train_cfg.get("eval_strategy", "no"))
     if "eval_strategy" in params:
         valid_kwargs["eval_strategy"] = eval_strat
     else:
         valid_kwargs["evaluation_strategy"] = eval_strat
     return Seq2SeqTrainingArguments(**valid_kwargs)
-
-
-def save_yaml(path: Path, data: Dict[str, Any]) -> None:
-    with path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
 
 
 def write_json(path: Path, data: Dict[str, Any]) -> None:
@@ -233,9 +218,8 @@ def get_hf_settings(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "repo_id": os.environ.get("HF_REPO_ID") or hf_cfg.get("repo_id"),
         "repo_type": hf_cfg.get("repo_type", "model"),
         "token": os.environ.get("HF_TOKEN"),
-        "path_in_repo": str(hf_cfg.get("path_in_repo", "checkpoints/t5gemma2_1b_1b_lora_wikilingua")).strip("/"),
-        "push_each_epoch": bool(hf_cfg.get("push_each_epoch", True)),
-        "push_final_best": bool(hf_cfg.get("push_final_best", True)),
+        "path_in_repo": str(hf_cfg.get("path_in_repo", "checkpoints/t5gemma2_1b_1b_full_wikilingua")).strip("/"),
+        "push_final": bool(hf_cfg.get("push_final", True)),
         "fail_on_error": bool(hf_cfg.get("fail_on_error", True)),
         "private": bool(hf_cfg.get("private", False)),
     }
@@ -269,97 +253,11 @@ def upload_folder(folder: Path, hf: Dict[str, Any], path_in_repo: str, message: 
         logging.warning("HF upload failed: %s", exc)
 
 
-@dataclass
-class AdapterCheckpointCallback(TrainerCallback):
-    output_dir: Path
-    tokenizer: Any
-    cfg: Dict[str, Any]
-    config_path: Path
-    hf: Dict[str, Any]
-    best_eval_loss: float = float("inf")
-
-    def _save_adapter(
-        self,
-        model: torch.nn.Module,
-        folder: Path,
-        state: TrainerState,
-        metrics: Optional[Dict[str, float]],
-        tag: str,
-    ) -> None:
-        folder.mkdir(parents=True, exist_ok=True)
-        model.save_pretrained(folder, safe_serialization=True)
-        self.tokenizer.save_pretrained(folder)
-        safe_copy_config(self.config_path, folder)
-        manifest = {
-            "tag": tag,
-            "global_step": int(state.global_step),
-            "epoch": float(state.epoch or 0.0),
-            "base_model": self.cfg["model"]["model_name_or_path"],
-            "stores_base_model_weights": False,
-            "checkpoint_type": "peft_lora_adapter_only",
-            "metrics": metrics or {},
-            "lora": self.cfg.get("lora", {}),
-            "data": self.cfg.get("data", {}),
-            "generation": self.cfg.get("generation", {}),
-        }
-        write_json(folder / "adapter_manifest.json", manifest)
-
-    def on_evaluate(
-        self,
-        args: Seq2SeqTrainingArguments,
-        state: TrainerState,
-        control: TrainerControl,
-        metrics: Optional[Dict[str, float]] = None,
-        **kwargs: Any,
-    ) -> TrainerControl:
-        model = kwargs["model"]
-        metrics = metrics or {}
-        epoch_num = max(1, int(round(float(state.epoch or 0.0))))
-        epoch_folder = self.output_dir / "epochs" / f"epoch_{epoch_num:03d}_adapter"
-        self._save_adapter(model, epoch_folder, state, metrics, tag=f"epoch_{epoch_num:03d}")
-
-        keep_limit = int(self.cfg.get("huggingface", {}).get("keep_local_epoch_checkpoints", 1))
-        if keep_limit > 0:
-            epochs_dir = self.output_dir / "epochs"
-            if epochs_dir.exists():
-                all_epochs = sorted([d for d in epochs_dir.iterdir() if d.is_dir() and d.name.startswith("epoch_")])
-                for d in all_epochs[:-keep_limit]:
-                    import shutil
-
-                    shutil.rmtree(d, ignore_errors=True)
-                    logging.info("Deleted old epoch checkpoint to save space: %s", d)
-        if self.hf["push_each_epoch"]:
-            upload_folder(
-                epoch_folder,
-                self.hf,
-                f"{self.hf['path_in_repo']}/epochs/epoch_{epoch_num:03d}_adapter",
-                f"T5Gemma LoRA epoch {epoch_num}",
-            )
-
-        eval_loss = metrics.get("eval_loss")
-        if eval_loss is not None and float(eval_loss) < self.best_eval_loss:
-            self.best_eval_loss = float(eval_loss)
-            best_folder = self.output_dir / "best_adapter"
-            self._save_adapter(model, best_folder, state, metrics, tag="best")
-            write_json(
-                self.output_dir / "best_metrics.json",
-                {"best_eval_loss": self.best_eval_loss, "epoch": state.epoch, "global_step": state.global_step},
-            )
-            logging.info("New best eval_loss=%.6f at epoch %.3f", self.best_eval_loss, float(state.epoch or 0.0))
-            if self.hf["push_each_epoch"]:
-                upload_folder(
-                    best_folder,
-                    self.hf,
-                    f"{self.hf['path_in_repo']}/best_adapter",
-                    f"T5Gemma LoRA best adapter step {state.global_step}",
-                )
-        return control
-
-
 def log_model_summary(model: torch.nn.Module, cfg: Dict[str, Any], train_size: int, eval_size: int) -> None:
     trainable = sum(param.numel() for param in model.parameters() if param.requires_grad)
     total = sum(param.numel() for param in model.parameters())
-    logging.info("T5Gemma LoRA Baseline Summary")
+    ratio = 100.0 * trainable / max(1, total)
+    logging.info("T5Gemma Full Fine-tuning Summary")
     logging.info("=" * 50)
     logging.info("Model:            %s", cfg["model"]["model_name_or_path"])
     logging.info("Source/Target:    %s / %s tokens", cfg["data"]["max_source_length"], cfg["data"]["max_target_length"])
@@ -373,11 +271,16 @@ def log_model_summary(model: torch.nn.Module, cfg: Dict[str, Any], train_size: i
         int(cfg["training"]["per_device_train_batch_size"]) * int(cfg["training"]["gradient_accumulation_steps"]),
     )
     logging.info("Learning rate:    %s", cfg["training"]["learning_rate"])
-    logging.info("LoRA r/alpha:     %s / %s", cfg["lora"]["r"], cfg["lora"]["alpha"])
     logging.info("Trainable params: %s", f"{trainable:,}")
     logging.info("Total params:     %s", f"{total:,}")
-    logging.info("Trainable ratio:  %.4f%%", 100.0 * trainable / max(1, total))
+    logging.info("Trainable ratio:  %.4f%%", ratio)
     logging.info("=" * 50)
+    if trainable != total:
+        frozen = [name for name, param in model.named_parameters() if not param.requires_grad]
+        raise RuntimeError(
+            "Full fine-tuning requires 100% trainable parameters, but found "
+            f"{len(frozen)} frozen tensors: {frozen[:20]}"
+        )
 
 
 def main() -> None:
@@ -386,11 +289,18 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--overwrite-output-dir", action="store_true")
     args = parser.parse_args()
 
     config_path = Path(args.config)
     with config_path.open("r", encoding="utf-8") as f:
         cfg: Dict[str, Any] = yaml.safe_load(f)
+
+    if "lora" in cfg:
+        raise ValueError("This is a full fine-tuning pipeline; remove the obsolete 'lora' config block.")
+    mode = str(cfg.get("training", {}).get("mode", "full_finetune"))
+    if mode != "full_finetune":
+        raise ValueError(f"training.mode must be 'full_finetune', got {mode!r}")
 
     seed = int(cfg["training"].get("seed", 42))
     set_seed(seed)
@@ -399,7 +309,23 @@ def main() -> None:
         torch.backends.cudnn.allow_tf32 = True
 
     output_dir = Path(cfg["project"]["output_dir"])
+    if output_dir.exists() and any(output_dir.iterdir()):
+        if not args.overwrite_output_dir:
+            raise FileExistsError(
+                f"Refusing to mix a new T5Gemma run with existing artifacts in {output_dir}. "
+                "Use a fresh project.output_dir or pass --overwrite-output-dir."
+            )
+        shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    running_marker = output_dir / "RUNNING"
+    running_marker.write_text(
+        json.dumps(
+            {"config": str(config_path.resolve()), "status": "running"},
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     safe_copy_config(config_path, output_dir)
 
     token = os.environ.get("HF_TOKEN")
@@ -414,6 +340,13 @@ def main() -> None:
         raise FileNotFoundError(train_file)
     if eval_file and not eval_file.exists():
         raise FileNotFoundError(eval_file)
+    data_manifest = {"train": jsonl_fingerprint(train_file)}
+    if eval_file:
+        data_manifest["validation"] = jsonl_fingerprint(eval_file)
+    test_file_value = cfg.get("data", {}).get("test_file")
+    if test_file_value and Path(test_file_value).exists():
+        data_manifest["test"] = jsonl_fingerprint(Path(test_file_value))
+    logging.info("Data manifest: %s", json.dumps(data_manifest, ensure_ascii=False))
 
     logging.info("Loading tokenizer: %s", model_name)
     tokenizer = AutoTokenizer.from_pretrained(
@@ -432,19 +365,20 @@ def main() -> None:
         token=token,
     )
     model.config.use_cache = False
-
-    lora_targets = resolve_lora_targets(model, list(cfg["lora"].get("target_modules", ["auto"])))
-    cfg["lora"]["resolved_target_modules"] = lora_targets
-    lora_cfg = LoraConfig(
-        task_type=TaskType.SEQ_2_SEQ_LM,
-        r=int(cfg["lora"]["r"]),
-        lora_alpha=int(cfg["lora"]["alpha"]),
-        lora_dropout=float(cfg["lora"].get("dropout", 0.05)),
-        target_modules=lora_targets,
-        bias=str(cfg["lora"].get("bias", "none")),
-    )
-    model = get_peft_model(model, lora_cfg)
-    model.print_trainable_parameters()
+    for parameter in model.parameters():
+        parameter.requires_grad_(True)
+    if bool(cfg["training"].get("require_fp32_master_weights", True)):
+        low_precision = [
+            f"{name}:{parameter.dtype}"
+            for name, parameter in model.named_parameters()
+            if parameter.is_floating_point() and parameter.dtype != torch.float32
+        ]
+        if low_precision:
+            raise RuntimeError(
+                "Full fine-tuning requires FP32 master parameters; set "
+                "model.torch_dtype=float32. Low-precision tensors: "
+                + ", ".join(low_precision[:20])
+            )
 
     train_dataset = SummarizationDataset(
         train_file,
@@ -469,15 +403,6 @@ def main() -> None:
         pad_to_multiple_of=8,
     )
 
-    hf = get_hf_settings(cfg)
-    callback = AdapterCheckpointCallback(
-        output_dir=output_dir,
-        tokenizer=tokenizer,
-        cfg=cfg,
-        config_path=config_path,
-        hf=hf,
-    )
-
     log_model_summary(model, cfg, len(train_dataset), len(eval_dataset) if eval_dataset else 0)
     training_args = make_training_arguments(cfg, output_dir)
     trainer_kwargs = {
@@ -486,7 +411,6 @@ def main() -> None:
         "train_dataset": train_dataset,
         "eval_dataset": eval_dataset,
         "data_collator": collator,
-        "callbacks": [callback],
     }
     trainer_params = inspect.signature(Seq2SeqTrainer.__init__).parameters
     if "processing_class" in trainer_params:
@@ -495,27 +419,42 @@ def main() -> None:
         trainer_kwargs["tokenizer"] = tokenizer
     trainer = Seq2SeqTrainer(**trainer_kwargs)
 
-    logging.info("Starting LoRA training...")
+    logging.info("Starting full fine-tuning of all T5Gemma parameters...")
     train_result = trainer.train()
     logging.info("Training complete: %s", train_result.metrics)
 
-    final_folder = output_dir / "final_adapter"
-    callback._save_adapter(model, final_folder, trainer.state, train_result.metrics, tag="final")
+    final_folder = output_dir / "final_model"
+    final_folder.mkdir(parents=True, exist_ok=True)
+    trainer.save_model(str(final_folder))
+    tokenizer.save_pretrained(final_folder)
+    safe_copy_config(config_path, final_folder)
+    write_json(
+        final_folder / "checkpoint_manifest.json",
+        {
+            "tag": "final",
+            "global_step": int(trainer.state.global_step),
+            "epoch": float(trainer.state.epoch or 0.0),
+            "base_model": model_name,
+            "stores_base_model_weights": True,
+            "checkpoint_type": "full_finetuned_seq2seq_model",
+            "trainable_ratio_percent": 100.0,
+            "metrics": train_result.metrics,
+            "data": cfg.get("data", {}),
+            "data_manifest": data_manifest,
+            "generation": cfg.get("generation", {}),
+        },
+    )
     write_json(output_dir / "train_metrics.json", train_result.metrics)
+    running_marker.unlink(missing_ok=True)
 
     epochs_dir = output_dir / "epochs"
     if epochs_dir.exists():
-        import shutil
-
         shutil.rmtree(epochs_dir, ignore_errors=True)
         logging.info("Deleted all epoch checkpoints after phase completion to save disk space.")
 
-    if hf["push_final_best"]:
-        upload_folder(final_folder, hf, f"{hf['path_in_repo']}/final_adapter", "T5Gemma LoRA final adapter")
-        best_folder = output_dir / "best_adapter"
-        if best_folder.exists():
-            upload_folder(best_folder, hf, f"{hf['path_in_repo']}/best_adapter", "T5Gemma LoRA best adapter")
-        upload_folder(output_dir, hf, hf["path_in_repo"], "T5Gemma LoRA training artifacts")
+    hf = get_hf_settings(cfg)
+    if hf["push_final"]:
+        upload_folder(final_folder, hf, f"{hf['path_in_repo']}/final_model", "T5Gemma full fine-tuned model")
 
 
 if __name__ == "__main__":

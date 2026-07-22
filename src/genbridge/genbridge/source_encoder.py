@@ -1,4 +1,4 @@
-"""Unmodified causal Qwen3/Qwen3.5 used as a source feature extractor."""
+"""Unmodified causal Qwen3 used as a source feature extractor."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class CausalSourceEncoder(nn.Module):
 
     def __init__(self, model_config: Dict[str, Any]):
         super().__init__()
-        self.model_name = str(model_config.get("encoder_name", "Qwen/Qwen3.5-0.8B"))
+        self.model_name = str(model_config.get("encoder_name", "Qwen/Qwen3-0.6B"))
         causal_lm, self.config = load_text_causal_lm(
             self.model_name,
             dtype=torch_dtype(str(model_config.get("dtype", "bfloat16"))),
@@ -120,9 +120,17 @@ class CausalSourceEncoder(nn.Module):
             device=attention_mask.device,
         )
         extended_mask = torch.cat([attention_mask, plan_mask], dim=1)
+        # Qwen3 otherwise assigns absolute positions ``0..sequence_length-1``
+        # even to a left-padded batch.  That makes the RoPE positions of both
+        # real source tokens and appended plan tokens depend on the longest
+        # example in the batch.  Compact positions keep an example invariant
+        # to collator padding while preserving the causal order.
+        position_ids = extended_mask.long().cumsum(dim=-1) - 1
+        position_ids.masked_fill_(extended_mask.eq(0), 0)
         outputs = self.model(
             inputs_embeds=inputs_embeds,
             attention_mask=extended_mask,
+            position_ids=position_ids,
             use_cache=False,
             output_hidden_states=self.use_layer_fusion,
             return_dict=True,

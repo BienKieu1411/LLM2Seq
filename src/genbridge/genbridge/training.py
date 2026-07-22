@@ -8,7 +8,7 @@ import logging
 import math
 import random
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -16,15 +16,89 @@ import torch.nn as nn
 from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
 
 from .checkpoint import load_checkpoint, save_checkpoint
 from .config import MODEL_PROFILES, apply_model_size, dump_config, load_config
-from .data import DirectCollator, DirectSummarizationDataset, EvidenceSeq2SeqCollator, EvidenceSeq2SeqDataset
+from .data import (
+    DirectCollator,
+    DirectSummarizationDataset,
+    EvidenceSeq2SeqCollator,
+    EvidenceSeq2SeqDataset,
+    decoder_prompt_ids,
+    jsonl_fingerprint,
+)
 from .direct_baseline import DirectCausalBaseline
 from .model import GenBridgeSeq2Seq
 
 LOGGER = logging.getLogger("genbridge")
+
+
+class LengthBucketBatchSampler(Sampler[list[int]]):
+    """Shuffle examples, then sort only within large random length buckets.
+
+    This retains stochastic batches while avoiding the worst padding waste of
+    random batching for long documents.  It is deliberately single-process:
+    the current paper setup uses one B200.
+    """
+
+    def __init__(
+        self,
+        lengths: Sequence[int],
+        batch_size: int,
+        seed: int,
+        bucket_multiplier: int = 50,
+    ):
+        if not lengths:
+            raise ValueError("LengthBucketBatchSampler requires at least one example")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        self.lengths = [int(length) for length in lengths]
+        self.batch_size = int(batch_size)
+        self.seed = int(seed)
+        self.bucket_size = self.batch_size * max(1, int(bucket_multiplier))
+        self.epoch = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
+    def __len__(self) -> int:
+        return math.ceil(len(self.lengths) / self.batch_size)
+
+    def __iter__(self) -> Iterator[list[int]]:
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + self.epoch)
+        shuffled = torch.randperm(len(self.lengths), generator=generator).tolist()
+        batches = []
+        for start in range(0, len(shuffled), self.bucket_size):
+            bucket = shuffled[start : start + self.bucket_size]
+            bucket.sort(key=self.lengths.__getitem__, reverse=True)
+            batches.extend(
+                bucket[offset : offset + self.batch_size]
+                for offset in range(0, len(bucket), self.batch_size)
+            )
+        order = torch.randperm(len(batches), generator=generator).tolist()
+        yield from (batches[index] for index in order)
+
+
+def assert_tokenizers_compatible(source_tokenizer: Any, decoder_tokenizer: Any) -> None:
+    """Require one exact token-to-id space before sharing source/target ids."""
+
+    source_vocab = source_tokenizer.get_vocab()
+    decoder_vocab = decoder_tokenizer.get_vocab()
+    if source_vocab != decoder_vocab:
+        raise ValueError(
+            "Mixed encoder/decoder checkpoints require identical token-to-id vocabularies. "
+            "Use two explicit tokenization streams for genuinely different tokenizers."
+        )
+    for field in ("bos_token_id", "eos_token_id", "pad_token_id"):
+        source_id = getattr(source_tokenizer, field, None)
+        decoder_id = getattr(decoder_tokenizer, field, None)
+        if source_id != decoder_id:
+            raise ValueError(
+                f"Mixed encoder/decoder tokenizers disagree on {field}: "
+                f"{source_id} != {decoder_id}"
+            )
 
 
 def set_seed(seed: int) -> None:
@@ -35,23 +109,38 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def build_experiment(config: Dict[str, Any]) -> Tuple[nn.Module, Any, Any, Any, Any]:
+def build_experiment(
+    config: Dict[str, Any],
+    load_datasets: bool = True,
+) -> Tuple[nn.Module, Any, Any, Any, Any]:
     from transformers import AutoTokenizer
 
     model_config = config.get("model", {}) or {}
+    decoder_config = config.get("decoder", {}) or {}
     data_config = config.get("data", {}) or {}
     train_limit = int(data_config.get("max_train_samples", 0))
     validation_limit = int(data_config.get("max_validation_samples", 0))
-    model_name = str(model_config.get("encoder_name", "Qwen/Qwen3.5-0.8B"))
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    encoder_name = str(model_config.get("encoder_name", "Qwen/Qwen3-0.6B"))
+    kind = str((config.get("experiment", {}) or {}).get("kind", "encoder_decoder"))
+    decoder_name = str(decoder_config.get("pretrained_name", encoder_name))
+    # Target ids are consumed by the decoder LM head, so its tokenizer is the
+    # canonical shared tokenizer. Mixed Qwen3 scales are allowed only after an
+    # exact vocabulary and special-token check against the source tokenizer.
+    tokenizer_name = decoder_name if kind == "encoder_decoder" else encoder_name
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+    if kind == "encoder_decoder" and encoder_name != decoder_name:
+        source_tokenizer = AutoTokenizer.from_pretrained(encoder_name, trust_remote_code=True)
+        assert_tokenizers_compatible(source_tokenizer, tokenizer)
+        del source_tokenizer
     if tokenizer.pad_token_id is None:
         if tokenizer.eos_token_id is None:
             raise ValueError("Tokenizer has neither PAD nor EOS token")
         tokenizer.pad_token = tokenizer.eos_token
 
-    kind = str((config.get("experiment", {}) or {}).get("kind", "encoder_decoder"))
     if kind == "encoder_decoder":
         model = GenBridgeSeq2Seq(config, vocab_size=len(tokenizer))
+        if not load_datasets:
+            return model, tokenizer, None, None, None
         train_dataset = EvidenceSeq2SeqDataset(
             data_config["train_file"],
             tokenizer,
@@ -70,9 +159,12 @@ def build_experiment(config: Dict[str, Any]) -> Tuple[nn.Module, Any, Any, Any, 
             tokenizer.pad_token_id,
             int(data_config.get("max_source_length", 3072)),
             int(data_config.get("max_target_length", 384)),
+            decoder_prompt_length=len(decoder_prompt_ids(tokenizer, data_config)),
         )
     elif kind == "direct_causal":
         model = DirectCausalBaseline(model_config)
+        if not load_datasets:
+            return model, tokenizer, None, None, None
         train_dataset = DirectSummarizationDataset(
             data_config["train_file"], tokenizer, data_config, max_examples=train_limit
         )
@@ -135,11 +227,16 @@ def build_optimizer(
     if not groups:
         raise ValueError("No trainable parameters")
     optimizer_name = str(training.get("optimizer", "adamw_torch"))
+    betas = (
+        float(training.get("adam_beta1", 0.9)),
+        float(training.get("adam_beta2", 0.95)),
+    )
+    epsilon = float(training.get("adam_epsilon", 1e-8))
     if optimizer_name == "adamw_torch":
         optimizer = AdamW(
             groups,
-            betas=(0.9, 0.95),
-            eps=1e-8,
+            betas=betas,
+            eps=epsilon,
             fused=bool(training.get("fused_optimizer", True)) and torch.cuda.is_available(),
         )
     elif optimizer_name == "adamw_8bit":
@@ -149,11 +246,13 @@ def build_optimizer(
             raise ImportError(
                 "The 4B full-finetune profile requires bitsandbytes for 8-bit optimizer states"
             ) from exc
-        optimizer = AdamW8bit(groups, betas=(0.9, 0.95), eps=1e-8)
+        optimizer = AdamW8bit(groups, betas=betas, eps=epsilon)
     else:
         raise ValueError("training.optimizer must be adamw_torch or adamw_8bit")
     warmup = int(total_steps * float(training.get("warmup_ratio", 0.05)))
-    minimum = float(training.get("min_lr_ratio", 0.1))
+    minimum = float(training.get("min_lr_ratio", 0.0))
+    if not 0.0 <= minimum <= 1.0:
+        raise ValueError("training.min_lr_ratio must be in [0, 1]")
 
     def schedule(step: int) -> float:
         if step < warmup:
@@ -188,6 +287,7 @@ def train(
     resume: Optional[str] = None,
     max_steps_override: Optional[int] = None,
     model_size: Optional[str] = None,
+    overwrite_output_dir: bool = False,
 ) -> None:
     config = load_config(config_path)
     apply_model_size(config, model_size)
@@ -196,10 +296,53 @@ def train(
     kind = str(experiment.get("kind", "encoder_decoder"))
     output_dir = Path(str(experiment.get("output_dir", "runs/genbridge/base")))
     output_dir.mkdir(parents=True, exist_ok=True)
+    final_path = output_dir / "final.pt"
+    running_marker = output_dir / "RUNNING"
+    if resume and Path(resume).resolve() == final_path.resolve():
+        raise ValueError(
+            "Cannot resume from final.pt into its own output directory because a new run "
+            "must never coexist with a stale final result. Use a different output_dir."
+        )
+    occupied = [path for path in (final_path, running_marker) if path.exists()]
+    if occupied and not overwrite_output_dir:
+        raise FileExistsError(
+            "Refusing to mix a new run with existing artifacts: "
+            + ", ".join(str(path) for path in occupied)
+            + ". Use a fresh experiment.output_dir or pass --overwrite-output-dir."
+        )
+    if overwrite_output_dir:
+        for path in occupied:
+            path.unlink()
+    running_marker.write_text(
+        json.dumps(
+            {"config": str(Path(config_path).resolve()), "status": "running"},
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    data_config = config.get("data", {}) or {}
+    data_manifest: Dict[str, Any] = {}
+    for split, file_key, limit_key in (
+        ("train", "train_file", "max_train_samples"),
+        ("validation", "validation_file", "max_validation_samples"),
+        ("test", "test_file", "max_test_samples"),
+    ):
+        dataset_path = data_config.get(file_key)
+        if dataset_path and Path(str(dataset_path)).exists():
+            data_manifest[split] = jsonl_fingerprint(
+                str(dataset_path),
+                max_examples=int(data_config.get(limit_key, 0)),
+            )
+    if data_manifest:
+        config["_data_manifest"] = data_manifest
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=[logging.StreamHandler(), logging.FileHandler(output_dir / "train.log", encoding="utf-8")],
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(output_dir / "train.log", mode="w", encoding="utf-8"),
+        ],
         force=True,
     )
     set_seed(int(training.get("seed", 42)))
@@ -209,6 +352,17 @@ def train(
     model, _, train_dataset, _, collator = build_experiment(config)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
+    if bool(training.get("require_fp32_master_weights", True)):
+        low_precision = [
+            f"{name}:{parameter.dtype}"
+            for name, parameter in model.named_parameters()
+            if parameter.is_floating_point() and parameter.dtype != torch.float32
+        ]
+        if low_precision:
+            raise RuntimeError(
+                "Full fine-tuning requires FP32 master parameters; use model.dtype=float32. "
+                "Low-precision tensors: " + ", ".join(low_precision[:20])
+            )
     if resume:
         payload = load_checkpoint(model, resume)
         LOGGER.info("Loaded %s at step %s", resume, payload.get("global_step", "unknown"))
@@ -216,15 +370,33 @@ def train(
     batch_size = int(training.get("batch_size", 32))
     accumulation = int(training.get("gradient_accumulation_steps", 1))
     workers = int(training.get("num_workers", 4))
-    loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=workers,
-        collate_fn=collator,
-        pin_memory=torch.cuda.is_available(),
-        persistent_workers=workers > 0,
-    )
+    length_sampler = None
+    loader_kwargs = {
+        "num_workers": workers,
+        "collate_fn": collator,
+        "pin_memory": torch.cuda.is_available(),
+        "persistent_workers": workers > 0,
+    }
+    if bool(training.get("group_by_length", True)):
+        lengths = [len(str(example.get("source", ""))) for example in train_dataset.examples]
+        length_sampler = LengthBucketBatchSampler(
+            lengths,
+            batch_size=batch_size,
+            seed=int(training.get("seed", 42)),
+            bucket_multiplier=int(training.get("length_bucket_multiplier", 50)),
+        )
+        loader = DataLoader(
+            train_dataset,
+            batch_sampler=length_sampler,
+            **loader_kwargs,
+        )
+    else:
+        loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            **loader_kwargs,
+        )
     epochs = int(training.get("epochs", 10))
     interface_epochs = int(training.get("interface_warmup_epochs", 2)) if kind == "encoder_decoder" else 0
     if resume and bool(training.get("skip_interface_warmup_on_resume", True)):
@@ -261,6 +433,8 @@ def train(
     micro_steps = 0
     optimizer.zero_grad(set_to_none=True)
     dump_config(config, output_dir / "resolved_config.yaml")
+    if data_manifest:
+        LOGGER.info("Data manifest: %s", json.dumps(data_manifest, ensure_ascii=False))
     LOGGER.info("\n%s", model.summary())
     LOGGER.info(
         "Training %s: %d examples, %d epochs (%d interface + %d full), %d steps, effective batch=%d",
@@ -272,8 +446,14 @@ def train(
         total_steps,
         batch_size * accumulation,
     )
+    LOGGER.info(
+        "Precision: FP32 master parameters, %s autocast compute",
+        "BF16" if use_bf16 else "FP16" if use_fp16 else "FP32",
+    )
 
     for epoch in range(1, epochs + 1):
+        if length_sampler is not None:
+            length_sampler.set_epoch(epoch)
         target_stage = "interface_warmup" if epoch <= interface_epochs else "full_finetune"
         if target_stage != stage:
             stage = target_stage
@@ -296,6 +476,16 @@ def train(
                 "loss_salience",
                 "loss_plan_alignment",
                 "loss_plan_diversity",
+                "cross_gate_mean",
+                "cross_residual_ratio",
+                "plan_gate_mean",
+                "token_adapter_gate",
+                "plan_adapter_gate",
+                "unit_broadcast_gate",
+                "salience_probability_mean",
+                "salience_predicted_positive_rate",
+                "salience_precision",
+                "salience_recall",
             ):
                 if key in outputs:
                     running[key] = running.get(key, 0.0) + float(outputs[key].detach().item())
@@ -321,8 +511,8 @@ def train(
         if global_step >= total_steps:
             break
 
-    final_path = output_dir / "final.pt"
     save_checkpoint(model, final_path, config, completed_epoch, global_step)
+    running_marker.unlink(missing_ok=True)
     LOGGER.info("Training complete: %s", final_path)
 
 
@@ -332,8 +522,15 @@ def main() -> None:
     parser.add_argument("--resume", default=None)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--model-size", choices=sorted(MODEL_PROFILES), default=None)
+    parser.add_argument("--overwrite-output-dir", action="store_true")
     args = parser.parse_args()
-    train(args.config, args.resume, args.max_steps, args.model_size)
+    train(
+        args.config,
+        args.resume,
+        args.max_steps,
+        args.model_size,
+        args.overwrite_output_dir,
+    )
 
 
 if __name__ == "__main__":

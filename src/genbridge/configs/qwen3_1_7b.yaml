@@ -1,15 +1,15 @@
 _base_: base.yaml
 
 experiment:
-  name: genbridge_qwen35_2b
-  output_dir: runs/genbridge/qwen35_2b
+  name: genbridge_qwen3_1_7b
+  output_dir: runs/genbridge/qwen3_1_7b
 
 model:
-  encoder_name: Qwen/Qwen3.5-2B
+  encoder_name: Qwen/Qwen3-1.7B
 
 decoder:
-  pretrained_name: Qwen/Qwen3.5-2B
-  num_layers: 24
+  pretrained_name: Qwen/Qwen3-1.7B
+  num_layers: 28
 
 training:
   # Effective batch is 32 on one B200.

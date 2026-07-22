@@ -16,7 +16,7 @@ class DirectCausalBaseline(nn.Module):
 
     def __init__(self, model_config: Dict[str, Any]):
         super().__init__()
-        self.model_name = str(model_config.get("encoder_name", "Qwen/Qwen3.5-0.8B"))
+        self.model_name = str(model_config.get("encoder_name", "Qwen/Qwen3-0.6B"))
         self.model, _ = load_text_causal_lm(
             self.model_name,
             dtype=torch_dtype(str(model_config.get("dtype", "bfloat16"))),
@@ -51,7 +51,7 @@ class DirectCausalBaseline(nn.Module):
             return {"logits": logits}
 
         # Only summary positions carry labels. Projecting every 3k-token prompt
-        # to Qwen3.5's 248k vocabulary would waste tens of GB at physical batch
+        # to Qwen3's 152k vocabulary would waste substantial memory at batch
         # 32, while contributing exactly zero supervised loss.
         shift_labels = labels[:, 1:].contiguous()
         shift_hidden = output.last_hidden_state[:, :-1, :]

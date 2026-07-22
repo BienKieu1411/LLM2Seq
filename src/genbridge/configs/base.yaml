@@ -1,11 +1,13 @@
 experiment:
-  name: genbridge_qwen35_wikilingua
+  name: genbridge_qwen3_wikilingua
   kind: encoder_decoder
   output_dir: runs/genbridge/base
 
 model:
-  encoder_name: Qwen/Qwen3.5-0.8B
-  dtype: bfloat16
+  encoder_name: Qwen/Qwen3-0.6B
+  # Keep optimizer/master parameters in FP32. Training compute still runs in
+  # BF16 autocast below, so this protects LR=1e-5 updates without using FP32 matmuls.
+  dtype: float32
   train_base: true
   gradient_checkpointing: true
   # Learned suffix states. Because they follow the source under a causal mask,
@@ -19,20 +21,34 @@ bridge:
   # genbridge is the proposed model. Other modes exist only for ablations.
   mode: genbridge
   hidden_size: 512
-  token_num_layers: 2
+  # Four bidirectional refinement layers are the main-capacity setting.
+  # Two and eight layers are retained as controlled ablations.
+  token_num_layers: 4
   unit_num_layers: 1
   num_heads: 8
   ffn_size: 2048
+  # The external bidirectional blocks need their own order mechanism. Qwen3
+  # uses theta=1e6; applying the same parameter-free RoPE after projection is
+  # safer than introducing randomly learned absolute position embeddings.
+  use_adapter_rope: true
+  rope_theta: 1000000.0
+  # Native causal states remain as a pretrained-coordinate residual; the
+  # bidirectional adapter starts as a 10% correction and learns during warm-up.
+  token_adapter_gate_init: 0.1
+  # Preserve native output-oriented suffix states by the same residual rule.
+  plan_adapter_gate_init: 0.1
   use_salience_loss: true
   use_plan_alignment: true
+  # WikiLingua evidence labels are about 1:6.6 positive:negative. Equal class
+  # aggregation prevents a trivial all-negative salience predictor.
+  balance_salience_loss: true
   dropout: 0.1
 
 decoder:
-  pretrained_name: Qwen/Qwen3.5-0.8B
+  pretrained_name: Qwen/Qwen3-0.6B
   # Keep the complete pretrained decoder for the main quality result.
-  num_layers: 24
-  # Qwen3.5 groups three DeltaNet layers followed by one full-attention layer.
-  # Cross-attention is injected once per four-layer group rather than into all
+  num_layers: 28
+  # Inject cross-attention every four native Qwen3 blocks rather than into all
   # layers, which keeps the new parameter count controlled at 4B scale.
   cross_attention_every: 4
   # Main contribution: normalize attention over full token evidence and the
@@ -40,6 +56,8 @@ decoder:
   memory_attention: gated_dual
   # Start from 90% token evidence / 10% plan to protect pretrained generation.
   plan_gate_init: 0.1
+  # Keep the new encoder residual conservative for full-data training.
+  cross_gate_init: 0.01
   gradient_checkpointing: true
   cross_attention_dropout: 0.0
 
@@ -57,15 +75,23 @@ training:
   batch_size: 32
   gradient_accumulation_steps: 1
   num_workers: 4
+  # Random mega-buckets are length-sorted before batching. This preserves
+  # shuffle while sharply reducing padding in the bidirectional O(L^2) bridge.
+  group_by_length: true
+  length_bucket_multiplier: 50
   adapter_warmup_lr: 1.0e-4
   # One common LR for every parameter after warm-up.
   full_lr: 1.0e-5
   warmup_ratio: 0.05
-  min_lr_ratio: 0.1
+  min_lr_ratio: 0.0
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_epsilon: 1.0e-8
   weight_decay: 0.01
   max_grad_norm: 1.0
   bf16: true
   fp16: false
+  require_fp32_master_weights: true
   tf32: true
   fused_optimizer: true
   optimizer: adamw_torch
@@ -80,6 +106,9 @@ data:
   target_prefix: "\nCác bước:\n"
   # Teacher forcing and autoregressive decoding start from the same concise
   # Vietnamese task anchor; it is not included in scored predictions.
+  use_decoder_chat_template: true
+  enable_thinking: false
+  decoder_instruction: "Hãy tạo bản tóm tắt dạng các bước hành động ngắn, đúng thứ tự, chỉ dựa trên văn bản đã mã hóa."
   decoder_prefix: "Các bước:\n"
   # Dataset profile: the model pools configurable evidence units, not WikiHow-only steps.
   evidence_unit: sentence
@@ -97,8 +126,13 @@ data:
   precompute_evidence_on_load: true
 
 generation:
-  batch_size: 32
+  # Match the WikiLingua T5Gemma evaluation batch for comparable throughput.
+  batch_size: 8
   min_new_tokens: 16
   max_new_tokens: 256
   repetition_penalty: 1.05
   no_repeat_ngram_size: 3
+
+evaluation:
+  # The final FP32 checkpoint is safely cast to BF16 for inference only.
+  model_dtype: bfloat16
