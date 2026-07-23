@@ -1,8 +1,0 @@
-_base_: ../base.yaml
-
-experiment:
-  name: genbridge_without_salience_attention_bias
-  output_dir: runs/genbridge/no_salience_attention_bias
-
-bridge:
-  use_salience_attention_bias: false

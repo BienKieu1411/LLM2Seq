@@ -32,7 +32,8 @@ echo "Log: ${train_log}"
   "${train_args[@]}" \
   2>&1 | tee "${train_log}"
 
-if [[ "${RUN_EVAL,,}" == "true" || "${RUN_EVAL}" == "1" || "${RUN_EVAL,,}" == "yes" ]]; then
+if [[ "${FORCE_EVAL:-false}" =~ ^(true|1|yes)$ ]] || \
+   [[ "${RUN_EVAL,,}" == "true" || "${RUN_EVAL}" == "1" || "${RUN_EVAL,,}" == "yes" ]]; then
   eval_log="${LOG_DIR_4B}/$(date +%Y%m%d_%H%M%S)_evaluate_full_test.log"
   echo "=== Evaluate T5Gemma 2 4B-4B on the full test set ==="
   "${PYTHON_BIN}" "${T5GEMMA_ROOT}/scripts/evaluate_full_test.py" \

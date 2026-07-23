@@ -1,5 +1,0 @@
-_base_: ../base.yaml
-
-experiment:
-  name: genbridge_wikilingua
-  output_dir: runs/genbridge/wikilingua

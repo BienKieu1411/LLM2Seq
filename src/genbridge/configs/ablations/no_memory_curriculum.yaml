@@ -1,9 +1,0 @@
-_base_: ../base.yaml
-
-experiment:
-  name: genbridge_without_memory_path_curriculum
-  output_dir: runs/genbridge/no_memory_curriculum
-
-training:
-  plan_only_warmup_probabilities: [0.0, 0.0, 0.0]
-  full_finetune_plan_only_probability: 0.0

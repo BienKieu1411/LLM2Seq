@@ -1,0 +1,8 @@
+_base_: ../qwen3_0_6b.yaml
+
+experiment:
+  name: llm2seq_v2_no_layer_fusion
+  output_dir: runs/llm2seq_v2/ablations/no_layer_fusion
+
+adapter:
+  layer_fusion: false

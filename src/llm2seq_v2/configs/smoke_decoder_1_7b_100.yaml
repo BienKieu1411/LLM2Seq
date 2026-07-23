@@ -1,0 +1,31 @@
+_base_: qwen3_embedding_0_6b_decoder_1_7b.yaml
+
+experiment:
+  name: llm2seq_v2_smoke_encoder_0_6b_decoder_1_7b_100
+  output_dir: runs/llm2seq_v2/smoke_encoder_0_6b_decoder_1_7b_100
+
+training:
+  interface_warmup_epochs: 2
+  full_finetune_epochs: 20
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  num_workers: 0
+  validation_batch_size: 4
+  validation_num_workers: 0
+  log_every_steps: 5
+
+data:
+  validation_file: data/wikilingua/train.jsonl
+  test_file: data/wikilingua/train.jsonl
+  max_source_length: 1024
+  max_target_length: 256
+
+generation:
+  batch_size: 4
+  min_new_tokens: 4
+  max_new_tokens: 128
+
+limits:
+  max_train_examples: 100
+  max_validation_examples: 20
+  max_test_examples: 20

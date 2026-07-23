@@ -1,0 +1,25 @@
+_base_: base.yaml
+
+experiment:
+  name: llm2seq_v2_qwen3_embedding_0_6b_to_qwen3_1_7b
+  output_dir: runs/llm2seq_v2/qwen3_embedding_0_6b_to_qwen3_1_7b
+
+model:
+  encoder_name: Qwen/Qwen3-Embedding-0.6B
+  decoder_name: Qwen/Qwen3-1.7B
+  encoder_hidden_size: 1024
+  decoder_hidden_size: 2048
+
+adapter:
+  # Keep the same 1024-wide, four-layer adapter as the 0.6B-decoder run so
+  # this experiment isolates decoder capacity. Only the final memory
+  # projection expands 1024 -> 2048.
+  hidden_size: 1024
+
+training:
+  interface_warmup_epochs: 3
+  full_finetune_epochs: 12
+  batch_size: 32
+  gradient_accumulation_steps: 1
+  full_decoder_lr: 8.0e-6
+  full_cross_attention_lr: 3.0e-5

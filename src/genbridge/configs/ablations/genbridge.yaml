@@ -1,5 +1,0 @@
-_base_: ../base.yaml
-
-experiment:
-  name: genbridge_full
-  output_dir: runs/genbridge/full

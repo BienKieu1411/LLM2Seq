@@ -1,8 +1,0 @@
-_base_: ../base.yaml
-
-experiment:
-  name: genbridge_adapter_8layers
-  output_dir: runs/genbridge/adapter_8layers
-
-bridge:
-  token_num_layers: 8
