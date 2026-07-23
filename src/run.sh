@@ -32,6 +32,11 @@ run_t5gemma_4b() {
   FORCE_EVAL=true bash T5Gemma/run_4b_pipeline.sh
 }
 
+run_t5gemma_cnndm() {
+  local scale="${1:-all}"
+  bash T5Gemma/run_cnndm_pipeline.sh "${scale}"
+}
+
 run_llm2seq_v2() {
   local mode="$1"
   local -a args
@@ -57,8 +62,9 @@ run_llm2seq_v2_all() {
 
 run_paper_sequence() {
   # Fail-fast order for the B200 allocation:
+  # CNN/DailyMail runs separately via run_cnndm_t5gemma.sh on another GPU.
   #   1. Qwen3-Embedding 0.6B -> Qwen3 0.6B LLM2Seq-v2 + evaluation.
-  #   2. T5Gemma 4B-4B full fine-tune + full-test evaluation.
+  #   2. T5Gemma 4B-4B WikiLingua full fine-tune + evaluation.
   #   3. Qwen3-Embedding 0.6B -> Qwen3 1.7B LLM2Seq-v2 + evaluation.
   #   4. Every LLM2Seq-v2 ablation, each followed by evaluation.
   run_llm2seq_v2 pipeline
@@ -211,6 +217,12 @@ Modes:
   genbridge-4-4      Qwen3 encoder 4B + decoder 4B.
   eval        Evaluate existing GenBridge best.pt and last.pt only.
   t5gemma-4b  Full-finetune and evaluate google/t5gemma-2-4b-4b.
+  t5gemma-cnndm-1b
+              Full-finetune/evaluate T5Gemma 1B-1B on CNN/DM at 4096 tokens.
+  t5gemma-cnndm-4b
+              Full-finetune/evaluate T5Gemma 4B-4B on CNN/DM at 4096 tokens.
+  t5gemma-cnndm-all
+              Copy/prepare CNN/DM once, then run both T5Gemma scales.
   llm2seq-v2-0.6-0.6
               Full-train encoder 0.6B + decoder 0.6B, then evaluate last.pt.
   llm2seq-v2-0.6-1.7
@@ -223,8 +235,8 @@ Modes:
               Run both main configurations, then all five ablations.
   compare     Compare both GenBridge checkpoints with T5Gemma.
   compare-4b  Compare both GenBridge checkpoints with T5Gemma 4B-4B.
-  all         Run LLM2Seq-v2 0.6B->0.6B first, T5Gemma 4B-4B second,
-              LLM2Seq-v2 0.6B->1.7B third, then all five LLM2Seq-v2 ablations.
+  all         Run the WikiLingua LLM2Seq-v2/T5Gemma sequence and all five
+              ablations. CNN/DM runs independently via run_cnndm_t5gemma.sh.
               Every train is followed by full-test evaluation.
   legacy-all  Preserve the previous GenBridge/ablation experiment sequence.
   ablation-pilot     Fast architecture gate; reuse completed full-model control.
@@ -236,6 +248,12 @@ Modes:
 Before T5Gemma 4B/all:
   cp T5Gemma/env.example.txt T5Gemma/env.txt
   # Edit HF_TOKEN and PYTHON_BIN in T5Gemma/env.txt.
+
+CNN/DailyMail source folder:
+  CNNDM_SOURCE_DIR=/absolute/path/to/cnndm bash run.sh t5gemma-cnndm-all
+  CNNDM_SOURCE_DIR must contain train.txt, val.txt, and test.txt.
+  Dedicated other-GPU queue:
+  bash run_cnndm_t5gemma.sh /absolute/path/to/cnndm 1
 
 Intentional GenBridge rerun:
   OVERWRITE_GENBRIDGE=true bash run.sh genbridge-1.7-0.6
@@ -283,6 +301,15 @@ case "${MODE}" in
     ;;
   t5gemma-4b)
     run_t5gemma_4b
+    ;;
+  t5gemma-cnndm-1b)
+    run_t5gemma_cnndm 1b
+    ;;
+  t5gemma-cnndm-4b)
+    run_t5gemma_cnndm 4b
+    ;;
+  t5gemma-cnndm-all)
+    run_t5gemma_cnndm all
     ;;
   llm2seq-v2-0.6-0.6)
     run_llm2seq_v2 pipeline
