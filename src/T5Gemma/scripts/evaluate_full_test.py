@@ -290,21 +290,25 @@ def main() -> None:
         if checkpoint_manifest_path.exists():
             checkpoint_manifest = json.loads(checkpoint_manifest_path.read_text(encoding="utf-8"))
     print(f"Loading full fine-tuned checkpoint: {checkpoint_label}")
+    load_kwargs: Dict[str, Any] = {
+        "trust_remote_code": trust_remote_code,
+        "token": token,
+    }
+    # Transformers 5.x no longer accepts an explicit subfolder=None for local
+    # checkpoints. Omit the argument entirely unless a Hub subfolder exists.
+    if checkpoint_subfolder is not None:
+        load_kwargs["subfolder"] = checkpoint_subfolder
     tokenizer = AutoTokenizer.from_pretrained(
         checkpoint_source,
-        subfolder=checkpoint_subfolder,
-        trust_remote_code=trust_remote_code,
-        token=token,
+        **load_kwargs,
     )
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token or tokenizer.unk_token
 
     model = AutoModelForSeq2SeqLM.from_pretrained(
         checkpoint_source,
-        subfolder=checkpoint_subfolder,
         dtype=dtype,
-        trust_remote_code=trust_remote_code,
-        token=token,
+        **load_kwargs,
     )
     model.config.use_cache = bool(raw_cfg["model"].get("use_cache_for_eval", True))
     model.to(device)
