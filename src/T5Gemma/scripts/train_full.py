@@ -327,10 +327,21 @@ def main() -> None:
     logging.info("Loading base model: %s", model_name)
     model = AutoModelForSeq2SeqLM.from_pretrained(
         model_name,
-        torch_dtype=dtype,
+        dtype=dtype,
         trust_remote_code=trust_remote_code,
         token=token,
     )
+    # A locally saved checkpoint can retain BF16 metadata in its nested
+    # encoder/decoder configs. Enforce the requested FP32 master dtype after
+    # loading so AdamW does not update low-precision parameters.
+    if dtype == torch.float32 and any(
+        parameter.is_floating_point() and parameter.dtype != torch.float32
+        for parameter in model.parameters()
+    ):
+        logging.info("Converting locally loaded base weights to FP32 master parameters")
+        model.to(dtype=torch.float32)
+        if hasattr(model, "tie_weights"):
+            model.tie_weights()
     model.config.use_cache = False
     for parameter in model.parameters():
         parameter.requires_grad_(True)

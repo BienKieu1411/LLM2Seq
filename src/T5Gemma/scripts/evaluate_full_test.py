@@ -302,7 +302,7 @@ def main() -> None:
     model = AutoModelForSeq2SeqLM.from_pretrained(
         checkpoint_source,
         subfolder=checkpoint_subfolder,
-        torch_dtype=dtype,
+        dtype=dtype,
         trust_remote_code=trust_remote_code,
         token=token,
     )
