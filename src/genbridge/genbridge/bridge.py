@@ -217,8 +217,10 @@ class BridgeOutput:
     token_memory_mask: torch.Tensor
     plan_memory: torch.Tensor
     plan_memory_mask: torch.Tensor
+    token_attention_bias: Optional[torch.Tensor]
     salience_logits: Optional[torch.Tensor]
     loss_salience: torch.Tensor
+    loss_plan_evidence: torch.Tensor
     loss_plan_diversity: torch.Tensor
 
 
@@ -283,6 +285,53 @@ def _balanced_binary_cross_entropy(
     return torch.stack(terms).mean().to(logits.dtype)
 
 
+def _ordered_plan_evidence_loss(
+    plan_states: torch.Tensor,
+    unit_states: torch.Tensor,
+    unit_mask: torch.Tensor,
+    evidence_labels: Optional[torch.Tensor],
+    temperature: float,
+) -> torch.Tensor:
+    """Align the first plan slots with oracle evidence in source order.
+
+    Each supervised plan slot classifies its corresponding evidence sentence
+    against every valid sentence in the same document.  This gives the compact
+    plan an ordered content target without requiring evidence at inference.
+    """
+
+    zero = plan_states.new_zeros(())
+    if evidence_labels is None:
+        return zero
+    if temperature <= 0.0:
+        raise ValueError("bridge.plan_evidence_temperature must be positive")
+    width = min(unit_states.shape[1], evidence_labels.shape[1])
+    if width == 0:
+        return zero
+    normalized_plans = F.normalize(plan_states.float(), dim=-1)
+    normalized_units = F.normalize(unit_states[:, :width].float(), dim=-1)
+    similarities = torch.einsum("bpd,bud->bpu", normalized_plans, normalized_units) / temperature
+    valid_units = unit_mask[:, :width] & evidence_labels[:, :width].ge(0)
+    similarities = similarities.masked_fill(~valid_units[:, None, :], torch.finfo(similarities.dtype).min)
+    losses = []
+    for batch_index in range(plan_states.shape[0]):
+        evidence = torch.nonzero(
+            valid_units[batch_index] & evidence_labels[batch_index, :width].gt(0.5),
+            as_tuple=False,
+        ).flatten()
+        count = min(plan_states.shape[1], int(evidence.numel()))
+        if count == 0:
+            continue
+        losses.append(
+            F.cross_entropy(
+                similarities[batch_index, :count],
+                evidence[:count],
+            )
+        )
+    if not losses:
+        return zero
+    return torch.stack(losses).mean().to(plan_states.dtype)
+
+
 class SummaryBridge(nn.Module):
     """Turn causal Qwen states into bidirectional token and summary-plan memory.
 
@@ -317,7 +366,15 @@ class SummaryBridge(nn.Module):
         self.bridge_size = bridge_size
         self.use_salience_loss = bool(config.get("use_salience_loss", True))
         self.use_plan_alignment = bool(config.get("use_plan_alignment", True))
+        self.use_plan_evidence_alignment = bool(config.get("use_plan_evidence_alignment", True))
         self.balance_salience_loss = bool(config.get("balance_salience_loss", True))
+        self.use_salience_attention_bias = bool(config.get("use_salience_attention_bias", True))
+        self.salience_attention_bias_scale = float(config.get("salience_attention_bias_scale", 0.5))
+        self.plan_evidence_temperature = float(config.get("plan_evidence_temperature", 0.1))
+        if self.salience_attention_bias_scale < 0.0:
+            raise ValueError("bridge.salience_attention_bias_scale must be non-negative")
+        if self.plan_evidence_temperature <= 0.0:
+            raise ValueError("bridge.plan_evidence_temperature must be positive")
 
         self.input_norm = nn.LayerNorm(encoder_size)
         self.token_in = nn.Linear(encoder_size, bridge_size, bias=False)
@@ -428,7 +485,9 @@ class SummaryBridge(nn.Module):
         token_hidden = token_hidden.masked_fill(~attention_mask.bool().unsqueeze(-1), 0)
 
         salience_logits: Optional[torch.Tensor] = None
+        token_attention_bias: Optional[torch.Tensor] = None
         loss_salience = zero
+        loss_plan_evidence = zero
         if self.unit_encoder is not None and self.salience_head is not None:
             unit_states, unit_mask = _unit_pool(token_hidden, unit_ids)
             unit_states = self.unit_encoder(
@@ -437,6 +496,23 @@ class SummaryBridge(nn.Module):
             )
             unit_states = unit_states.masked_fill(~unit_mask.unsqueeze(-1), 0)
             salience_logits = self.salience_head(unit_states).squeeze(-1)
+            if self.use_salience_attention_bias and self.salience_attention_bias_scale > 0.0:
+                # Log-probabilities provide a stable additive attention prior.
+                # Center over valid source units so prompt tokens (unit id 0)
+                # remain neutral instead of being systematically preferred.
+                unit_bias = F.logsigmoid(salience_logits.float())
+                valid_float = unit_mask.float()
+                mean_bias = (unit_bias * valid_float).sum(dim=1, keepdim=True) / valid_float.sum(
+                    dim=1, keepdim=True
+                ).clamp_min(1.0)
+                unit_bias = (unit_bias - mean_bias) * valid_float
+                padding = unit_bias.new_zeros(unit_bias.shape[0], 1)
+                padded_bias = torch.cat([padding, unit_bias], dim=1)
+                bias_indices = unit_ids.clamp(min=0, max=unit_bias.shape[1])
+                token_attention_bias = padded_bias.gather(1, bias_indices)
+                token_attention_bias = (
+                    self.salience_attention_bias_scale * token_attention_bias
+                ).to(token_states.dtype)
             if evidence_labels is not None and self.use_salience_loss:
                 width = min(evidence_labels.shape[1], salience_logits.shape[1])
                 labels = evidence_labels[:, :width]
@@ -472,6 +548,14 @@ class SummaryBridge(nn.Module):
                     need_weights=False,
                 )
                 plan_hidden = self.plan_norm(plan_hidden + planned)
+                if self.use_plan_evidence_alignment:
+                    loss_plan_evidence = _ordered_plan_evidence_loss(
+                        plan_hidden,
+                        unit_states,
+                        unit_mask,
+                        evidence_labels,
+                        self.plan_evidence_temperature,
+                    )
 
         plan_adapter_gate = torch.tanh(self.plan_adapter_gate).to(plan_hidden.dtype)
         plan_memory = self.plan_output_norm(
@@ -504,8 +588,10 @@ class SummaryBridge(nn.Module):
             token_memory_mask=attention_mask,
             plan_memory=plan_memory,
             plan_memory_mask=plan_mask,
+            token_attention_bias=token_attention_bias,
             salience_logits=salience_logits,
             loss_salience=loss_salience,
+            loss_plan_evidence=loss_plan_evidence,
             loss_plan_diversity=loss_plan_diversity,
         )
 

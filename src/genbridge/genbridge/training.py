@@ -105,6 +105,26 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def plan_only_probability_for_epoch(
+    training_config: Dict[str, Any],
+    epoch: int,
+    interface_epochs: int,
+) -> float:
+    """Return the curriculum probability for one 1-indexed epoch."""
+
+    if epoch <= interface_epochs:
+        schedule = list(training_config.get("plan_only_warmup_probabilities", [0.6, 0.4, 0.2]))
+        if not schedule:
+            probability = 0.0
+        else:
+            probability = float(schedule[min(epoch - 1, len(schedule) - 1)])
+    else:
+        probability = float(training_config.get("full_finetune_plan_only_probability", 0.05))
+    if not 0.0 <= probability <= 1.0:
+        raise ValueError(f"Plan-only probability must be in [0, 1], got {probability} at epoch {epoch}")
+    return probability
+
+
 def build_experiment(
     config: Dict[str, Any],
     load_datasets: bool = True,
@@ -310,6 +330,7 @@ def evaluate_teacher_forced(
             "loss",
             "loss_salience",
             "loss_plan_alignment",
+            "loss_plan_evidence",
             "loss_plan_diversity",
         ):
             if key in outputs:
@@ -535,6 +556,18 @@ def train(
                 "Switched to full fine-tuning; trainable=%d",
                 sum(p.numel() for p in model.parameters() if p.requires_grad),
             )
+        plan_only_probability = (
+            plan_only_probability_for_epoch(training, epoch, interface_epochs)
+            if kind == "encoder_decoder"
+            else 0.0
+        )
+        if hasattr(model, "set_plan_only_probability"):
+            model.set_plan_only_probability(plan_only_probability)
+        LOGGER.info(
+            "epoch=%d memory-path curriculum plan_only_probability=%.3f",
+            epoch,
+            plan_only_probability,
+        )
         model.train()
         for batch_index, batch in enumerate(loader, start=1):
             batch = {name: value.to(device, non_blocking=True) for name, value in batch.items()}
@@ -548,7 +581,9 @@ def train(
                 "loss_ce",
                 "loss_salience",
                 "loss_plan_alignment",
+                "loss_plan_evidence",
                 "loss_plan_diversity",
+                "plan_only_path",
                 "cross_gate_mean",
                 "cross_residual_ratio",
                 "plan_gate_mean",

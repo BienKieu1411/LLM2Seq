@@ -16,7 +16,13 @@ def test_main_config_uses_four_adapter_layers_and_fp32_master_weights():
     assert config["bridge"]["use_adapter_rope"] is True
     assert config["bridge"]["rope_theta"] == 1_000_000.0
     assert config["bridge"]["balance_salience_loss"] is True
+    assert config["bridge"]["use_salience_attention_bias"] is True
+    assert config["bridge"]["salience_attention_bias_scale"] == 0.5
+    assert config["bridge"]["use_plan_evidence_alignment"] is True
+    assert config["objectives"]["plan_evidence_weight"] == 0.1
     assert config["bridge"]["plan_adapter_gate_init"] == 0.1
+    assert config["training"]["plan_only_warmup_probabilities"] == [0.6, 0.4, 0.2]
+    assert config["training"]["full_finetune_plan_only_probability"] == 0.05
     assert config["model"]["dtype"] == "float32"
     assert config["training"]["bf16"] is True
     assert config["training"]["require_fp32_master_weights"] is True
@@ -52,6 +58,12 @@ def test_qwen3_06b_profile_uses_its_native_28_layers():
         assert config["decoder"]["num_layers"] == 28
         assert config["training"]["batch_size"] == 32
         assert config["training"]["gradient_accumulation_steps"] == 1
+
+
+def test_qwen3_17b_eval_batch_size_is_numeric():
+    path = Path(__file__).resolve().parents[1] / "configs" / "qwen3_1_7b.yaml"
+    config = load_config(path)
+    assert config["training"]["eval_batch_size"] == 64
 
 
 def test_embedding_encoder_ablation_keeps_regular_generative_decoder():

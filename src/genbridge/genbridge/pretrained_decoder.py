@@ -106,6 +106,7 @@ class QwenCrossAttention(nn.Module):
         hidden_states: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
         encoder_attention_mask: Optional[torch.Tensor],
+        attention_bias: Optional[torch.Tensor] = None,
         cache_key: str = "memory",
     ) -> torch.Tensor:
         batch_size, query_length, _ = hidden_states.shape
@@ -130,7 +131,17 @@ class QwenCrossAttention(nn.Module):
 
         attention_mask = None
         if encoder_attention_mask is not None:
-            attention_mask = encoder_attention_mask.to(torch.bool)[:, None, None, :]
+            valid_memory = encoder_attention_mask.to(torch.bool)[:, None, None, :]
+            if attention_bias is None:
+                attention_mask = valid_memory
+            else:
+                attention_mask = attention_bias.to(query.dtype)[:, None, None, :]
+                attention_mask = attention_mask.masked_fill(
+                    ~valid_memory,
+                    torch.finfo(query.dtype).min,
+                )
+        elif attention_bias is not None:
+            attention_mask = attention_bias.to(query.dtype)[:, None, None, :]
         attended = F.scaled_dot_product_attention(
             query,
             key,
@@ -216,6 +227,7 @@ class CrossAttentionInjectedLayer(GradientCheckpointingLayer):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         token_encoder_hidden_states: Optional[torch.Tensor] = None,
         token_encoder_attention_mask: Optional[torch.Tensor] = None,
+        token_encoder_attention_bias: Optional[torch.Tensor] = None,
         plan_encoder_hidden_states: Optional[torch.Tensor] = None,
         plan_encoder_attention_mask: Optional[torch.Tensor] = None,
         **kwargs: Any,
@@ -253,6 +265,7 @@ class CrossAttentionInjectedLayer(GradientCheckpointingLayer):
                     normalized_states,
                     token_encoder_hidden_states,
                     token_encoder_attention_mask,
+                    attention_bias=token_encoder_attention_bias,
                     cache_key="token",
                 )
                 plan_context = self.cross_attn(
@@ -374,6 +387,7 @@ class PretrainedQwenDecoder(nn.Module):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         token_encoder_hidden_states: Optional[torch.Tensor] = None,
         token_encoder_attention_mask: Optional[torch.Tensor] = None,
+        token_encoder_attention_bias: Optional[torch.Tensor] = None,
         plan_encoder_hidden_states: Optional[torch.Tensor] = None,
         plan_encoder_attention_mask: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
@@ -391,6 +405,7 @@ class PretrainedQwenDecoder(nn.Module):
             encoder_attention_mask=encoder_attention_mask,
             token_encoder_hidden_states=token_encoder_hidden_states,
             token_encoder_attention_mask=token_encoder_attention_mask,
+            token_encoder_attention_bias=token_encoder_attention_bias,
             plan_encoder_hidden_states=plan_encoder_hidden_states,
             plan_encoder_attention_mask=plan_encoder_attention_mask,
         )

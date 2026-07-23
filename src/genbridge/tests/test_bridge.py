@@ -3,6 +3,7 @@ from genbridge.bridge import (
     BidirectionalRotaryEncoder,
     SummaryBridge,
     _balanced_binary_cross_entropy,
+    _ordered_plan_evidence_loss,
 )
 
 
@@ -38,6 +39,8 @@ def test_evidence_bridge_produces_dual_memory_and_auxiliary_gradients():
     assert torch.equal(output.token_memory_mask, mask)
     assert output.plan_memory.shape == (2, 4, 32)
     assert output.plan_memory_mask.tolist() == [[1, 1, 1, 1], [1, 1, 1, 1]]
+    assert output.token_attention_bias.shape == (2, 9)
+    assert torch.count_nonzero(output.token_attention_bias[unit_ids.eq(0)]) == 0
     assert output.salience_logits.shape == (2, 3)
     assert isinstance(bridge.token_skip, torch.nn.Identity)
     assert isinstance(bridge.plan_skip, torch.nn.Identity)
@@ -46,11 +49,29 @@ def test_evidence_bridge_produces_dual_memory_and_auxiliary_gradients():
     assert abs(torch.tanh(bridge.token_adapter_gate).item() - 0.1) < 1e-6
     assert abs(torch.tanh(bridge.plan_adapter_gate).item() - 0.1) < 1e-6
     assert torch.isfinite(output.loss_salience)
-    (output.memory.mean() + output.loss_salience + output.loss_plan_diversity).backward()
+    assert torch.isfinite(output.loss_plan_evidence)
+    (
+        output.memory.mean()
+        + output.token_attention_bias.mean()
+        + output.loss_salience
+        + output.loss_plan_evidence
+        + output.loss_plan_diversity
+    ).backward()
     assert bridge.salience_head[-1].weight.grad is not None
     assert bridge.plan_attention.in_proj_weight.grad is not None
     assert bridge.token_adapter_gate.grad is not None
     assert bridge.plan_adapter_gate.grad is not None
+
+
+def test_ordered_plan_evidence_alignment_rewards_source_order():
+    units = torch.tensor([[[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]]])
+    mask = torch.ones(1, 3, dtype=torch.bool)
+    labels = torch.tensor([[1.0, 0.0, 1.0]])
+    aligned = torch.tensor([[[1.0, 0.0], [-1.0, 0.0]]])
+    reversed_plans = aligned.flip(1)
+    aligned_loss = _ordered_plan_evidence_loss(aligned, units, mask, labels, temperature=0.1)
+    reversed_loss = _ordered_plan_evidence_loss(reversed_plans, units, mask, labels, temperature=0.1)
+    assert aligned_loss < reversed_loss
 
 
 def test_balanced_salience_loss_does_not_dilute_the_positive_class():

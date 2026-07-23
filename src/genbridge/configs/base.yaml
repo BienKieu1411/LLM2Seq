@@ -39,6 +39,14 @@ bridge:
   plan_adapter_gate_init: 0.1
   use_salience_loss: true
   use_plan_alignment: true
+  # Summary-token CE also reaches the salience head through this differentiable
+  # additive prior on token cross-attention; no source token is hard-masked.
+  use_salience_attention_bias: true
+  salience_attention_bias_scale: 0.5
+  # The first plan slots classify oracle evidence sentences in source order.
+  # Evidence is used only to build this training loss, never during inference.
+  use_plan_evidence_alignment: true
+  plan_evidence_temperature: 0.1
   # WikiLingua evidence labels are about 1:6.6 positive:negative. Equal class
   # aggregation prevents a trivial all-negative salience predictor.
   balance_salience_loss: true
@@ -64,11 +72,16 @@ decoder:
 objectives:
   salience_weight: 0.2
   plan_alignment_weight: 0.1
+  plan_evidence_weight: 0.1
   plan_diversity_weight: 0.01
 
 training:
   epochs: 15
   interface_warmup_epochs: 3
+  # Remove the easy full-token shortcut on a decreasing fraction of warm-up
+  # batches, then retain a small regularizing probability during full FT.
+  plan_only_warmup_probabilities: [0.6, 0.4, 0.2]
+  full_finetune_plan_only_probability: 0.05
   skip_interface_warmup_on_resume: true
   batch_size: 128
   gradient_accumulation_steps: 1

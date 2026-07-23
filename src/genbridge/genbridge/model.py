@@ -48,7 +48,10 @@ class GenBridgeSeq2Seq(nn.Module):
         objectives = config.get("objectives", {}) or {}
         self.salience_weight = float(objectives.get("salience_weight", 0.2))
         self.plan_alignment_weight = float(objectives.get("plan_alignment_weight", 0.1))
+        self.plan_evidence_weight = float(objectives.get("plan_evidence_weight", 0.1))
         self.plan_diversity_weight = float(objectives.get("plan_diversity_weight", 0.01))
+        self._plan_only_probability = 0.0
+        self._last_plan_only_path = False
 
     @property
     def lm_head(self) -> nn.Module:
@@ -86,6 +89,23 @@ class GenBridgeSeq2Seq(nn.Module):
     def decoder_memory_kwargs(self, bridge_output: Any) -> Dict[str, torch.Tensor]:
         """Build either the proposed dual-memory or concatenation interface."""
 
+        plan_only = (
+            self.training
+            and self.bridge.mode == "genbridge"
+            and self.decoder.memory_attention == "gated_dual"
+            and self._plan_only_probability > 0.0
+            and bool(torch.rand((), device=bridge_output.plan_memory.device) < self._plan_only_probability)
+        )
+        self._last_plan_only_path = plan_only
+        if plan_only:
+            # Curriculum batches deliberately remove the pretrained token
+            # shortcut. The same summary CE must therefore teach compact plan
+            # memory to support generation before full dual-memory decoding.
+            return {
+                "encoder_hidden_states": bridge_output.plan_memory,
+                "encoder_attention_mask": bridge_output.plan_memory_mask,
+            }
+
         memory_kwargs = {
             "encoder_hidden_states": bridge_output.memory,
             "encoder_attention_mask": bridge_output.memory_mask,
@@ -95,6 +115,7 @@ class GenBridgeSeq2Seq(nn.Module):
                 {
                     "token_encoder_hidden_states": bridge_output.token_memory,
                     "token_encoder_attention_mask": bridge_output.token_memory_mask,
+                    "token_encoder_attention_bias": bridge_output.token_attention_bias,
                     "plan_encoder_hidden_states": bridge_output.plan_memory,
                     "plan_encoder_attention_mask": bridge_output.plan_memory_mask,
                 }
@@ -151,6 +172,7 @@ class GenBridgeSeq2Seq(nn.Module):
             loss_ce
             + self.salience_weight * bridge_output.loss_salience.float()
             + self.plan_alignment_weight * loss_plan_alignment.float()
+            + self.plan_evidence_weight * bridge_output.loss_plan_evidence.float()
             + self.plan_diversity_weight * bridge_output.loss_plan_diversity.float()
         )
         result = {
@@ -159,7 +181,9 @@ class GenBridgeSeq2Seq(nn.Module):
             "loss_ce": loss_ce,
             "loss_salience": bridge_output.loss_salience,
             "loss_plan_alignment": loss_plan_alignment,
+            "loss_plan_evidence": bridge_output.loss_plan_evidence,
             "loss_plan_diversity": bridge_output.loss_plan_diversity,
+            "plan_only_path": loss_ce.new_tensor(float(self._last_plan_only_path)),
             "cross_gate_mean": self.decoder.cross_gate_mean().detach(),
             "cross_residual_ratio": self.decoder.cross_residual_ratio_mean().detach(),
             "plan_gate_mean": self.decoder.plan_gate_mean().detach(),
@@ -184,6 +208,12 @@ class GenBridgeSeq2Seq(nn.Module):
                 result["salience_precision"] = (true_positive / predictions.sum().float().clamp_min(1.0)).detach()
                 result["salience_recall"] = (true_positive / gold.sum().float().clamp_min(1.0)).detach()
         return result
+
+    def set_plan_only_probability(self, probability: float) -> None:
+        probability = float(probability)
+        if not 0.0 <= probability <= 1.0:
+            raise ValueError("plan-only memory probability must be in [0, 1]")
+        self._plan_only_probability = probability
 
     def set_training_stage(self, stage: str) -> None:
         if stage not in {"interface_warmup", "full_finetune"}:

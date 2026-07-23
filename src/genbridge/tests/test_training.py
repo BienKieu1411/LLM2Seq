@@ -7,6 +7,7 @@ from genbridge.training import (
     LengthBucketBatchSampler,
     build_optimizer,
     evaluate_teacher_forced,
+    plan_only_probability_for_epoch,
     train,
 )
 from torch.utils.data import DataLoader
@@ -54,6 +55,17 @@ def test_length_bucket_sampler_covers_data_and_changes_epoch_order():
         max(max(lengths[index] for index in batch) - min(lengths[index] for index in batch) for batch in epoch_zero)
         <= 9
     )
+
+
+def test_plan_only_memory_curriculum_decays_into_full_finetuning():
+    config = {
+        "plan_only_warmup_probabilities": [0.6, 0.4, 0.2],
+        "full_finetune_plan_only_probability": 0.05,
+    }
+    assert plan_only_probability_for_epoch(config, 1, 3) == pytest.approx(0.6)
+    assert plan_only_probability_for_epoch(config, 2, 3) == pytest.approx(0.4)
+    assert plan_only_probability_for_epoch(config, 3, 3) == pytest.approx(0.2)
+    assert plan_only_probability_for_epoch(config, 4, 3) == pytest.approx(0.05)
 
 
 def test_training_refuses_to_reuse_a_checkpoint_directory():

@@ -54,6 +54,9 @@ ROUGE-2 without obvious repetition or empty-output failures.
 | `lamate_style` | Is generic token bidirectionality sufficient? |
 | `hierarchical` | Does sentence salience help without output-plan memory? |
 | `no_salience_loss` | Is reference-derived content-selection supervision useful? |
+| `no_memory_curriculum` | Does forcing the plan path during training prevent the token-memory shortcut? |
+| `no_salience_attention_bias` | Does soft salience directly improve decoder grounding? |
+| `no_plan_evidence_alignment` | Does ordered evidence supervision make plan slots useful? |
 | `plan_only` | Does a 16-token bottleneck lose lexical detail? |
 | `concat_memory` | Is separate gated attention better than concatenating plan and evidence? |
 | `layer_fusion` | Does fusing causal backbone layers justify its memory cost? |

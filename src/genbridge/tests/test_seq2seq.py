@@ -176,6 +176,14 @@ def test_cross_attention_masks_padding_and_cache_preserves_outputs():
     cached = attention(query, memory, mask)
     torch.testing.assert_close(expected, cached, atol=1e-5, rtol=1e-5)
 
+    # A differentiable salience prior must alter valid-token attention while
+    # never reviving padding positions.
+    salience_bias = torch.tensor([[3.0, -3.0, 0.0, 1000.0], [-3.0, 3.0, 1000.0, 1000.0]])
+    biased = attention(query, memory, mask, attention_bias=salience_bias)
+    biased_changed_padding = attention(query, changed_padding, mask, attention_bias=salience_bias)
+    assert not torch.allclose(expected, biased)
+    torch.testing.assert_close(biased, biased_changed_padding, atol=1e-5, rtol=1e-5)
+
 
 def test_injected_cross_attention_reuses_native_self_attention_norms():
     config = Qwen3Config(
@@ -507,3 +515,34 @@ def test_tiny_qwen3_forward_backward_uses_gated_dual_memory():
         assert torch.isfinite(output["loss"])
         assert injected.plan_gate.weight.grad is not None
         assert model.encoder.summary_tokens.grad is not None
+
+        model.zero_grad(set_to_none=True)
+        model.set_plan_only_probability(1.0)
+        plan_only_output = model(
+            input_ids=source,
+            attention_mask=source_mask,
+            unit_ids=unit_ids,
+            evidence_labels=torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
+            decoder_input_ids=target,
+            decoder_attention_mask=torch.ones_like(target),
+            labels=target,
+        )
+        assert plan_only_output["plan_only_path"] == 1
+        plan_only_output["loss"].backward()
+        assert model.bridge.plan_attention.in_proj_weight.grad is not None
+
+        # Curriculum is training-only; evaluation always restores full dual
+        # memory even if the configured training probability is one.
+        model.eval()
+        with torch.no_grad():
+            eval_output = model(
+                input_ids=source,
+                attention_mask=source_mask,
+                unit_ids=unit_ids,
+                evidence_labels=torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
+                decoder_input_ids=target,
+                decoder_attention_mask=torch.ones_like(target),
+                labels=target,
+            )
+        assert eval_output["plan_only_path"] == 0
+        assert eval_output["plan_gate_mean"] > 0

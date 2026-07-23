@@ -116,8 +116,10 @@ GENBRIDGE PARAMETER LOCATIONS
 
    adapter_2layers.yaml / adapter_8layers.yaml change adapter depth.
    lamate_style.yaml, causal_ed.yaml, hierarchical.yaml,
-   no_salience_loss.yaml, plan_only.yaml, concat_memory.yaml and
-   no_adapter_rope.yaml isolate individual contributions.
+   no_salience_loss.yaml, no_memory_curriculum.yaml,
+   no_salience_attention_bias.yaml, no_plan_evidence_alignment.yaml,
+   plan_only.yaml, concat_memory.yaml and no_adapter_rope.yaml isolate
+   individual contributions.
 
 5. T5Gemma WikiLingua:
    T5Gemma/configs/wikilingua_full_3072.yaml
@@ -153,7 +155,7 @@ Modes:
   compare-4b  Compare both GenBridge checkpoints with T5Gemma 4B-4B.
   all         Run GenBridge, both T5Gemma scales, then comparisons (no ablations).
   ablation-pilot     Fast architecture gate: 5 essential configurations.
-  ablation-main      Main paper ablation table: 8 configurations.
+  ablation-main      Main paper ablation table: 11 configurations.
   ablation-analysis  Adapter-depth/RoPE/fusion analysis configurations.
   ablation-all       Every unique registered ablation configuration.
   params      Print exactly where batch size, epochs, LR, etc. are configured.

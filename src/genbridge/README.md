@@ -342,6 +342,9 @@ set rather than producing an invalid superiority claim.
 | `lamate_style` | Generic bidirectional token adapter |
 | `hierarchical` | Add sentence salience, without plan memory |
 | `no_salience_loss` | Test whether reference-derived salience contributes |
+| `no_memory_curriculum` | Remove plan-only training batches |
+| `no_salience_attention_bias` | Remove the soft salience prior from token cross-attention |
+| `no_plan_evidence_alignment` | Remove ordered plan-to-evidence supervision |
 | `plan_only` | Test the information loss from using only 16 plan tokens |
 | `concat_memory` | Replace gated dual memory with one `[plan; token]` softmax |
 | `adapter_2layers` | Reduce the bidirectional adapter from four to two layers |

@@ -1,0 +1,11 @@
+_base_: ../base.yaml
+
+experiment:
+  name: genbridge_without_ordered_plan_evidence_alignment
+  output_dir: runs/genbridge/no_plan_evidence_alignment
+
+bridge:
+  use_plan_evidence_alignment: false
+
+objectives:
+  plan_evidence_weight: 0.0
