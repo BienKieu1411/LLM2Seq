@@ -4,11 +4,6 @@ experiment:
   name: lamate_style_postencoder
   output_dir: runs/genbridge/lamate_style
 
-model:
-  layer_fusion:
-    enabled: true
-    indices: [-1, -5, -9, -13]
-
 bridge:
   mode: lamate
   use_salience_loss: false

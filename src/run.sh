@@ -30,6 +30,10 @@ run_t5gemma() {
   bash T5Gemma/run_pipeline.sh
 }
 
+run_t5gemma_4b() {
+  bash T5Gemma/run_4b_pipeline.sh
+}
+
 compare_models() {
   echo "=== Paired comparison: GenBridge best vs T5Gemma ==="
   bash genbridge/run.sh compare \
@@ -42,6 +46,20 @@ compare_models() {
     --candidate runs/genbridge/qwen3_0_6b/last_test_predictions.jsonl \
     --baseline ../T5Gemma/eval_outputs/full_test/predictions.jsonl \
     --output runs/comparisons/genbridge_last_vs_t5gemma.json
+}
+
+compare_models_4b() {
+  echo "=== Paired comparison: GenBridge best vs T5Gemma 4B-4B ==="
+  bash genbridge/run.sh compare \
+    --candidate runs/genbridge/qwen3_0_6b/best_test_predictions.jsonl \
+    --baseline ../T5Gemma/eval_outputs/full_test_4b_4b/predictions.jsonl \
+    --output runs/comparisons/genbridge_best_vs_t5gemma_4b_4b.json
+
+  echo "=== Paired comparison: GenBridge last vs T5Gemma 4B-4B ==="
+  bash genbridge/run.sh compare \
+    --candidate runs/genbridge/qwen3_0_6b/last_test_predictions.jsonl \
+    --baseline ../T5Gemma/eval_outputs/full_test_4b_4b/predictions.jsonl \
+    --output runs/comparisons/genbridge_last_vs_t5gemma_4b_4b.json
 }
 
 run_ablation_group() {
@@ -123,15 +141,17 @@ EOF
 
 usage() {
   cat <<'EOF'
-Usage: bash run_b200_paper.sh MODE
+Usage: bash run.sh MODE
 
 Modes:
   setup       Install dependencies and run environment/tests.
   genbridge   Train GenBridge, then evaluate best.pt and last.pt.
   eval        Evaluate existing GenBridge best.pt and last.pt only.
   t5gemma     Prepare data, full-finetune, and evaluate T5Gemma.
+  t5gemma-4b  Full-finetune and evaluate google/t5gemma-2-4b-4b.
   compare     Compare both GenBridge checkpoints with T5Gemma.
-  all         Run GenBridge, then T5Gemma, then both comparisons (no ablations).
+  compare-4b  Compare both GenBridge checkpoints with T5Gemma 4B-4B.
+  all         Run GenBridge, both T5Gemma scales, then comparisons (no ablations).
   ablation-pilot     Fast architecture gate: 5 essential configurations.
   ablation-main      Main paper ablation table: 8 configurations.
   ablation-analysis  Adapter-depth/RoPE/fusion analysis configurations.
@@ -143,15 +163,15 @@ Before T5Gemma/all:
   # Edit HF_TOKEN and PYTHON_BIN in T5Gemma/env.txt.
 
 Intentional GenBridge rerun:
-  OVERWRITE_GENBRIDGE=true bash run_b200_paper.sh genbridge
+  OVERWRITE_GENBRIDGE=true bash run.sh genbridge
 
 T5Gemma overwrite is controlled by OVERWRITE_OUTPUT_DIR in T5Gemma/env.txt.
 
 Ablation examples:
-  MODEL_SIZE=0.6B bash run_b200_paper.sh ablation-pilot
-  MODEL_SIZE=0.6B bash run_b200_paper.sh ablation-main
-  MODEL_SIZE=0.6B bash run_b200_paper.sh ablation-analysis
-  OVERWRITE_ABLATIONS=true MODEL_SIZE=0.6B bash run_b200_paper.sh ablation-main
+  MODEL_SIZE=0.6B bash run.sh ablation-pilot
+  MODEL_SIZE=0.6B bash run.sh ablation-main
+  MODEL_SIZE=0.6B bash run.sh ablation-analysis
+  OVERWRITE_ABLATIONS=true MODEL_SIZE=0.6B bash run.sh ablation-main
 
 MODEL_SIZE may be 0.6B, 1.7B, or 4B. Run 0.6B ablations first; the main 1.7B
 or 4B paper model does not require repeating every expensive ablation.
@@ -171,8 +191,14 @@ case "${MODE}" in
   t5gemma)
     run_t5gemma
     ;;
+  t5gemma-4b)
+    run_t5gemma_4b
+    ;;
   compare)
     compare_models
+    ;;
+  compare-4b)
+    compare_models_4b
     ;;
   ablation-pilot)
     run_ablation_group pilot
@@ -192,7 +218,9 @@ case "${MODE}" in
   all)
     run_genbridge
     run_t5gemma
+    run_t5gemma_4b
     compare_models
+    compare_models_4b
     ;;
   help|-h|--help)
     usage

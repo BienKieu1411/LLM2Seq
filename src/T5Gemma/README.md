@@ -1,6 +1,7 @@
 # T5Gemma Full Fine-tuning Baseline
 
-Full-parameter fine-tuning of `google/t5gemma-2-1b-1b` for WikiLingua or
+Full-parameter fine-tuning of `google/t5gemma-2-1b-1b` and
+`google/t5gemma-2-4b-4b` for WikiLingua or
 Vietnamese LR-Sum summarization. This pipeline does not use LoRA or PEFT: the
 encoder, decoder, embeddings, and language-model head are all updated.
 
@@ -18,12 +19,14 @@ paths are hard-disabled.
 ```text
 T5Gemma/
   configs/wikilingua_full_3072.yaml
+  configs/wikilingua_full_4b_4b_3072.yaml
   configs/lrsum_full.yaml
   scripts/prepare_wikilingua_json.py
   scripts/prepare_lrsum_json.py
   scripts/train_full.py
   scripts/evaluate_full_test.py
   run_pipeline.sh
+  run_4b_pipeline.sh
   run_lrsum_pipeline.sh
   smoke_check.sh
 ```
@@ -36,6 +39,14 @@ bash T5Gemma/smoke_check.sh
 bash T5Gemma/install_deps.sh
 cp T5Gemma/env.example.txt T5Gemma/env.txt  # only if env.txt does not exist
 bash T5Gemma/run_pipeline.sh
+```
+
+The larger single-B200 baseline has an isolated output directory and starts
+with physical batch 1, gradient accumulation 32, gradient checkpointing, and
+FP32 AdamW/master parameters with BF16 autocast:
+
+```bash
+bash T5Gemma/run_4b_pipeline.sh
 ```
 
 Expected raw WikiLingua files are
