@@ -12,8 +12,10 @@ adapter:
   # Preserve full token memory, but expose lexical, semantic, and
   # summary-specialized views to different depths of the decoder.
   depth_routed_memory: true
-  lexical_layers: [-13, -9]
-  semantic_layers: [-9, -5]
+  # Earlier states preserve local wording and bigram evidence; later states
+  # carry the more abstract document meaning. Fusion remains token-adaptive.
+  lexical_layers: [-21, -17, -13, -9]
+  semantic_layers: [-1, -5, -9, -13]
   branch_projection_ffn_size: 2048
   branch_projection_gate_init: 0.05
 
