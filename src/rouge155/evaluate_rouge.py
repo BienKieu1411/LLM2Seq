@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import os
 import re
 import shutil
 import unicodedata
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -32,10 +30,7 @@ def _sentences(text: Any) -> list[str]:
 def _reset_work_dir(work_dir: Path) -> None:
     if work_dir.exists():
         if not (work_dir / _WORK_DIR_MARKER).is_file():
-            raise FileExistsError(
-                f"Refusing to delete unrecognized directory: {work_dir}. "
-                "Choose another --work-dir."
-            )
+            raise FileExistsError(f"Refusing to delete unrecognized directory: {work_dir}. Choose another --work-dir.")
         shutil.rmtree(work_dir)
 
 
@@ -76,8 +71,7 @@ def _prepare_data(
                 raise ValueError(f"Invalid JSONL at {predictions_file}:{line_number}") from exc
             if prediction_field not in row or reference_field not in row:
                 raise ValueError(
-                    f"Missing {prediction_field!r}/{reference_field!r} at "
-                    f"{predictions_file}:{line_number}"
+                    f"Missing {prediction_field!r}/{reference_field!r} at {predictions_file}:{line_number}"
                 )
             (system_dir / f"summary.{count}.txt").write_text(
                 "\n".join(_sentences(row[prediction_field])) + "\n",
@@ -125,25 +119,21 @@ def evaluate(
     rouge_home = Path(os.environ.get("PYROUGE_HOME_DIR", default_home)).resolve()
     rouge_script = rouge_home / "ROUGE-1.5.5.pl"
     if not rouge_script.is_file():
-        raise FileNotFoundError(
-            f"ROUGE-1.5.5.pl not found at {rouge_script}; set PYROUGE_HOME_DIR"
-        )
+        raise FileNotFoundError(f"ROUGE-1.5.5.pl not found at {rouge_script}; set PYROUGE_HOME_DIR")
     if not os.access(rouge_script, os.X_OK):
         raise PermissionError(f"ROUGE script is not executable: chmod +x {rouge_script}")
     wordnet_database = rouge_home / "data/WordNet-2.0.exc.db"
     if not wordnet_database.exists():
-        raise FileNotFoundError(
-            f"WordNet-2.0 exception database not found: {wordnet_database}"
-        )
+        raise FileNotFoundError(f"WordNet-2.0 exception database not found: {wordnet_database}")
 
     local_perl = Path(__file__).resolve().parent / ".runtime/perl5/lib/perl5"
     if local_perl.is_dir():
         current = os.environ.get("PERL5LIB", "")
-        os.environ["PERL5LIB"] = (
-            f"{local_perl}{os.pathsep}{current}" if current else str(local_perl)
-        )
+        os.environ["PERL5LIB"] = f"{local_perl}{os.pathsep}{current}" if current else str(local_perl)
 
-    rouge = Rouge155(str(rouge_home), log_level=logging.WARNING)
+    # Keep the constructor compatible with both the older pyrouge package
+    # commonly installed on servers and the newer GitHub wrapper.
+    rouge = Rouge155(str(rouge_home))
     rouge.system_dir = str(work_dir / "system")
     rouge.model_dir = str(work_dir / "reference")
     rouge.system_filename_pattern = r"summary\.(\d+)\.txt"
@@ -202,11 +192,7 @@ def main() -> None:
         args.prediction_field,
         args.reference_field,
     )
-    print(
-        f"ROUGE-1={result['rouge1']:.3f} "
-        f"ROUGE-2={result['rouge2']:.3f} "
-        f"ROUGE-L={result['rougeL']:.3f}"
-    )
+    print(f"ROUGE-1={result['rouge1']:.3f} ROUGE-2={result['rouge2']:.3f} ROUGE-L={result['rougeL']:.3f}")
     print(f"Saved metrics: {output.resolve()}")
     print(f"Saved raw output: {output.resolve().with_suffix('.raw.txt')}")
 
