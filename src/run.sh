@@ -225,6 +225,11 @@ Modes:
               Copy/prepare CNN/DM once, then run both T5Gemma scales.
   llm2seq-v2-0.6-0.6
               Full-train encoder 0.6B + decoder 0.6B, then evaluate last.pt.
+  llm2seq-v2-smoke-hiroute
+              Train 100 seen examples to check the new architecture end to end.
+  llm2seq-v2-hiroute
+              Full-train the hierarchical depth-routed 0.6B-0.6B model,
+              then evaluate last.pt.
   llm2seq-v2-0.6-1.7
               Full-train encoder 0.6B + decoder 1.7B, then evaluate last.pt.
   llm2seq-v2-main
@@ -313,6 +318,12 @@ case "${MODE}" in
     ;;
   llm2seq-v2-0.6-0.6)
     run_llm2seq_v2 pipeline
+    ;;
+  llm2seq-v2-smoke-hiroute)
+    run_llm2seq_v2 smoke-hiroute
+    ;;
+  llm2seq-v2-hiroute)
+    run_llm2seq_v2 hiroute
     ;;
   llm2seq-v2-0.6-1.7)
     run_llm2seq_v2 decoder-1.7b

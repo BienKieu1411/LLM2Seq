@@ -1,0 +1,26 @@
+_base_: qwen3_0_6b.yaml
+
+experiment:
+  name: llm2seq_v2_hiroute_qwen3_embedding_0_6b_to_qwen3_0_6b
+  output_dir: runs/llm2seq_v2/hiroute_qwen3_embedding_0_6b_to_qwen3_0_6b
+
+adapter:
+  # Preserve full token memory, but expose lexical, semantic, and
+  # summary-specialized views to different depths of the decoder.
+  depth_routed_memory: true
+  lexical_layers: [-13, -9]
+  semantic_layers: [-9, -5]
+  branch_projection_ffn_size: 2048
+  branch_projection_gate_init: 0.05
+
+  # Contextualize sentence representations, then broadcast them back into the
+  # token memory. This remains one encoder -> one adapter -> one decoder.
+  hierarchical_sentence_context: true
+  sentence_context_size: 256
+  sentence_context_heads: 8
+  sentence_context_ffn_size: 1024
+  sentence_context_layers: 2
+  sentence_broadcast_gate_init: 0.10
+
+decoder:
+  memory_bank_count: 3

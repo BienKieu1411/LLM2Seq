@@ -31,6 +31,16 @@ def test_main_config_is_last_only_and_faithful():
     }
 
 
+def test_hiroute_config_enables_one_three_bank_adapter():
+    root = Path(__file__).parents[1]
+    config = load_config(root / "configs/qwen3_0_6b_hiroute.yaml")
+    assert config["adapter"]["hierarchical_sentence_context"] is True
+    assert config["adapter"]["depth_routed_memory"] is True
+    assert config["decoder"]["memory_bank_count"] == 3
+    assert config["checkpoint"]["save_last"] is True
+    assert config["checkpoint"]["save_best"] is False
+
+
 def test_config_rejects_best_checkpoint(tmp_path: Path):
     path = tmp_path / "bad.yaml"
     path.write_text(
@@ -111,6 +121,46 @@ def test_adapter_supports_a_wider_pretrained_decoder():
     )
     assert output.memory.shape == (2, 5, 12)
     assert isinstance(adapter.memory_projection, nn.Sequential)
+
+
+def test_hiroute_adapter_preserves_three_full_length_memories():
+    torch.manual_seed(7)
+    adapter = SummaryAdapterV2(
+        8,
+        8,
+        {
+            "hidden_size": 8,
+            "layer_fusion": True,
+            "fuse_layers": [-1, -2],
+            "projection_ffn_size": 16,
+            "num_bidirectional_layers": 1,
+            "num_heads": 2,
+            "ffn_size": 24,
+            "dropout": 0.0,
+            "use_salience": True,
+            "salience_hidden_size": 8,
+            "depth_routed_memory": True,
+            "lexical_layers": [-3, -2],
+            "semantic_layers": [-2, -1],
+            "branch_projection_ffn_size": 16,
+            "hierarchical_sentence_context": True,
+            "sentence_context_size": 8,
+            "sentence_context_heads": 2,
+            "sentence_context_ffn_size": 16,
+            "sentence_context_layers": 1,
+            "sentence_broadcast_gate_init": 0.1,
+        },
+    ).eval()
+    output = adapter(
+        tuple(torch.randn(2, 6, 8) for _ in range(4)),
+        torch.ones(2, 6, dtype=torch.long),
+        torch.tensor([[1, 1, 1, 2, 2, 2], [1, 1, 2, 2, 3, 3]]),
+        torch.tensor([[1.0, 0.0, -1.0], [0.0, 1.0, 0.0]]),
+    )
+    assert output.memory.shape == (2, 3, 6, 8)
+    assert output.attention_bias.shape == (2, 6)
+    assert torch.isfinite(output.memory).all()
+    assert torch.isfinite(output.loss_salience)
 
 
 class _Attention(nn.Module):

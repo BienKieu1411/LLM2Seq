@@ -21,6 +21,8 @@ fi
 
 MAIN_CONFIG="${CONFIG:-configs/qwen3_0_6b.yaml}"
 SMOKE_CONFIG="configs/smoke_100.yaml"
+HIROUTE_CONFIG="configs/qwen3_0_6b_hiroute.yaml"
+HIROUTE_SMOKE_CONFIG="configs/smoke_hiroute_100.yaml"
 DECODER_HEAVY_CONFIG="configs/qwen3_embedding_0_6b_decoder_1_7b.yaml"
 DECODER_HEAVY_SMOKE_CONFIG="configs/smoke_decoder_1_7b_100.yaml"
 
@@ -76,6 +78,12 @@ PY
   smoke)
     run_pipeline "$SMOKE_CONFIG" "$@"
     ;;
+  hiroute)
+    run_pipeline "$HIROUTE_CONFIG" "$@"
+    ;;
+  smoke-hiroute)
+    run_pipeline "$HIROUTE_SMOKE_CONFIG" "$@"
+    ;;
   decoder-1.7b)
     run_pipeline "$DECODER_HEAVY_CONFIG" "$@"
     ;;
@@ -115,8 +123,12 @@ Modes:
   count-params                Count both profiles without loading model weights.
   smoke --overwrite-output-dir
                               Train 100 seen examples, save/test smoke last.pt.
+  smoke-hiroute --overwrite-output-dir
+                              Flow-check the hierarchical routed architecture.
   pipeline --overwrite-output-dir
                               Full 3-epoch warm-up + 12-epoch full FT, then test last.pt.
+  hiroute --overwrite-output-dir
+                              Full HiRoute architecture run, then test last.pt.
   smoke-decoder-1.7b --overwrite-output-dir
                               Seen-example flow check with the 1.7B decoder.
   decoder-1.7b --overwrite-output-dir
