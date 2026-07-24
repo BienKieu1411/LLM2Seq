@@ -53,8 +53,7 @@ class LLM2SeqV2(nn.Module):
         configured_banks = int(config.get("decoder", {}).get("memory_bank_count", 1))
         if configured_banks != expected_banks:
             raise ValueError(
-                f"Adapter produces {expected_banks} memory bank(s), "
-                f"but decoder.memory_bank_count={configured_banks}"
+                f"Adapter produces {expected_banks} memory bank(s), but decoder.memory_bank_count={configured_banks}"
             )
         self.decoder = PretrainedQwenDecoder(
             str(model_config["decoder_name"]),
@@ -134,9 +133,7 @@ class LLM2SeqV2(nn.Module):
         for index, name in enumerate(("lexical", "semantic", "summary")[: routing.numel()]):
             result[f"memory_route_{name}"] = routing[index]
         if self.adapter.salience_attention_gate is not None:
-            result["salience_attention_gate"] = torch.tanh(
-                self.adapter.salience_attention_gate.float()
-            ).detach()
+            result["salience_attention_gate"] = torch.tanh(self.adapter.salience_attention_gate.float()).detach()
         if adapter_output.layer_weights is not None:
             for index, value in enumerate(adapter_output.layer_weights):
                 result[f"fusion_weight_{index}"] = value.detach()
@@ -150,12 +147,8 @@ class LLM2SeqV2(nn.Module):
                 true_positive = (predictions & gold).sum().float()
                 result["salience_probability_mean"] = probabilities.mean().detach()
                 result["salience_predicted_positive_rate"] = predictions.float().mean().detach()
-                result["salience_precision"] = (
-                    true_positive / predictions.sum().float().clamp_min(1.0)
-                ).detach()
-                result["salience_recall"] = (
-                    true_positive / gold.sum().float().clamp_min(1.0)
-                ).detach()
+                result["salience_precision"] = (true_positive / predictions.sum().float().clamp_min(1.0)).detach()
+                result["salience_recall"] = (true_positive / gold.sum().float().clamp_min(1.0)).detach()
         return result
 
     def set_training_stage(self, stage: str) -> None:

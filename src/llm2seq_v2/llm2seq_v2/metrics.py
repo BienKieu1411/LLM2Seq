@@ -38,8 +38,7 @@ def rouge_scores(predictions: Sequence[str], references: Sequence[str]) -> Dict[
     if not scores:
         return {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0, "rougeLsum": 0.0}
     result = {
-        name: round(sum(item[name] for item in scores) / len(scores), 4)
-        for name in ("rouge1", "rouge2", "rougeL")
+        name: round(sum(item[name] for item in scores) / len(scores), 4) for name in ("rouge1", "rouge2", "rougeL")
     }
     result["rougeLsum"] = result["rougeL"]
     return result

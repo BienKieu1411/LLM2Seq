@@ -33,11 +33,7 @@ def count(config_path: str) -> Dict[str, Any]:
     decoder_core = getattr(decoder, "model", decoder)
     layers = list(decoder_core.layers)
     every = int(config["decoder"].get("cross_attention_every", 1))
-    cross_indices = [
-        index
-        for index in range(len(layers))
-        if (index + 1) % every == 0 or index == len(layers) - 1
-    ]
+    cross_indices = [index for index in range(len(layers)) if (index + 1) % every == 0 or index == len(layers) - 1]
     cross_parameters = 0
     memory_bank_count = int(config["decoder"].get("memory_bank_count", 1))
     for index in cross_indices:

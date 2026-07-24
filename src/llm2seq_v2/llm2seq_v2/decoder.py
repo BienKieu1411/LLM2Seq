@@ -192,8 +192,7 @@ class QwenDecoderLayerWithCrossAttention(GradientCheckpointingLayer):
             return memory
         if memory.ndim != 4 or memory.shape[1] != self.memory_bank_count:
             raise ValueError(
-                f"Expected [B, {self.memory_bank_count}, S, D] source memory, "
-                f"received {tuple(memory.shape)}"
+                f"Expected [B, {self.memory_bank_count}, S, D] source memory, received {tuple(memory.shape)}"
             )
         weights = self.routing_weights().to(memory.dtype)
         return torch.einsum("k,bksd->bsd", weights, memory)
@@ -224,9 +223,7 @@ class QwenDecoderLayerWithCrossAttention(GradientCheckpointingLayer):
 
         if encoder_hidden_states is not None:
             source_memory = encoder_hidden_states
-            if source_memory.ndim == 4 and (
-                self.training or self.cross_attn._memory_cache is None
-            ):
+            if source_memory.ndim == 4 and (self.training or self.cross_attn._memory_cache is None):
                 source_memory = self.route_memory(source_memory)
             cross_states = self.cross_attn(
                 self.cross_attn_norm(hidden_states),
@@ -360,8 +357,7 @@ class PretrainedQwenDecoder(nn.Module):
         values = [
             layer.last_cross_residual_ratio
             for layer in self.backbone.layers
-            if isinstance(layer, QwenDecoderLayerWithCrossAttention)
-            and layer.last_cross_residual_ratio is not None
+            if isinstance(layer, QwenDecoderLayerWithCrossAttention) and layer.last_cross_residual_ratio is not None
         ]
         return torch.stack(values).mean() if values else next(self.parameters()).new_zeros(())
 

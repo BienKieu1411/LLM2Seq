@@ -61,8 +61,7 @@ def validate_config(config: Dict[str, Any]) -> None:
     configured_banks = int(decoder.get("memory_bank_count", 1))
     if configured_banks != expected_banks:
         raise ValueError(
-            f"decoder.memory_bank_count must be {expected_banks} when "
-            f"adapter.depth_routed_memory={depth_routed}"
+            f"decoder.memory_bank_count must be {expected_banks} when adapter.depth_routed_memory={depth_routed}"
         )
     if depth_routed:
         for field in ("lexical_layers", "semantic_layers"):
@@ -73,8 +72,7 @@ def validate_config(config: Dict[str, Any]) -> None:
         context_heads = int(adapter.get("sentence_context_heads", 8))
         if context_size <= 0 or context_size % context_heads:
             raise ValueError(
-                "adapter.sentence_context_size must be positive and divisible "
-                "by adapter.sentence_context_heads"
+                "adapter.sentence_context_size must be positive and divisible by adapter.sentence_context_heads"
             )
 
     cross_every = int(decoder.get("cross_attention_every", 1))

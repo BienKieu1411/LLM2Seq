@@ -335,8 +335,7 @@ def main() -> None:
     # encoder/decoder configs. Enforce the requested FP32 master dtype after
     # loading so AdamW does not update low-precision parameters.
     if dtype == torch.float32 and any(
-        parameter.is_floating_point() and parameter.dtype != torch.float32
-        for parameter in model.parameters()
+        parameter.is_floating_point() and parameter.dtype != torch.float32 for parameter in model.parameters()
     ):
         logging.info("Converting locally loaded base weights to FP32 master parameters")
         model.to(dtype=torch.float32)

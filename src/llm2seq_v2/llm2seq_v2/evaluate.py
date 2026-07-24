@@ -117,10 +117,12 @@ def evaluate(
     records: List[Dict[str, Any]] = []
     latencies: List[float] = []
     bf16 = device.type == "cuda" and bool(config.get("training", {}).get("bf16", True))
+
     def autocast():
         if bf16:
             return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
         return nullcontext()
+
     for start in range(0, len(rows), batch_size):
         batch_rows = rows[start : start + batch_size]
         input_ids, attention_mask, unit_ids, batch_sources, batch_references = _pad_source(
@@ -180,8 +182,7 @@ def evaluate(
     if all(name in benchmark for name in ("rouge1", "rouge2", "rougeL")):
         metrics["benchmark_name"] = str(benchmark.get("name", "T5Gemma"))
         metrics["gap_to_t5gemma"] = {
-            name: round(float(metrics[name]) - float(benchmark[name]), 4)
-            for name in ("rouge1", "rouge2", "rougeL")
+            name: round(float(metrics[name]) - float(benchmark[name]), 4) for name in ("rouge1", "rouge2", "rougeL")
         }
         metrics["rouge2_target_reached"] = float(metrics["rouge2"]) >= float(benchmark["rouge2"])
     output = Path(output_path)

@@ -20,9 +20,7 @@ def check(config_path: str) -> dict:
     encoder_tokenizer, decoder_tokenizer = _tokenizers(config)
     model = LLM2SeqV2(config).eval()
     cross_layers = [
-        layer
-        for layer in model.decoder.backbone.layers
-        if isinstance(layer, QwenDecoderLayerWithCrossAttention)
+        layer for layer in model.decoder.backbone.layers if isinstance(layer, QwenDecoderLayerWithCrossAttention)
     ]
     expected_cross = len(model.decoder.backbone.layers)
     if int(config["decoder"].get("cross_attention_every", 1)) == 1 and len(cross_layers) != expected_cross:

@@ -46,9 +46,7 @@ def dataset_fingerprint(path: str | Path, max_examples: int = 0) -> Dict[str, An
     digest = hashlib.sha256()
     for row in rows:
         canonical = {key: row.get(key) for key in ("id", "source", "target")}
-        digest.update(
-            json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        )
+        digest.update(json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
         digest.update(b"\n")
     return {
         "path": str(Path(path).resolve()),

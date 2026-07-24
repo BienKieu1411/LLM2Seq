@@ -112,11 +112,7 @@ def _collator(
 def _parameter_component(name: str) -> str:
     if name.startswith("adapter."):
         return "adapter"
-    if (
-        ".cross_attn" in name
-        or name.endswith(".cross_gate")
-        or name.endswith(".memory_router_logits")
-    ):
+    if ".cross_attn" in name or name.endswith(".cross_gate") or name.endswith(".memory_router_logits"):
         return "cross_attention"
     if name.startswith("encoder."):
         return "encoder"
@@ -305,18 +301,14 @@ def _run_stage(
                     "cross_residual_ratio": running.get("cross_residual_ratio", 0.0) / divisor,
                     "bidirectional_gate": running.get("bidirectional_gate_mean", 0.0) / divisor,
                     "grad_norm": float(grad_norm),
-                    "learning_rates": {
-                        str(group["component"]): float(group["lr"]) for group in optimizer.param_groups
-                    },
+                    "learning_rates": {str(group["component"]): float(group["lr"]) for group in optimizer.param_groups},
                 }
                 LOGGER.info("train %s", json.dumps(payload, ensure_ascii=False))
                 running.clear()
                 metric_count = 0
         absolute_epoch = epoch_offset + stage_epoch
         LOGGER.info("completed epoch=%d stage=%s", absolute_epoch, stage)
-        if validation_every > 0 and (
-            absolute_epoch % validation_every == 0 or stage_epoch == stage_epochs
-        ):
+        if validation_every > 0 and (absolute_epoch % validation_every == 0 or stage_epoch == stage_epochs):
             metrics = validation_loss(model, validation_loader, device, training)
             LOGGER.info("validation %s", json.dumps({"epoch": absolute_epoch, **metrics}))
     return epoch_offset + stage_epochs, global_step

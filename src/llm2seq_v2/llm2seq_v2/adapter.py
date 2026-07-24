@@ -118,10 +118,7 @@ class BidirectionalAttention(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         inverse = 1.0 / (
             self.rope_theta
-            ** (
-                torch.arange(0, self.head_dim, 2, device=query.device, dtype=torch.float32)
-                / self.head_dim
-            )
+            ** (torch.arange(0, self.head_dim, 2, device=query.device, dtype=torch.float32) / self.head_dim)
         )
         frequencies = position_ids.float().unsqueeze(-1) * inverse
         embedding = torch.cat([frequencies, frequencies], dim=-1)
@@ -279,8 +276,7 @@ class SentenceContextBroadcast(nn.Module):
     def _position_encoding(length: int, width: int, device: torch.device) -> torch.Tensor:
         position = torch.arange(length, device=device, dtype=torch.float32).unsqueeze(1)
         frequency = torch.exp(
-            torch.arange(0, width, 2, device=device, dtype=torch.float32)
-            * (-math.log(10_000.0) / max(1, width))
+            torch.arange(0, width, 2, device=device, dtype=torch.float32) * (-math.log(10_000.0) / max(1, width))
         )
         encoding = torch.zeros(length, width, device=device, dtype=torch.float32)
         encoding[:, 0::2] = torch.sin(position * frequency)
@@ -466,11 +462,7 @@ class SummaryAdapterV2(nn.Module):
         contextual_units: Optional[torch.Tensor] = None
         valid_units: Optional[torch.Tensor] = None
         if unit_ids is not None:
-            unit_count = (
-                int(evidence_labels.shape[1])
-                if evidence_labels is not None
-                else int(unit_ids.max().item())
-            )
+            unit_count = int(evidence_labels.shape[1]) if evidence_labels is not None else int(unit_ids.max().item())
             if self.sentence_context is not None:
                 states, contextual_units, valid_units = self.sentence_context(
                     states,
@@ -485,12 +477,8 @@ class SummaryAdapterV2(nn.Module):
             assert self.semantic_fusion is not None
             assert self.lexical_projection is not None
             assert self.semantic_projection is not None
-            lexical = self.lexical_projection(
-                self.lexical_fusion(encoder_hidden_states, attention_mask)
-            )
-            semantic = self.semantic_projection(
-                self.semantic_fusion(encoder_hidden_states, attention_mask)
-            )
+            lexical = self.lexical_projection(self.lexical_fusion(encoder_hidden_states, attention_mask))
+            semantic = self.semantic_projection(self.semantic_fusion(encoder_hidden_states, attention_mask))
             lexical_memory = self.output_norm(self.memory_projection(lexical))
             semantic_memory = self.output_norm(self.memory_projection(semantic))
             lexical_memory = lexical_memory.masked_fill(~attention_mask.bool().unsqueeze(-1), 0)

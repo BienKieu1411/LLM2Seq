@@ -64,8 +64,6 @@ def load_last_checkpoint(model: nn.Module, path: str | Path) -> Dict[str, Any]:
     if expected != present:
         missing = sorted(expected - present)
         unknown = sorted(present - expected)
-        raise RuntimeError(
-            f"Incompatible full checkpoint; missing={missing[:10]}, unknown={unknown[:10]}"
-        )
+        raise RuntimeError(f"Incompatible full checkpoint; missing={missing[:10]}, unknown={unknown[:10]}")
     model.load_state_dict(state, strict=True)
     return payload

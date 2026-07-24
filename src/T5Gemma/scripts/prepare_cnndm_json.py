@@ -11,7 +11,6 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, Sequence
 
-
 SPLIT_CANDIDATES: Dict[str, Sequence[str]] = {
     "train": ("train.txt", "train.jsonl", "train.json"),
     "validation": (
@@ -51,9 +50,7 @@ def iter_records(path: Path) -> Iterator[Dict[str, Any]]:
             try:
                 value = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"{path}:{line_number} is not valid one-record-per-line JSON: {exc}"
-                ) from exc
+                raise ValueError(f"{path}:{line_number} is not valid one-record-per-line JSON: {exc}") from exc
             if isinstance(value, dict):
                 yield value
             elif isinstance(value, list):
@@ -61,9 +58,7 @@ def iter_records(path: Path) -> Iterator[Dict[str, Any]]:
                     if isinstance(item, dict):
                         yield item
             else:
-                raise ValueError(
-                    f"{path}:{line_number} must contain a JSON object, got {type(value).__name__}"
-                )
+                raise ValueError(f"{path}:{line_number} must contain a JSON object, got {type(value).__name__}")
 
 
 def _detokenize(text: str) -> str:
@@ -123,12 +118,7 @@ def convert_split(input_path: Path, output_path: Path, split: str) -> tuple[int,
             if not source or not target:
                 skipped += 1
                 continue
-            identifier = (
-                record.get("id")
-                or record.get("doc_id")
-                or record.get("article_id")
-                or f"{split}_{index:06d}"
-            )
+            identifier = record.get("id") or record.get("doc_id") or record.get("article_id") or f"{split}_{index:06d}"
             output.write(
                 json.dumps(
                     {
@@ -176,10 +166,7 @@ def main() -> None:
         copied_path = copy_raw_file(source_path, raw_copy_dir, split)
         output_name = "validation.jsonl" if split == "validation" else f"{split}.jsonl"
         kept, skipped = convert_split(copied_path, output_dir / output_name, split)
-        print(
-            f"{split}: copied {source_path} -> {copied_path}; "
-            f"converted {kept} examples (skipped {skipped})"
-        )
+        print(f"{split}: copied {source_path} -> {copied_path}; converted {kept} examples (skipped {skipped})")
 
 
 if __name__ == "__main__":
