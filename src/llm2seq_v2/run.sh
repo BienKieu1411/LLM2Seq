@@ -128,7 +128,7 @@ Modes:
   pipeline --overwrite-output-dir
                               Full 3-epoch warm-up + 12-epoch full FT, then test last.pt.
   hiroute --overwrite-output-dir
-                              Full HiRoute architecture run, then test last.pt.
+                              Full 8-layer HiRoute run, then test last.pt.
   smoke-decoder-1.7b --overwrite-output-dir
                               Seen-example flow check with the 1.7B decoder.
   decoder-1.7b --overwrite-output-dir

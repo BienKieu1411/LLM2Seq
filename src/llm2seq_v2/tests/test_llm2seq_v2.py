@@ -36,6 +36,7 @@ def test_hiroute_config_enables_one_three_bank_adapter():
     config = load_config(root / "configs/qwen3_0_6b_hiroute.yaml")
     assert config["adapter"]["hierarchical_sentence_context"] is True
     assert config["adapter"]["depth_routed_memory"] is True
+    assert config["adapter"]["num_bidirectional_layers"] == 8
     assert config["decoder"]["memory_bank_count"] == 3
     assert config["checkpoint"]["save_last"] is True
     assert config["checkpoint"]["save_best"] is False

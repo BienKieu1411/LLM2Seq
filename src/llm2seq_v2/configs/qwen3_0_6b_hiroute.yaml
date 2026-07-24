@@ -1,10 +1,14 @@
 _base_: qwen3_0_6b.yaml
 
 experiment:
-  name: llm2seq_v2_hiroute_qwen3_embedding_0_6b_to_qwen3_0_6b
-  output_dir: runs/llm2seq_v2/hiroute_qwen3_embedding_0_6b_to_qwen3_0_6b
+  name: llm2seq_v2_hiroute8_qwen3_embedding_0_6b_to_qwen3_0_6b
+  output_dir: runs/llm2seq_v2/hiroute8_qwen3_embedding_0_6b_to_qwen3_0_6b
 
 adapter:
+  # Eight gated residual blocks are the main profile. The small initial gates
+  # keep the deeper adapter close to the pretrained encoder at step zero.
+  num_bidirectional_layers: 8
+
   # Preserve full token memory, but expose lexical, semantic, and
   # summary-specialized views to different depths of the decoder.
   depth_routed_memory: true

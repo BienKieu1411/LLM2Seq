@@ -39,6 +39,7 @@ def count(config_path: str) -> Dict[str, Any]:
         if (index + 1) % every == 0 or index == len(layers) - 1
     ]
     cross_parameters = 0
+    memory_bank_count = int(config["decoder"].get("memory_bank_count", 1))
     for index in cross_indices:
         layer = layers[index]
         cross_parameters += sum(parameter.numel() for parameter in layer.self_attn.parameters())
@@ -46,6 +47,8 @@ def count(config_path: str) -> Dict[str, Any]:
         # also has its own query-side cross-attention norm.
         cross_parameters += 2 * sum(parameter.numel() for parameter in layer.input_layernorm.parameters())
         cross_parameters += 1  # learned residual gate
+        if memory_bank_count > 1:
+            cross_parameters += memory_bank_count  # learned depth-router logits
 
     fallback = int(model_config.get("hidden_size", 0))
     encoder_hidden = int(model_config.get("encoder_hidden_size", fallback or encoder_config.hidden_size))

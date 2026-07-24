@@ -228,7 +228,7 @@ Modes:
   llm2seq-v2-smoke-hiroute
               Train 100 seen examples to check the new architecture end to end.
   llm2seq-v2-hiroute
-              Full-train the hierarchical depth-routed 0.6B-0.6B model,
+              Full-train the 8-layer hierarchical depth-routed 0.6B-0.6B model,
               then evaluate last.pt.
   llm2seq-v2-0.6-1.7
               Full-train encoder 0.6B + decoder 1.7B, then evaluate last.pt.
