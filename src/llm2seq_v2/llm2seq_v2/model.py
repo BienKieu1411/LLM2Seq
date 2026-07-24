@@ -49,6 +49,13 @@ class LLM2SeqV2(nn.Module):
             decoder_hidden_size,
             config.get("adapter", {}),
         )
+        expected_banks = 3 if bool(config.get("adapter", {}).get("depth_routed_memory", False)) else 1
+        configured_banks = int(config.get("decoder", {}).get("memory_bank_count", 1))
+        if configured_banks != expected_banks:
+            raise ValueError(
+                f"Adapter produces {expected_banks} memory bank(s), "
+                f"but decoder.memory_bank_count={configured_banks}"
+            )
         self.decoder = PretrainedQwenDecoder(
             str(model_config["decoder_name"]),
             config.get("decoder", {}),
@@ -123,6 +130,9 @@ class LLM2SeqV2(nn.Module):
             "bidirectional_gate_mean": self.adapter.bidirectional_gate_mean().detach(),
             "projection_gate": torch.tanh(self.adapter.projection.residual_gate.float()).detach(),
         }
+        routing = self.decoder.memory_routing_mean().detach()
+        for index, name in enumerate(("lexical", "semantic", "summary")[: routing.numel()]):
+            result[f"memory_route_{name}"] = routing[index]
         if self.adapter.salience_attention_gate is not None:
             result["salience_attention_gate"] = torch.tanh(
                 self.adapter.salience_attention_gate.float()

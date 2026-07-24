@@ -88,15 +88,18 @@ class QwenCopiedCrossAttention(nn.Module):
         encoder_attention_bias: Optional[torch.Tensor],
     ) -> torch.Tensor:
         batch, query_length, _ = hidden_states.shape
-        source_length = encoder_hidden_states.shape[1]
         query = self.q_proj(hidden_states).view(batch, query_length, self.num_heads, self.head_dim)
         query = self.q_norm(query).transpose(1, 2)
         cached = self._memory_cache if not self.training else None
         if cached is None:
+            if encoder_hidden_states.ndim != 3:
+                raise ValueError("Cross-attention requires one routed [B, S, D] memory")
+            source_length = encoder_hidden_states.shape[1]
             key, value = self._project_memory(encoder_hidden_states)
         else:
             key, value = cached
-            if key.shape[0] != batch or key.shape[2] != source_length:
+            source_length = key.shape[2]
+            if key.shape[0] != batch:
                 raise RuntimeError("Stale cross-attention cache; rebuild it for the current batch")
         repeats = self.num_heads // self.num_kv_heads
         if repeats > 1:
@@ -142,6 +145,9 @@ class QwenDecoderLayerWithCrossAttention(GradientCheckpointingLayer):
         dropout: float,
         gate_init: float,
         initialize_from_self: bool,
+        memory_bank_count: int,
+        layer_index: int,
+        total_layers: int,
     ):
         super().__init__()
         if not 0.0 <= gate_init < 1.0:
@@ -158,7 +164,39 @@ class QwenDecoderLayerWithCrossAttention(GradientCheckpointingLayer):
         reference = base_layer.self_attn.q_proj.weight
         self.cross_attn.to(device=reference.device, dtype=reference.dtype)
         self.cross_gate = nn.Parameter(torch.tensor(math.atanh(gate_init), dtype=torch.float32))
+        self.memory_bank_count = int(memory_bank_count)
+        if self.memory_bank_count > 1:
+            if self.memory_bank_count != 3:
+                raise ValueError("Depth routing currently requires three memory banks")
+            depth = float(layer_index) / max(1, total_layers - 1)
+            lexical = max(0.0, 1.0 - 2.0 * depth)
+            semantic = max(0.0, 1.0 - abs(2.0 * depth - 1.0))
+            summary = max(0.0, 2.0 * depth - 1.0)
+            prior = torch.tensor([lexical, semantic, summary], dtype=torch.float32)
+            prior = prior.clamp_min(0.05)
+            prior = prior / prior.sum()
+            self.memory_router_logits = nn.Parameter(prior.log())
+        else:
+            self.register_parameter("memory_router_logits", None)
         self.last_cross_residual_ratio: Optional[torch.Tensor] = None
+
+    def routing_weights(self) -> torch.Tensor:
+        if self.memory_router_logits is None:
+            return self.cross_gate.new_ones(1)
+        return F.softmax(self.memory_router_logits.float(), dim=0)
+
+    def route_memory(self, memory: torch.Tensor) -> torch.Tensor:
+        if memory.ndim == 3:
+            if self.memory_bank_count != 1:
+                raise ValueError("Depth-routed decoder expected [B, 3, S, D] memory")
+            return memory
+        if memory.ndim != 4 or memory.shape[1] != self.memory_bank_count:
+            raise ValueError(
+                f"Expected [B, {self.memory_bank_count}, S, D] source memory, "
+                f"received {tuple(memory.shape)}"
+            )
+        weights = self.routing_weights().to(memory.dtype)
+        return torch.einsum("k,bksd->bsd", weights, memory)
 
     def forward(
         self,
@@ -185,9 +223,14 @@ class QwenDecoderLayerWithCrossAttention(GradientCheckpointingLayer):
         hidden_states = residual + self_states
 
         if encoder_hidden_states is not None:
+            source_memory = encoder_hidden_states
+            if source_memory.ndim == 4 and (
+                self.training or self.cross_attn._memory_cache is None
+            ):
+                source_memory = self.route_memory(source_memory)
             cross_states = self.cross_attn(
                 self.cross_attn_norm(hidden_states),
-                encoder_hidden_states,
+                source_memory,
                 encoder_attention_mask,
                 encoder_attention_bias,
             )
@@ -202,6 +245,10 @@ class QwenDecoderLayerWithCrossAttention(GradientCheckpointingLayer):
         hidden_states = self.base_layer.post_attention_layernorm(hidden_states)
         hidden_states = self.base_layer.mlp(hidden_states)
         return residual + hidden_states
+
+    @torch.no_grad()
+    def prepare_cross_attention_cache(self, encoder_hidden_states: torch.Tensor) -> None:
+        self.cross_attn.prepare_memory_cache(self.route_memory(encoder_hidden_states))
 
 
 class PretrainedQwenDecoder(nn.Module):
@@ -220,11 +267,13 @@ class PretrainedQwenDecoder(nn.Module):
         self.lm_head = causal_lm.lm_head
         self.cross_attention_every = max(1, int(config.get("cross_attention_every", 1)))
         self.initialize_cross_from_self = bool(config.get("initialize_cross_from_self", True))
+        self.memory_bank_count = int(config.get("memory_bank_count", 1))
         dropout = float(config.get("cross_attention_dropout", 0.0))
         gate_init = float(config.get("cross_gate_init", 0.1))
         wrapped = []
         cross_indices = []
-        for index, layer in enumerate(list(self.backbone.layers)):
+        base_layers = list(self.backbone.layers)
+        for index, layer in enumerate(base_layers):
             self_attention = getattr(layer, "self_attn", None)
             if self_attention is None:
                 raise ValueError("LLM2Seq-v2 requires a Qwen decoder layer with self_attn")
@@ -238,6 +287,9 @@ class PretrainedQwenDecoder(nn.Module):
                     dropout,
                     gate_init,
                     self.initialize_cross_from_self,
+                    self.memory_bank_count,
+                    index,
+                    len(base_layers),
                 )
                 cross_indices.append(index)
             wrapped.append(layer)
@@ -281,13 +333,15 @@ class PretrainedQwenDecoder(nn.Module):
                 for parameter in layer.cross_attn.parameters():
                     parameter.requires_grad = True
                 layer.cross_gate.requires_grad = True
+                if layer.memory_router_logits is not None:
+                    layer.memory_router_logits.requires_grad = True
 
     @torch.no_grad()
     def prepare_cross_attention_cache(self, encoder_hidden_states: torch.Tensor) -> None:
         self.clear_cross_attention_cache()
         for layer in self.backbone.layers:
             if isinstance(layer, QwenDecoderLayerWithCrossAttention):
-                layer.cross_attn.prepare_memory_cache(encoder_hidden_states)
+                layer.prepare_cross_attention_cache(encoder_hidden_states)
 
     def clear_cross_attention_cache(self) -> None:
         for layer in self.backbone.layers:
@@ -310,3 +364,13 @@ class PretrainedQwenDecoder(nn.Module):
             and layer.last_cross_residual_ratio is not None
         ]
         return torch.stack(values).mean() if values else next(self.parameters()).new_zeros(())
+
+    def memory_routing_mean(self) -> torch.Tensor:
+        values = [
+            layer.routing_weights()
+            for layer in self.backbone.layers
+            if isinstance(layer, QwenDecoderLayerWithCrossAttention)
+        ]
+        if not values:
+            return next(self.parameters()).new_ones(1)
+        return torch.stack(values).mean(dim=0)

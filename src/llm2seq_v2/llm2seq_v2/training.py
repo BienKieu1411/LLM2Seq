@@ -112,7 +112,11 @@ def _collator(
 def _parameter_component(name: str) -> str:
     if name.startswith("adapter."):
         return "adapter"
-    if ".cross_attn" in name or name.endswith(".cross_gate"):
+    if (
+        ".cross_attn" in name
+        or name.endswith(".cross_gate")
+        or name.endswith(".memory_router_logits")
+    ):
         return "cross_attention"
     if name.startswith("encoder."):
         return "encoder"
