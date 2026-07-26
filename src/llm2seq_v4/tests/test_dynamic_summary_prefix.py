@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import pytest
 import torch
 import torch.nn as nn
-
 from llm2seq_v4.decoder import PretrainedQwenDecoder
 from llm2seq_v4.generation import generate
 
@@ -37,12 +36,8 @@ class _RecordingBackbone(nn.Module):
         self.calls.append(
             {
                 "input_ids": None if input_ids is None else input_ids.detach().clone(),
-                "inputs_embeds": (
-                    None if inputs_embeds is None else inputs_embeds.detach().clone()
-                ),
-                "attention_mask": (
-                    None if attention_mask is None else attention_mask.detach().clone()
-                ),
+                "inputs_embeds": (None if inputs_embeds is None else inputs_embeds.detach().clone()),
+                "attention_mask": (None if attention_mask is None else attention_mask.detach().clone()),
                 "past_key_values": past_key_values,
             }
         )

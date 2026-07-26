@@ -211,12 +211,8 @@ def evaluate(
         "summary_slots": int(config.get("adapter", {}).get("num_summary_slots", 16)),
         "summary_planner_layers": int(config.get("adapter", {}).get("summary_planner_layers", 2)),
         "response_alignment_weight": float(config.get("objectives", {}).get("response_alignment_weight", 0.15)),
-        "plan_only_probability_start": float(
-            config.get("objectives", {}).get("plan_only_probability_start", 0.25)
-        ),
-        "plan_only_probability_end": float(
-            config.get("objectives", {}).get("plan_only_probability_end", 0.10)
-        ),
+        "plan_only_probability_start": float(config.get("objectives", {}).get("plan_only_probability_start", 0.25)),
+        "plan_only_probability_end": float(config.get("objectives", {}).get("plan_only_probability_end", 0.10)),
         "oracle_evidence_mix_at_inference": 0.0,
         "final_graph": "one_encoder_one_adapter_one_decoder",
         "version": "llm2seq_v4",

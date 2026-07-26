@@ -527,16 +527,11 @@ class PretrainedQwenDecoder(nn.Module):
         if first_step_with_prefix:
             assert summary_prefix is not None
             if summary_prefix.ndim != 3:
-                raise ValueError(
-                    "summary_prefix must be [B, K, D], received "
-                    f"{tuple(summary_prefix.shape)}"
-                )
+                raise ValueError(f"summary_prefix must be [B, K, D], received {tuple(summary_prefix.shape)}")
             batch, token_length = input_ids.shape
             prefix_batch, prefix_length, prefix_hidden = summary_prefix.shape
             if prefix_batch != batch:
-                raise ValueError(
-                    f"summary_prefix batch {prefix_batch} does not match input batch {batch}"
-                )
+                raise ValueError(f"summary_prefix batch {prefix_batch} does not match input batch {batch}")
             if prefix_length <= 0:
                 raise ValueError("summary_prefix must contain at least one latent token")
 
@@ -554,8 +549,7 @@ class PretrainedQwenDecoder(nn.Module):
                 )
             if summary_prefix.device != token_embeddings.device:
                 raise ValueError(
-                    f"summary_prefix is on {summary_prefix.device}, but decoder inputs are on "
-                    f"{token_embeddings.device}"
+                    f"summary_prefix is on {summary_prefix.device}, but decoder inputs are on {token_embeddings.device}"
                 )
             # The adapter may keep numerically sensitive projections in FP32;
             # cast only at the decoder boundary to avoid BF16/FP32 failures.

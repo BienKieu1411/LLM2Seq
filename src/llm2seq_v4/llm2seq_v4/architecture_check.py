@@ -213,7 +213,9 @@ def check(config_path: str, checkpoint_path: str | None = None) -> dict:
         unit_ids=torch.tensor([unit_ids], dtype=torch.long, device=device),
     )
     original_bridge_memory = encoded.memory[:, -1] if encoded.memory.ndim == 4 else encoded.memory
-    changed_bridge_memory = changed_encoded.memory[:, -1] if changed_encoded.memory.ndim == 4 else changed_encoded.memory
+    changed_bridge_memory = (
+        changed_encoded.memory[:, -1] if changed_encoded.memory.ndim == 4 else changed_encoded.memory
+    )
     bridge_query_position = int(future_context_probe["query_position"])
     original_bridge_query = original_bridge_memory[0, bridge_query_position].float()
     changed_bridge_query = changed_bridge_memory[0, bridge_query_position].float()
@@ -233,10 +235,7 @@ def check(config_path: str, checkpoint_path: str | None = None) -> dict:
     expected_slots = int(config["adapter"].get("num_summary_slots", 16))
     if bool(config["adapter"].get("use_summary_planner", True)):
         if encoded.summary_prefix.shape != (1, expected_slots, int(model.decoder.config.hidden_size)):
-            raise RuntimeError(
-                "Prospective-summary prefix has the wrong shape: "
-                f"{tuple(encoded.summary_prefix.shape)}"
-            )
+            raise RuntimeError(f"Prospective-summary prefix has the wrong shape: {tuple(encoded.summary_prefix.shape)}")
         if not bool(encoded.summary_prefix_mask.all()):
             raise RuntimeError("A generated summary slot was unexpectedly masked")
     expected_banks = int(config["decoder"].get("memory_bank_count", 1))

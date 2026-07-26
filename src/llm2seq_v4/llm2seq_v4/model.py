@@ -382,8 +382,7 @@ class LLM2SeqV4(nn.Module):
         loss = (
             loss_ce
             + self.salience_weight * adapter_output.loss_salience.float()
-            + auxiliary_scale * getattr(self, "response_alignment_weight", 0.15)
-            * loss_response_alignment.float()
+            + auxiliary_scale * getattr(self, "response_alignment_weight", 0.15) * loss_response_alignment.float()
             + auxiliary_scale * effective_contrastive_weight * loss_contrastive.float()
             + auxiliary_scale * self.source_swap_weight * self._contrastive_scale * loss_source_swap.float()
             + auxiliary_scale * self.routing_balance_weight * self._contrastive_scale * loss_routing_balance.float()
@@ -418,12 +417,8 @@ class LLM2SeqV4(nn.Module):
             "response_alignment_accuracy": alignment["accuracy"].detach(),
             "response_alignment_valid_slots": alignment["valid_slots"].detach(),
             "plan_only_rate": plan_only_mask.float().mean().detach(),
-            "plan_only_probability": decoder_states.new_tensor(
-                getattr(self, "_plan_only_probability", 0.0)
-            ),
-            "oracle_evidence_mix": decoder_states.new_tensor(
-                getattr(self, "_oracle_evidence_mix", 0.0)
-            ),
+            "plan_only_probability": decoder_states.new_tensor(getattr(self, "_plan_only_probability", 0.0)),
+            "oracle_evidence_mix": decoder_states.new_tensor(getattr(self, "_oracle_evidence_mix", 0.0)),
             "loss_contrastive": loss_contrastive,
             "prompt_retrieval_accuracy": prompt_retrieval_accuracy,
             "loss_source_swap": loss_source_swap,

@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import torch
+import torch.nn as nn
 import yaml
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
@@ -332,9 +333,7 @@ def _capture_optimizer_moments(
 ) -> Dict[str, Dict[str, Any]]:
     names = {id(parameter): name for name, parameter in model.named_parameters()}
     return {
-        names[id(parameter)]: state
-        for parameter, state in optimizer.state.items()
-        if id(parameter) in names and state
+        names[id(parameter)]: state for parameter, state in optimizer.state.items() if id(parameter) in names and state
     }
 
 
@@ -456,10 +455,7 @@ def _run_stage(
         accumulation_count = 0
         metric_count = 0
         for batch_index, batch in enumerate(loader, start=1):
-            curriculum_progress = (
-                float(epoch_offset + stage_epoch - 1)
-                + float(batch_index - 1) / max(1, len(loader))
-            )
+            curriculum_progress = float(epoch_offset + stage_epoch - 1) + float(batch_index - 1) / max(1, len(loader))
             plan_only_probability = _linear_curriculum(
                 curriculum_progress,
                 plan_only_start,

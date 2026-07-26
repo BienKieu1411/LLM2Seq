@@ -28,17 +28,11 @@ def ordered_response_alignment_loss(
     """
 
     if summary_prefix.ndim != 3:
-        raise ValueError(
-            f"summary_prefix must be [B, K, D], got {tuple(summary_prefix.shape)}"
-        )
+        raise ValueError(f"summary_prefix must be [B, K, D], got {tuple(summary_prefix.shape)}")
     if labels.ndim != 2 or labels.shape[0] != summary_prefix.shape[0]:
-        raise ValueError(
-            "labels must be [B, T] and share the summary_prefix batch dimension"
-        )
+        raise ValueError("labels must be [B, T] and share the summary_prefix batch dimension")
     if embedding_weight.ndim != 2 or embedding_weight.shape[1] != summary_prefix.shape[2]:
-        raise ValueError(
-            "embedding_weight must be [V, D] with D equal to the summary-prefix width"
-        )
+        raise ValueError("embedding_weight must be [V, D] with D equal to the summary-prefix width")
     if temperature <= 0.0:
         raise ValueError("response-alignment temperature must be positive")
 
@@ -60,10 +54,9 @@ def ordered_response_alignment_loss(
     # floor((((r+1)*A)-1)/N).  Invalid/padded tokens are sent to slot zero but
     # multiplied by zero before scatter_add, so they cannot affect a target.
     safe_counts = token_counts.clamp_min(1)
-    chunk_ids = (
-        ((token_rank.clamp_min(0) + 1) * active_slots[:, None] - 1)
-        // safe_counts[:, None]
-    ).clamp(min=0, max=slot_count - 1)
+    chunk_ids = (((token_rank.clamp_min(0) + 1) * active_slots[:, None] - 1) // safe_counts[:, None]).clamp(
+        min=0, max=slot_count - 1
+    )
 
     detached_embeddings = embedding_weight.detach()
     token_ids = labels.clamp_min(0)

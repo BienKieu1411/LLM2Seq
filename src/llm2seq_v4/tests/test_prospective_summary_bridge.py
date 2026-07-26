@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import torch
-
 from llm2seq_v4.adapter import (
     IdentityResidualProjection,
     ProspectiveSummaryPlanner,
@@ -50,9 +49,7 @@ def test_planner_shape_masking_and_gradients():
     ).eval()
     memory = torch.randn(2, 6, 8, requires_grad=True)
     mask = torch.tensor([[1, 1, 1, 0, 0, 0], [1, 1, 1, 1, 1, 0]])
-    salience_bias = torch.tensor(
-        [[0.4, -0.2, 0.1, 0.0, 0.0, 0.0], [0.1, 0.2, -0.3, 0.5, 0.0, 0.0]]
-    )
+    salience_bias = torch.tensor([[0.4, -0.2, 0.1, 0.0, 0.0, 0.0], [0.1, 0.2, -0.3, 0.5, 0.0, 0.0]])
 
     output = planner(memory, mask, salience_bias)
     assert output.shape == (2, 4, 8)
@@ -219,10 +216,7 @@ def test_interface_adam_moments_survive_the_stage_boundary():
     carried = _capture_optimizer_moments(layer, first)
     assert carried
 
-    expected = {
-        name: state["exp_avg"].clone()
-        for name, state in carried.items()
-    }
+    expected = {name: state["exp_avg"].clone() for name, state in carried.items()}
     second = torch.optim.AdamW(layer.parameters(), lr=1e-4)
     restored = _restore_optimizer_moments(layer, second, carried)
     assert restored == len(expected)

@@ -366,23 +366,16 @@ class _PlannerAttention(nn.Module):
     ) -> torch.Tensor:
         batch, query_length, _ = query_states.shape
         source_length = key_value_states.shape[1]
-        query = self.q_proj(query_states).view(
-            batch, query_length, self.num_heads, self.head_dim
-        ).transpose(1, 2)
-        key = self.k_proj(key_value_states).view(
-            batch, source_length, self.num_heads, self.head_dim
-        ).transpose(1, 2)
-        value = self.v_proj(key_value_states).view(
-            batch, source_length, self.num_heads, self.head_dim
-        ).transpose(1, 2)
+        query = self.q_proj(query_states).view(batch, query_length, self.num_heads, self.head_dim).transpose(1, 2)
+        key = self.k_proj(key_value_states).view(batch, source_length, self.num_heads, self.head_dim).transpose(1, 2)
+        value = self.v_proj(key_value_states).view(batch, source_length, self.num_heads, self.head_dim).transpose(1, 2)
 
         additive_mask: Optional[torch.Tensor] = None
         if key_value_mask is not None:
             valid = key_value_mask.bool()
             if valid.shape != (batch, source_length):
                 raise ValueError(
-                    "planner source mask must have shape "
-                    f"{(batch, source_length)}, got {tuple(valid.shape)}"
+                    f"planner source mask must have shape {(batch, source_length)}, got {tuple(valid.shape)}"
                 )
             # SDPA cannot produce a meaningful result when every key is
             # masked.  Keep one zero-valued sentinel key for that rare case.
@@ -522,9 +515,7 @@ class ProspectiveSummaryPlanner(nn.Module):
         if memory.ndim != 3:
             raise ValueError(f"planner memory must be [B, S, D], got {tuple(memory.shape)}")
         if memory.shape[-1] != self.hidden_size:
-            raise ValueError(
-                f"planner expected memory width {self.hidden_size}, got {memory.shape[-1]}"
-            )
+            raise ValueError(f"planner expected memory width {self.hidden_size}, got {memory.shape[-1]}")
         slots = self.ordered_slots.to(memory.dtype).unsqueeze(0).expand(memory.shape[0], -1, -1)
         for layer in self.layers:
             slots = layer(slots, memory, memory_mask, attention_bias)
@@ -663,9 +654,7 @@ class ProspectiveSummaryBridge(nn.Module):
         # default.  It remains available only as an explicit compatibility
         # ablation.
         self.output_norm: nn.Module = (
-            nn.RMSNorm(self.decoder_hidden_size)
-            if bool(config.get("final_memory_norm", False))
-            else nn.Identity()
+            nn.RMSNorm(self.decoder_hidden_size) if bool(config.get("final_memory_norm", False)) else nn.Identity()
         )
         self.use_salience = bool(config.get("use_salience", True))
         if self.use_salience:
@@ -774,11 +763,7 @@ class ProspectiveSummaryBridge(nn.Module):
             # Oracle evidence is a training curriculum only.  In eval mode the
             # prediction path is used unconditionally, even if labels happen to
             # be present in the batch.
-            if (
-                self.training
-                and labels is not None
-                and self._oracle_evidence_mix > 0.0
-            ):
+            if self.training and labels is not None and self._oracle_evidence_mix > 0.0:
                 supervised = valid_units & labels.ge(0)
                 oracle_probability = labels.float().clamp(0.0, 1.0)
                 scheduled = torch.lerp(

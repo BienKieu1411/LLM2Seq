@@ -69,9 +69,7 @@ def _protocol_mismatches(
     for key in _GENERATION_PROTOCOL_KEYS:
         wanted = expected_generation.get(key)
         if key not in generation or not _same_protocol_value(generation.get(key), wanted):
-            reasons.append(
-                f"{label} generation.{key}={generation.get(key)!r}; locked value is {wanted!r}"
-            )
+            reasons.append(f"{label} generation.{key}={generation.get(key)!r}; locked value is {wanted!r}")
     for key in ("max_source_length", "max_target_length", "source_prefix"):
         wanted = expected.get(key)
         if key not in metrics or not _same_protocol_value(metrics.get(key), wanted):
