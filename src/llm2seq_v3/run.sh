@@ -197,6 +197,111 @@ PY
       --control-dir runs/llm2seq_v3/pilot_single_bank_2000 \
       --output runs/llm2seq_v3/pilot_comparison.json
     ;;
+  pplx)
+    run_pipeline configs/pplx_embed_v1_0_6b_hiroute.yaml "$@"
+    ;;
+  smoke-pplx)
+    run_smoke configs/smoke_pplx_embed_v1_0_6b_hiroute_100.yaml "$@"
+    ;;
+  pilot-pplx)
+    run_pipeline configs/pilot_pplx_embed_v1_0_6b_hiroute_2000.yaml "$@"
+    ;;
+  pplx-native)
+    run_pipeline configs/pplx_embed_v1_0_6b_native_light.yaml "$@"
+    ;;
+  smoke-pplx-native)
+    run_smoke configs/smoke_pplx_embed_v1_0_6b_native_light_100.yaml "$@"
+    ;;
+  pilot-pplx-native)
+    run_pipeline configs/pilot_pplx_embed_v1_0_6b_native_light_2000.yaml "$@"
+    ;;
+  nemotron)
+    run_pipeline configs/nemotron3_embed_1b_hiroute.yaml "$@"
+    ;;
+  smoke-nemotron)
+    run_smoke configs/smoke_nemotron3_embed_1b_hiroute_100.yaml "$@"
+    ;;
+  pilot-nemotron)
+    run_pipeline configs/pilot_nemotron3_embed_1b_hiroute_2000.yaml "$@"
+    ;;
+  nemotron-native)
+    run_pipeline configs/nemotron3_embed_1b_native_light.yaml "$@"
+    ;;
+  smoke-nemotron-native)
+    run_smoke configs/smoke_nemotron3_embed_1b_native_light_100.yaml "$@"
+    ;;
+  pilot-nemotron-native)
+    run_pipeline configs/pilot_nemotron3_embed_1b_native_light_2000.yaml "$@"
+    ;;
+  encoder-pilot-compare)
+    "$PYTHON_BIN" -m llm2seq_v3.encoder_compare \
+      --run qwen3=runs/llm2seq_v3/pilot_hiroute_2000 \
+      --run pplx=runs/llm2seq_v3/pilot_pplx_embed_v1_0_6b_hiroute_2000 \
+      --run nemotron=runs/llm2seq_v3/pilot_nemotron3_embed_1b_hiroute_2000 \
+      --output runs/llm2seq_v3/encoder_pilot_comparison.json
+    ;;
+  encoder-pilot-all)
+    run_pipeline configs/pilot_hiroute_2000.yaml "$@"
+    run_pipeline configs/pilot_pplx_embed_v1_0_6b_hiroute_2000.yaml "$@"
+    run_pipeline configs/pilot_nemotron3_embed_1b_hiroute_2000.yaml "$@"
+    "$PYTHON_BIN" -m llm2seq_v3.encoder_compare \
+      --run qwen3=runs/llm2seq_v3/pilot_hiroute_2000 \
+      --run pplx=runs/llm2seq_v3/pilot_pplx_embed_v1_0_6b_hiroute_2000 \
+      --run nemotron=runs/llm2seq_v3/pilot_nemotron3_embed_1b_hiroute_2000 \
+      --output runs/llm2seq_v3/encoder_pilot_comparison.json
+    ;;
+  pplx-pilot-compare)
+    "$PYTHON_BIN" -m llm2seq_v3.pilot_compare \
+      --main-dir runs/llm2seq_v3/pilot_pplx_embed_v1_0_6b_hiroute_2000 \
+      --control-dir runs/llm2seq_v3/pilot_pplx_embed_v1_0_6b_native_light_2000 \
+      --output runs/llm2seq_v3/pplx_hiroute_vs_native_light.json
+    ;;
+  pplx-pilot-all)
+    run_pipeline configs/pilot_pplx_embed_v1_0_6b_hiroute_2000.yaml "$@"
+    run_pipeline configs/pilot_pplx_embed_v1_0_6b_native_light_2000.yaml "$@"
+    "$PYTHON_BIN" -m llm2seq_v3.pilot_compare \
+      --main-dir runs/llm2seq_v3/pilot_pplx_embed_v1_0_6b_hiroute_2000 \
+      --control-dir runs/llm2seq_v3/pilot_pplx_embed_v1_0_6b_native_light_2000 \
+      --output runs/llm2seq_v3/pplx_hiroute_vs_native_light.json
+    ;;
+  nemotron-pilot-compare)
+    "$PYTHON_BIN" -m llm2seq_v3.pilot_compare \
+      --main-dir runs/llm2seq_v3/pilot_nemotron3_embed_1b_hiroute_2000 \
+      --control-dir runs/llm2seq_v3/pilot_nemotron3_embed_1b_native_light_2000 \
+      --output runs/llm2seq_v3/nemotron_hiroute_vs_native_light.json
+    ;;
+  nemotron-pilot-all)
+    run_pipeline configs/pilot_nemotron3_embed_1b_hiroute_2000.yaml "$@"
+    run_pipeline configs/pilot_nemotron3_embed_1b_native_light_2000.yaml "$@"
+    "$PYTHON_BIN" -m llm2seq_v3.pilot_compare \
+      --main-dir runs/llm2seq_v3/pilot_nemotron3_embed_1b_hiroute_2000 \
+      --control-dir runs/llm2seq_v3/pilot_nemotron3_embed_1b_native_light_2000 \
+      --output runs/llm2seq_v3/nemotron_hiroute_vs_native_light.json
+    ;;
+  native-encoder-pilot-compare)
+    "$PYTHON_BIN" -m llm2seq_v3.pilot_compare \
+      --main-dir runs/llm2seq_v3/pilot_pplx_embed_v1_0_6b_hiroute_2000 \
+      --control-dir runs/llm2seq_v3/pilot_pplx_embed_v1_0_6b_native_light_2000 \
+      --output runs/llm2seq_v3/pplx_hiroute_vs_native_light.json
+    "$PYTHON_BIN" -m llm2seq_v3.pilot_compare \
+      --main-dir runs/llm2seq_v3/pilot_nemotron3_embed_1b_hiroute_2000 \
+      --control-dir runs/llm2seq_v3/pilot_nemotron3_embed_1b_native_light_2000 \
+      --output runs/llm2seq_v3/nemotron_hiroute_vs_native_light.json
+    ;;
+  native-encoder-pilot-all)
+    run_pipeline configs/pilot_pplx_embed_v1_0_6b_hiroute_2000.yaml "$@"
+    run_pipeline configs/pilot_pplx_embed_v1_0_6b_native_light_2000.yaml "$@"
+    run_pipeline configs/pilot_nemotron3_embed_1b_hiroute_2000.yaml "$@"
+    run_pipeline configs/pilot_nemotron3_embed_1b_native_light_2000.yaml "$@"
+    "$PYTHON_BIN" -m llm2seq_v3.pilot_compare \
+      --main-dir runs/llm2seq_v3/pilot_pplx_embed_v1_0_6b_hiroute_2000 \
+      --control-dir runs/llm2seq_v3/pilot_pplx_embed_v1_0_6b_native_light_2000 \
+      --output runs/llm2seq_v3/pplx_hiroute_vs_native_light.json
+    "$PYTHON_BIN" -m llm2seq_v3.pilot_compare \
+      --main-dir runs/llm2seq_v3/pilot_nemotron3_embed_1b_hiroute_2000 \
+      --control-dir runs/llm2seq_v3/pilot_nemotron3_embed_1b_native_light_2000 \
+      --output runs/llm2seq_v3/nemotron_hiroute_vs_native_light.json
+    ;;
   ablation-no-contrastive)
     run_pipeline configs/ablations/no_contrastive.yaml "$@"
     ;;
@@ -282,8 +387,8 @@ Usage: bash run.sh MODE [arguments]
 Modes:
   setup                       Install into bienkieu_env (or PYTHON_BIN).
   test                        Run unit tests without downloading models.
-  check-model                 Load both real checkpoints and run a tiny forward pass.
-  count-params                Count both profiles without loading model weights.
+  check-model                 Load the selected real graph and run invariant checks.
+  count-params                Build selected configs on meta tensors; no weight load.
   smoke --overwrite-output-dir
                               Flow-check the main contrastive HiRoute-v3 model.
   smoke-hiroute --overwrite-output-dir
@@ -297,6 +402,35 @@ Modes:
   pilot-all --overwrite-output-dir
                               Run both pilots and write pilot_comparison.json.
   pilot-compare              Compare two completed pilot runs only.
+  smoke-pplx --overwrite-output-dir
+                              Smoke PPLX Embed v1 0.6B -> Qwen3 0.6B.
+  pilot-pplx --overwrite-output-dir
+  pplx --overwrite-output-dir
+                              Pilot/full PPLX encoder with HiRoute.
+  smoke-pplx-native --overwrite-output-dir
+  pilot-pplx-native --overwrite-output-dir
+  pplx-native --overwrite-output-dir
+                              PPLX single-bank, two-block native-bidi control.
+  smoke-nemotron --overwrite-output-dir
+                              Smoke Nemotron 3 Embed 1B -> Qwen3 0.6B.
+  pilot-nemotron --overwrite-output-dir
+  nemotron --overwrite-output-dir
+                              Pilot/full budgeted Nemotron with HiRoute.
+  smoke-nemotron-native --overwrite-output-dir
+  pilot-nemotron-native --overwrite-output-dir
+  nemotron-native --overwrite-output-dir
+                              Nemotron single-bank, two-block native-bidi control.
+  encoder-pilot-all --overwrite-output-dir
+                              Run Qwen/PPLX/Nemotron pilots, then rank them.
+  encoder-pilot-compare      Compare completed encoder pilots only.
+  pplx-pilot-all --overwrite-output-dir
+  pplx-pilot-compare         Run/compare PPLX HiRoute vs native-light only.
+  nemotron-pilot-all --overwrite-output-dir
+  nemotron-pilot-compare     Run/compare Nemotron HiRoute vs native-light only.
+  native-encoder-pilot-all --overwrite-output-dir
+                              Run HiRoute/native-light pairs for both native-bidi encoders.
+  native-encoder-pilot-compare
+                              Compare those four completed pilot runs only.
   pipeline --overwrite-output-dir
                               Main: contrastive output-routed HiRoute, then test last.pt.
   hiroute --overwrite-output-dir

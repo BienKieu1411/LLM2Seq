@@ -1,0 +1,13 @@
+_base_: ../qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v4_no_source_swap
+  output_dir: runs/llm2seq_v4/ablations/no_source_swap
+
+objectives:
+  # Legacy V3 control: keep its other contrastive arm active so the config is
+  # a valid source-swap-only ablation under V4's stricter validation.
+  use_prompt_alignment: true
+  contrastive_weight: 0.05
+  use_source_swap: false
+  source_swap_weight: 0.0

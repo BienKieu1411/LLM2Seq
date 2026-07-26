@@ -143,9 +143,33 @@ def encode_source(
     separator = str(config.get("sentence_separator", "\n"))
     max_length = int(config.get("max_source_length", 3072))
     prefix_ids = list(tokenizer(prefix, add_special_tokens=False)["input_ids"])
-    eos_id = tokenizer.eos_token_id
+    special_prefix_ids: List[int] = []
+    special_suffix_ids: List[int] = []
+    if bool(config.get("source_add_special_tokens", False)):
+        cache_name = "_llm2seq_v3_default_special_wrapper"
+        cached = getattr(tokenizer, cache_name, None)
+        if cached is None:
+            probe = "LLM2Seq"
+            plain_probe = list(tokenizer(probe, add_special_tokens=False)["input_ids"])
+            wrapped_probe = list(tokenizer(probe, add_special_tokens=True)["input_ids"])
+            start = next(
+                (
+                    index
+                    for index in range(len(wrapped_probe) - len(plain_probe) + 1)
+                    if wrapped_probe[index : index + len(plain_probe)] == plain_probe
+                ),
+                None,
+            )
+            if start is None:
+                raise RuntimeError("Tokenizer default special-token wrapper is not prefix/suffix aligned")
+            cached = (wrapped_probe[:start], wrapped_probe[start + len(plain_probe) :])
+            setattr(tokenizer, cache_name, cached)
+        special_prefix_ids = list(cached[0])
+        special_suffix_ids = list(cached[1])
+    eos_id = tokenizer.eos_token_id if bool(config.get("append_source_eos", True)) else None
     eos_budget = int(eos_id is not None)
-    budget = max(1, max_length - len(prefix_ids) - eos_budget)
+    special_budget = len(special_prefix_ids) + len(special_suffix_ids)
+    budget = max(1, max_length - len(prefix_ids) - eos_budget - special_budget)
     source_ids: List[int] = []
     unit_ids: List[int] = []
     visible_units: List[str] = []
@@ -165,8 +189,8 @@ def encode_source(
         unit_ids.extend([unit_index] * len(encoded))
         if len(encoded) < len(complete):
             break
-    ids = prefix_ids + source_ids
-    aligned = [0] * len(prefix_ids) + unit_ids
+    ids = special_prefix_ids + prefix_ids + source_ids + special_suffix_ids
+    aligned = [0] * (len(special_prefix_ids) + len(prefix_ids)) + unit_ids + [0] * len(special_suffix_ids)
     if eos_id is not None and len(ids) < max_length:
         ids.append(int(eos_id))
         aligned.append(0)

@@ -1,0 +1,9 @@
+_base_: ../qwen3_embedding_0_6b_psb.yaml
+
+experiment:
+  name: llm2seq_v4_ablation_label_smoothing_0_10
+  output_dir: runs/llm2seq_v4/ablations/label_smoothing_0_10
+
+objectives:
+  label_smoothing: 0.10
+

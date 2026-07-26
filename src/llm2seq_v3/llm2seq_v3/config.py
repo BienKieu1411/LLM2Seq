@@ -47,10 +47,43 @@ def validate_config(config: Dict[str, Any]) -> None:
     decoder_hidden = int(model.get("decoder_hidden_size", fallback_hidden))
     if encoder_hidden <= 0 or decoder_hidden <= 0:
         raise ValueError("model encoder/decoder hidden sizes must be positive")
+    encoder_layers = int(model.get("encoder_num_hidden_layers", 0))
+    if encoder_layers < 0:
+        raise ValueError("model.encoder_num_hidden_layers must be non-negative")
+    attention_mode = str(model.get("encoder_attention_mode", "auto"))
+    if attention_mode not in {"auto", "causal", "bidirectional"}:
+        raise ValueError("model.encoder_attention_mode must be auto, causal, or bidirectional")
+    if not str(model.get("encoder_attn_implementation", "sdpa")).strip():
+        raise ValueError("model.encoder_attn_implementation cannot be empty")
+    if "encoder_trust_remote_code" in model and not isinstance(model["encoder_trust_remote_code"], bool):
+        raise ValueError("model.encoder_trust_remote_code must be a boolean")
+    if "encoder_revision" in model and model["encoder_revision"] is not None:
+        if not str(model["encoder_revision"]).strip():
+            raise ValueError("model.encoder_revision cannot be empty")
+    if float(model.get("encoder_future_context_min_relative_change", 1e-6)) <= 0.0:
+        raise ValueError("model.encoder_future_context_min_relative_change must be positive")
+    for field in ("append_source_eos", "source_add_special_tokens"):
+        if field in data and not isinstance(data[field], bool):
+            raise ValueError(f"data.{field} must be a boolean")
+    if bool(data.get("append_source_eos", True)) and bool(data.get("source_add_special_tokens", False)):
+        raise ValueError("data.append_source_eos and data.source_add_special_tokens cannot both be enabled")
 
     indices = list(adapter.get("fuse_layers", []))
     if bool(adapter.get("layer_fusion", True)) and not indices:
         raise ValueError("adapter.fuse_layers cannot be empty when layer fusion is enabled")
+    if encoder_layers > 0:
+        hidden_state_count = encoder_layers + 1
+        indexed_fields = ["fuse_layers"]
+        if bool(adapter.get("depth_routed_memory", False)):
+            indexed_fields.extend(["lexical_layers", "semantic_layers"])
+        for field in indexed_fields:
+            for value in adapter.get(field, []):
+                index = int(value)
+                actual = index if index >= 0 else hidden_state_count + index
+                if actual < 0 or actual >= hidden_state_count:
+                    raise ValueError(
+                        f"adapter.{field} index {index} is outside the encoder's {hidden_state_count} hidden states"
+                    )
     if int(adapter.get("num_bidirectional_layers", 0)) < 0:
         raise ValueError("adapter.num_bidirectional_layers must be non-negative")
     hidden_size = int(adapter.get("hidden_size", decoder_hidden))

@@ -50,7 +50,10 @@ def evaluate_smoke_run(run_dir: str | Path, expected_examples: int = 20) -> Dict
     routes = {
         name: float(validation.get(f"eval_memory_route_{name}", 0.0)) for name in ("lexical", "semantic", "summary")
     }
-    multi_bank = any(value > 0.0 for value in routes.values())
+    route_metrics = metrics.get("memory_route_mean", {})
+    inferred_bank_count = len(route_metrics) if isinstance(route_metrics, dict) and route_metrics else 1
+    memory_bank_count = int(metrics.get("memory_bank_count", inferred_bank_count))
+    multi_bank = memory_bank_count > 1
     training_parameters = int(metrics.get("training_parameters", 0))
     declared_parameter_target = int(metrics.get("parameter_target_declared", 0))
     gates = {
@@ -90,6 +93,7 @@ def evaluate_smoke_run(run_dir: str | Path, expected_examples: int = 20) -> Dict
     return {
         "scope": "flow/collapse smoke gate only; not a generalization or T5Gemma comparison",
         "run_dir": str(run_dir),
+        "memory_bank_count": memory_bank_count,
         "passed": not failures,
         "failed_gates": failures,
         "gates": gates,

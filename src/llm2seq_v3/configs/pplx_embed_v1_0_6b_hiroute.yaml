@@ -1,0 +1,31 @@
+_base_: qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v3_pplx_embed_v1_0_6b_hiroute
+  output_dir: runs/llm2seq_v3/pplx_embed_v1_0_6b_hiroute
+
+model:
+  # Native 28-layer, 1024-wide bidirectional Qwen3 embedding checkpoint.
+  # It is shape-compatible with the standard Qwen3-Embedding-0.6B profile.
+  encoder_name: perplexity-ai/pplx-embed-v1-0.6b
+  encoder_hidden_size: 1024
+  encoder_num_hidden_layers: 28
+  encoder_attention_mode: bidirectional
+  encoder_attn_implementation: sdpa
+  # Pin custom model code, tokenizer, config, and weights to one Hub snapshot.
+  encoder_trust_remote_code: true
+  encoder_revision: 2c4d510dd4a732063c31a0f70193e35067b51fd8
+
+objectives:
+  # PPLX Embed v1 is trained and evaluated with mean pooling.
+  contrastive_pooling: mean
+
+data:
+  # PPLX Embed deliberately needs no retrieval/task instruction and its Qwen
+  # tokenizer does not add BOS. Feed document tokens directly; mean pooling
+  # also removes the Qwen3-Embedding-specific need for a terminal EOS state.
+  source_prefix: ""
+  append_source_eos: false
+  # Follow the checkpoint tokenizer's default wrapper. At the pinned revision
+  # it adds neither BOS nor EOS, and check-model records the resulting IDs.
+  source_add_special_tokens: true

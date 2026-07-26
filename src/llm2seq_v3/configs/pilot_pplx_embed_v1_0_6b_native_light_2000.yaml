@@ -1,0 +1,22 @@
+_base_: pplx_embed_v1_0_6b_native_light.yaml
+
+experiment:
+  name: llm2seq_v3_pilot_pplx_embed_v1_0_6b_native_light_2000
+  output_dir: runs/llm2seq_v3/pilot_pplx_embed_v1_0_6b_native_light_2000
+
+training:
+  interface_warmup_epochs: 2
+  full_finetune_epochs: 4
+  batch_size: 64
+  gradient_accumulation_steps: 1
+  validation_batch_size: 64
+  validation_every_epochs: 1
+  validation_max_examples: 256
+
+generation:
+  batch_size: 64
+
+limits:
+  max_train_examples: 2000
+  max_validation_examples: 512
+  max_test_examples: 512

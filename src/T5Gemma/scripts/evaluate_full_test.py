@@ -372,13 +372,13 @@ def main() -> None:
     batch_size = int(args.batch_size or raw_cfg.get("generation", {}).get("eval_batch_size", 1))
     generation_settings = {
         "max_new_tokens": int(generation_value(args, raw_cfg, "max_new_tokens", 256)),
-        "min_new_tokens": int(generation_value(args, raw_cfg, "min_new_tokens", 32)),
+        "min_new_tokens": int(generation_value(args, raw_cfg, "min_new_tokens", 16)),
         "num_beams": int(generation_value(args, raw_cfg, "num_beams", 1)),
         "do_sample": bool(generation_value(args, raw_cfg, "do_sample", False)),
         "temperature": float(generation_value(args, raw_cfg, "temperature", 0.0)),
         "top_k": int(generation_value(args, raw_cfg, "top_k", 0)),
         "top_p": float(generation_value(args, raw_cfg, "top_p", 1.0)),
-        "repetition_penalty": float(generation_value(args, raw_cfg, "repetition_penalty", 1.15)),
+        "repetition_penalty": float(generation_value(args, raw_cfg, "repetition_penalty", 1.05)),
         "no_repeat_ngram_size": int(generation_value(args, raw_cfg, "no_repeat_ngram_size", 3)),
     }
     generate_kwargs = {
@@ -508,6 +508,10 @@ def main() -> None:
             "predictions_file": str(predictions_path),
             "generation": generation_settings,
             "source_prefix": source_prefix,
+            # Persist the exact length contract so cross-model paper audits do
+            # not silently compare different truncation regimes.
+            "max_source_length": int(raw_cfg["data"]["max_source_length"]),
+            "max_target_length": int(raw_cfg["data"]["max_target_length"]),
             "eval_batch_size": batch_size,
         }
     )

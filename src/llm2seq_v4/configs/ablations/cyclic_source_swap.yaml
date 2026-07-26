@@ -1,0 +1,9 @@
+_base_: ../qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v4_ablation_cyclic_source_swap
+  output_dir: runs/llm2seq_v4/ablations/cyclic_source_swap
+
+objectives:
+  # Replace target-free hard negatives with the original arbitrary derangement.
+  source_swap_strategy: cyclic

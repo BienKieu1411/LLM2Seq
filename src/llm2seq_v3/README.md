@@ -17,6 +17,53 @@ Qwen3-0.6B autoregressive decoder                           │
 summary
 ```
 
+## Supported encoder systems
+
+| Profile | Attention before our adapter | Width / layers | Source recipe | Intended role |
+|---|---|---:|---|---|
+| Qwen3-Embedding-0.6B | causal-derived embedding backbone | 1024 / 28 | Vietnamese summary instruction + EOS; `mean_last` mining | Main conversion claim |
+| PPLX Embed v1 0.6B | native bidirectional | 1024 / 28 | raw document, tokenizer-default specials, mean mining | Shape-matched strong encoder candidate |
+| Nemotron 3 Embed 1B | native bidirectional | 2048 / 16 | exact `passage: ` prefix, tokenizer-default specials, mean mining | Larger multilingual upper bound |
+
+PPLX is the first encoder to try for score: it matches Qwen's width and depth,
+so the adapter and decoder do not have to learn a 2048-to-1024 family/width
+alignment. Nemotron uses cross-attention every two decoder layers to keep its
+complete training graph below the declared 2B budget. The runtime preflight is
+still authoritative.
+
+Both new embedding checkpoints are already bidirectional. Therefore, their
+results cannot be presented as evidence that our adapter converted a causal
+LLM. They are strong encoder-system comparisons. The original causal-derived
+Qwen profile remains necessary for that claim; if PPLX/Nemotron becomes the
+main accuracy model, the contribution must instead be framed as a
+summary-specialized embedding-LLM-to-generative-LLM bridge.
+
+For each native-bidirectional encoder there are two versions:
+
+- `hiroute`: 8 task-refinement blocks, lexical/semantic/summary banks, and
+  token-adaptive routing.
+- `native_light`: one memory bank and 2 task-refinement blocks, while retaining
+  multi-depth fusion, sentence context, salience supervision, contrastive
+  alignment, and source-swap training.
+
+The light profile is a required decision control, not a weaker afterthought:
+an already bidirectional encoder may overfit WikiLingua when eight more blocks
+and three full-length memories are added. Use held-out ROUGE-2 to choose; do
+not assume the larger adapter wins.
+
+PPLX custom code is pinned to Hub revision
+`2c4d510dd4a732063c31a0f70193e35067b51fd8`; Nemotron is pinned to
+`a5e0f804b9e90a1ca6784ecbf6e41595774fc834`. The same revision is passed to
+config, tokenizer, and weights. `check-model` also mutates a future token and
+requires an earlier final-layer token state to change for every encoder
+declared bidirectional. This checks actual attention behavior rather than
+trusting a config flag.
+
+Official references: [PPLX Embed model card](https://huggingface.co/perplexity-ai/pplx-embed-v1-0.6b),
+[PPLX Embed paper](https://arxiv.org/abs/2602.11151),
+[Nemotron 3 Embed model card](https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16),
+and [NVIDIA's embedding recipe](https://docs.nvidia.com/nemotron/nightly/nemotron/embed/README.html).
+
 ## What changed from LLM2Seq-v2
 
 ### Target-free prompt/source InfoNCE
@@ -149,10 +196,35 @@ bash run.sh hiroute --overwrite-output-dir
 bash run.sh smoke-single-bank --overwrite-output-dir
 bash run.sh single-bank --overwrite-output-dir
 
+# Native-bidirectional encoder smoke tests (run on the B200 host)
+bash run.sh smoke-pplx --overwrite-output-dir
+bash run.sh smoke-pplx-native --overwrite-output-dir
+bash run.sh smoke-nemotron --overwrite-output-dir
+bash run.sh smoke-nemotron-native --overwrite-output-dir
+
+# Verify the real checkpoint's dimensions, parameter budget, and future-token
+# influence before a full run. This command intentionally loads checkpoints.
+bash run.sh check-model --config configs/pplx_embed_v1_0_6b_hiroute.yaml
+bash run.sh check-model --config configs/nemotron3_embed_1b_hiroute.yaml
+
 # Held-out 2k pilot: same physical batch as main, then a matched single-bank
 # control. This is the fast decision gate before spending a full B200 run.
 bash run.sh pilot-all --overwrite-output-dir
 # Result: runs/llm2seq_v3/pilot_comparison.json
+
+# Rank the three HiRoute encoder systems on the same 512-example held-out slice
+bash run.sh encoder-pilot-all --overwrite-output-dir
+# Result: runs/llm2seq_v3/encoder_pilot_comparison.json
+
+# Decide whether HiRoute is worth its cost for already-bidirectional encoders
+bash run.sh pplx-pilot-all --overwrite-output-dir
+# Run the Nemotron pair only if PPLX does not already close the target gap
+bash run.sh nemotron-pilot-all --overwrite-output-dir
+
+# Or run both pairs sequentially so the B200 is never idle
+bash run.sh native-encoder-pilot-all --overwrite-output-dir
+# Results: pplx_hiroute_vs_native_light.json and
+#          nemotron_hiroute_vs_native_light.json
 
 # Evaluate existing checkpoint
 bash run.sh eval

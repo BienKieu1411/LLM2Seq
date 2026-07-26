@@ -10,8 +10,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from llm2seq_v3.adapter import StableTokenLayerFusion, SummaryAdapterV2
+from llm2seq_v3.architecture_check import probe_future_token_influence
 from llm2seq_v3.checkpoint import load_last_checkpoint, save_last_checkpoint
-from llm2seq_v3.config import load_config
+from llm2seq_v3.config import load_config, validate_config
 from llm2seq_v3.contrastive import (
     SourceAlignmentHead,
     hard_negative_indices,
@@ -28,6 +29,8 @@ from llm2seq_v3.decoder import (
     QwenCopiedCrossAttention,
     QwenDecoderLayerWithCrossAttention,
 )
+from llm2seq_v3.encoder import EmbeddingTokenEncoder, _config_is_bidirectional
+from llm2seq_v3.encoder_compare import compare_encoder_pilots
 from llm2seq_v3.final_audit import audit_final_claim
 from llm2seq_v3.metrics import rouge_scores
 from llm2seq_v3.model import LLM2SeqV3
@@ -37,13 +40,14 @@ from llm2seq_v3.smoke_gate import evaluate_smoke_run
 from llm2seq_v3.training import (
     _contrastive_scale,
     _parameter_component,
+    _tokenizers,
     build_optimizer,
     validation_loss,
     verify_declared_parameter_budget,
     verify_locked_data_manifest,
 )
 
-from llm2seq_v3.data import SummarizationDataset, decoder_seed_ids, greedy_evidence_labels
+from llm2seq_v3.data import SummarizationDataset, decoder_seed_ids, encode_source, greedy_evidence_labels
 
 
 def test_single_bank_control_is_v3_with_contrastive():
@@ -276,6 +280,225 @@ def test_hiroute_config_preserves_depth_routing():
     assert config["checkpoint"]["save_best"] is False
 
 
+def test_embedding_encoder_profiles_have_valid_depths_and_budgeted_shapes():
+    root = Path(__file__).parents[1]
+    pplx = load_config(root / "configs/pplx_embed_v1_0_6b_hiroute.yaml")
+    assert pplx["model"]["encoder_name"] == "perplexity-ai/pplx-embed-v1-0.6b"
+    assert pplx["model"]["encoder_hidden_size"] == 1024
+    assert pplx["model"]["encoder_num_hidden_layers"] == 28
+    assert pplx["model"]["encoder_attention_mode"] == "bidirectional"
+    assert pplx["model"]["encoder_trust_remote_code"] is True
+    assert pplx["model"]["encoder_revision"] == "2c4d510dd4a732063c31a0f70193e35067b51fd8"
+    assert pplx["objectives"]["contrastive_pooling"] == "mean"
+    assert pplx["data"]["source_prefix"] == ""
+    assert pplx["data"]["append_source_eos"] is False
+    assert pplx["data"]["source_add_special_tokens"] is True
+    assert pplx["adapter"]["lexical_layers"] == [-21, -17, -13, -9]
+    assert pplx["decoder"]["cross_attention_every"] == 1
+
+    nemotron = load_config(root / "configs/nemotron3_embed_1b_hiroute.yaml")
+    assert nemotron["model"]["encoder_name"] == "nvidia/Nemotron-3-Embed-1B-BF16"
+    assert nemotron["model"]["encoder_hidden_size"] == 2048
+    assert nemotron["model"]["encoder_num_hidden_layers"] == 16
+    assert nemotron["model"]["encoder_attention_mode"] == "bidirectional"
+    assert nemotron["model"]["encoder_trust_remote_code"] is False
+    assert nemotron["model"]["encoder_revision"] == "a5e0f804b9e90a1ca6784ecbf6e41595774fc834"
+    assert nemotron["objectives"]["contrastive_pooling"] == "mean"
+    assert nemotron["adapter"]["fuse_layers"] == [-1, -3, -6, -8]
+    assert nemotron["adapter"]["lexical_layers"] == [-12, -10, -8, -6]
+    assert nemotron["adapter"]["semantic_layers"] == [-1, -3, -6, -8]
+    assert nemotron["adapter"]["num_bidirectional_layers"] == 8
+    assert nemotron["decoder"]["cross_attention_every"] == 2
+    assert nemotron["data"]["source_prefix"] == "passage: "
+    assert nemotron["data"]["append_source_eos"] is False
+    assert nemotron["data"]["source_add_special_tokens"] is True
+
+    pplx_light = load_config(root / "configs/pplx_embed_v1_0_6b_native_light.yaml")
+    assert pplx_light["adapter"]["num_bidirectional_layers"] == 2
+    assert pplx_light["adapter"]["depth_routed_memory"] is False
+    assert pplx_light["adapter"]["hierarchical_sentence_context"] is True
+    assert pplx_light["decoder"]["memory_bank_count"] == 1
+    assert pplx_light["decoder"]["query_adaptive_routing"] is False
+
+    nemotron_light = load_config(root / "configs/nemotron3_embed_1b_native_light.yaml")
+    assert nemotron_light["adapter"]["num_bidirectional_layers"] == 2
+    assert nemotron_light["adapter"]["depth_routed_memory"] is False
+    assert nemotron_light["decoder"]["memory_bank_count"] == 1
+    assert nemotron_light["decoder"]["cross_attention_every"] == 2
+
+
+def test_config_rejects_encoder_layer_indices_outside_checkpoint_depth():
+    root = Path(__file__).parents[1]
+    config = load_config(root / "configs/nemotron3_embed_1b_hiroute.yaml")
+    config["adapter"]["lexical_layers"] = [-21]
+    with pytest.raises(ValueError, match="outside the encoder"):
+        validate_config(config)
+
+
+def test_embedding_attention_mode_detection_uses_explicit_checkpoint_flags():
+    assert _config_is_bidirectional(SimpleNamespace(use_bidirectional_attention=True)) is True
+    assert _config_is_bidirectional(SimpleNamespace(is_causal=False)) is True
+    assert _config_is_bidirectional(SimpleNamespace(is_causal=True)) is False
+
+
+def test_future_context_probe_distinguishes_causal_and_bidirectional_behavior():
+    class ToyCausalEncoder(nn.Module):
+        def forward(self, input_ids, attention_mask):
+            states = input_ids.float().unsqueeze(-1) * attention_mask.unsqueeze(-1)
+            return (states.cumsum(dim=1),)
+
+    class ToyBidirectionalEncoder(nn.Module):
+        def forward(self, input_ids, attention_mask):
+            states = input_ids.float().unsqueeze(-1) * attention_mask.unsqueeze(-1)
+            global_state = states.sum(dim=1, keepdim=True).expand_as(states)
+            return (global_state,)
+
+    input_ids = torch.tensor([[1, 2, 3, 4, 5]])
+    attention_mask = torch.ones_like(input_ids)
+    causal = probe_future_token_influence(
+        ToyCausalEncoder(),
+        input_ids,
+        attention_mask,
+        vocab_size=32,
+        pad_token_id=0,
+    )
+    bidirectional = probe_future_token_influence(
+        ToyBidirectionalEncoder(),
+        input_ids,
+        attention_mask,
+        vocab_size=32,
+        pad_token_id=0,
+    )
+    assert causal["relative_l2_change"] == 0.0
+    assert bidirectional["relative_l2_change"] > 1e-6
+
+
+def test_config_rejects_invalid_encoder_revision_controls():
+    root = Path(__file__).parents[1]
+    config = load_config(root / "configs/pplx_embed_v1_0_6b_hiroute.yaml")
+    config["model"]["encoder_revision"] = ""
+    with pytest.raises(ValueError, match="encoder_revision"):
+        validate_config(config)
+    config["model"]["encoder_revision"] = "2c4d510dd4a732063c31a0f70193e35067b51fd8"
+    config["model"]["encoder_trust_remote_code"] = "true"
+    with pytest.raises(ValueError, match="encoder_trust_remote_code"):
+        validate_config(config)
+
+    config = load_config(root / "configs/pplx_embed_v1_0_6b_hiroute.yaml")
+    config["data"]["append_source_eos"] = True
+    with pytest.raises(ValueError, match="cannot both be enabled"):
+        validate_config(config)
+
+
+def test_source_tokenizer_default_special_wrapper_preserves_unit_alignment():
+    class WrappedTokenizer:
+        eos_token_id = 2
+
+        def __call__(self, text, add_special_tokens=False):
+            ids = [10 + (ord(char) % 17) for char in str(text) if not char.isspace()]
+            if add_special_tokens:
+                ids = [1, *ids, 2]
+            return {"input_ids": ids}
+
+        def decode(self, ids, skip_special_tokens=True):
+            del skip_special_tokens
+            return " ".join(str(value) for value in ids)
+
+    ids, unit_ids, units = encode_source(
+        WrappedTokenizer(),
+        "Câu thứ nhất. Câu thứ hai.",
+        {
+            "source_prefix": "passage: ",
+            "source_add_special_tokens": True,
+            "append_source_eos": False,
+            "sentence_separator": "\n",
+            "max_source_length": 64,
+        },
+    )
+    assert ids[0] == 1
+    assert ids[-1] == 2
+    assert unit_ids[0] == 0
+    assert unit_ids[-1] == 0
+    assert len(ids) == len(unit_ids)
+    assert len(units) == 2
+    assert any(value == 1 for value in unit_ids)
+    assert any(value == 2 for value in unit_ids)
+
+
+def test_encoder_revision_is_forwarded_to_config_weights_and_tokenizer(monkeypatch):
+    import transformers
+
+    calls = []
+    fake_config = SimpleNamespace(
+        hidden_size=8,
+        num_hidden_layers=2,
+        vocab_size=32,
+        use_bidirectional_attention=True,
+        use_cache=True,
+    )
+
+    class FakeBackbone(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = fake_config
+
+        def forward(self, input_ids, attention_mask, **kwargs):
+            del kwargs
+            hidden = input_ids.float().unsqueeze(-1).expand(-1, -1, 8)
+            hidden = hidden * attention_mask.unsqueeze(-1)
+            return SimpleNamespace(hidden_states=(hidden, hidden, hidden))
+
+    class FakeTokenizer:
+        pad_token_id = 0
+        eos_token_id = 1
+        padding_side = "left"
+
+    def fake_config_load(name, **kwargs):
+        calls.append(("config", name, kwargs))
+        return fake_config
+
+    def fake_model_load(name, **kwargs):
+        calls.append(("model", name, kwargs))
+        return FakeBackbone()
+
+    def fake_tokenizer_load(name, **kwargs):
+        calls.append(("tokenizer", name, kwargs))
+        return FakeTokenizer()
+
+    monkeypatch.setattr(transformers.AutoConfig, "from_pretrained", staticmethod(fake_config_load))
+    monkeypatch.setattr(transformers.AutoModel, "from_pretrained", staticmethod(fake_model_load))
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", staticmethod(fake_tokenizer_load))
+
+    encoder = EmbeddingTokenEncoder(
+        "encoder-id",
+        torch.float32,
+        False,
+        expected_hidden_layers=2,
+        expected_attention_mode="bidirectional",
+        trust_remote_code=True,
+        revision="fixed-revision",
+    )
+    assert encoder.revision == "fixed-revision"
+    config = {
+        "model": {
+            "encoder_name": "encoder-id",
+            "encoder_trust_remote_code": True,
+            "encoder_revision": "fixed-revision",
+            "decoder_name": "decoder-id",
+        }
+    }
+    encoder_tokenizer, decoder_tokenizer = _tokenizers(config)
+    assert encoder_tokenizer.padding_side == "right"
+    assert decoder_tokenizer.padding_side == "right"
+
+    config_call = next(call for call in calls if call[0] == "config")
+    model_call = next(call for call in calls if call[0] == "model")
+    encoder_tokenizer_call = next(call for call in calls if call[0] == "tokenizer" and call[1] == "encoder-id")
+    for call in (config_call, model_call, encoder_tokenizer_call):
+        assert call[2]["revision"] == "fixed-revision"
+        assert call[2]["trust_remote_code"] is True
+
+
 def test_pilot_control_changes_only_hiroute_memory_components():
     root = Path(__file__).parents[1]
     main = load_config(root / "configs/pilot_hiroute_2000.yaml")
@@ -380,6 +603,87 @@ def test_pilot_comparison_rejects_different_test_rows(tmp_path: Path):
     assert result["recommend_full_hiroute_run"] is False
 
 
+def test_encoder_pilot_comparison_ranks_only_healthy_comparable_runs(tmp_path: Path):
+    fingerprint = {"num_examples": 512, "sha256": "a" * 64}
+    runs = {}
+    for label, encoder, rouge2 in (
+        ("qwen3", "Qwen/Qwen3-Embedding-0.6B", 19.0),
+        ("pplx", "perplexity-ai/pplx-embed-v1-0.6b", 21.0),
+        ("nemotron", "nvidia/Nemotron-3-Embed-1B-BF16", 20.0),
+    ):
+        run_dir = tmp_path / label
+        run_dir.mkdir()
+        runs[label] = run_dir
+        (run_dir / "last_test_predictions.metrics.json").write_text(
+            json.dumps(
+                {
+                    "num_examples": 512,
+                    "rouge1": rouge2 + 20.0,
+                    "rouge2": rouge2,
+                    "rougeL": rouge2 + 19.0,
+                    "empty_prediction_rate": 0.0,
+                    "checkpoint_parameters_match_model": True,
+                    "parameter_budget_reached": True,
+                    "test_data_fingerprint": fingerprint,
+                    "encoder_name": encoder,
+                    "decoder_name": "Qwen/Qwen3-0.6B",
+                    "rouge_backend": "rouge==1.0.0 (diagnostic)",
+                    "deployable_parameters": 1_500_000_000,
+                    "training_parameters": 1_501_000_000,
+                    "parameter_target_declared": 2_000_000_000,
+                    "memory_bank_count": 3,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "validation_history.jsonl").write_text(
+            json.dumps(
+                {
+                    "epoch": 6,
+                    "eval_examples": 256,
+                    "eval_cross_residual_ratio": 0.03,
+                    "eval_prompt_retrieval_accuracy": 0.2,
+                    "eval_source_swap_accuracy": 0.8,
+                    "eval_source_swap_nll_gap": 0.2,
+                    "eval_memory_routing_entropy": 0.9,
+                    "eval_memory_route_lexical": 0.3,
+                    "eval_memory_route_semantic": 0.35,
+                    "eval_memory_route_summary": 0.35,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    result = compare_encoder_pilots(runs)
+    assert result["comparable"] is True
+    assert result["ranking_by_rouge2_then_rouge1_rougeL"] == ["pplx", "nemotron", "qwen3"]
+    assert result["recommended_for_full_run"] == "pplx"
+
+    # Exact-zero collapsed routes must not make a declared three-bank system
+    # look like a healthy single-bank model.
+    (runs["qwen3"] / "validation_history.jsonl").write_text(
+        json.dumps(
+            {
+                "epoch": 6,
+                "eval_examples": 256,
+                "eval_cross_residual_ratio": 0.03,
+                "eval_prompt_retrieval_accuracy": 0.2,
+                "eval_source_swap_accuracy": 0.8,
+                "eval_source_swap_nll_gap": 0.2,
+                "eval_memory_routing_entropy": 0.0,
+                "eval_memory_route_lexical": 0.0,
+                "eval_memory_route_semantic": 0.0,
+                "eval_memory_route_summary": 1.0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    collapsed = compare_encoder_pilots(runs)
+    assert collapsed["runs"]["qwen3"]["health_gates"]["router_not_collapsed"] is False
+    assert "qwen3" not in collapsed["ranking_by_rouge2_then_rouge1_rougeL"]
+
+
 def _write_smoke_artifacts(
     run_dir: Path,
     *,
@@ -388,6 +692,7 @@ def _write_smoke_artifacts(
     source_swap_accuracy: float = 0.60,
     source_swap_nll_gap: float = 0.1,
     training_parameters: int = 1_528_477_089,
+    memory_bank_count: int = 3,
 ) -> None:
     run_dir.mkdir()
     (run_dir / "last.pt").touch()
@@ -407,7 +712,8 @@ def _write_smoke_artifacts(
                 "checkpoint_parameters_match_model": True,
                 "parameter_budget_reached": True,
                 "source_swap": True,
-                "query_adaptive_routing": True,
+                "query_adaptive_routing": memory_bank_count > 1,
+                "memory_bank_count": memory_bank_count,
                 "deployable_parameters": 1_527_949_729,
                 "training_parameters": training_parameters,
                 "parameter_target_declared": 2_000_000_000,
@@ -426,11 +732,11 @@ def _write_smoke_artifacts(
                 "eval_prompt_retrieval_accuracy": 0.25,
                 "eval_source_swap_accuracy": source_swap_accuracy,
                 "eval_source_swap_nll_gap": source_swap_nll_gap,
-                "eval_memory_routing_entropy": 0.9,
-                "eval_adaptive_routing_delta": 0.01,
-                "eval_memory_route_lexical": 0.30,
-                "eval_memory_route_semantic": 0.35,
-                "eval_memory_route_summary": 0.35,
+                "eval_memory_routing_entropy": 0.9 if memory_bank_count > 1 else 0.0,
+                "eval_adaptive_routing_delta": 0.01 if memory_bank_count > 1 else 0.0,
+                "eval_memory_route_lexical": 0.30 if memory_bank_count > 1 else 0.0,
+                "eval_memory_route_semantic": 0.35 if memory_bank_count > 1 else 0.0,
+                "eval_memory_route_summary": 0.35 if memory_bank_count > 1 else 1.0,
             }
         )
         + "\n",
@@ -444,6 +750,16 @@ def test_smoke_gate_accepts_flow_but_makes_no_generalization_claim(tmp_path: Pat
     result = evaluate_smoke_run(run_dir)
     assert result["passed"] is True
     assert "not a generalization" in result["scope"]
+
+
+def test_smoke_gate_accepts_single_bank_without_router_collapse_gate(tmp_path: Path):
+    run_dir = tmp_path / "single_bank"
+    _write_smoke_artifacts(run_dir, memory_bank_count=1)
+    result = evaluate_smoke_run(run_dir)
+    assert result["passed"] is True
+    assert result["memory_bank_count"] == 1
+    assert "router_not_collapsed" not in result["gates"]
+    assert result["mean_routes"] == {"summary": 1.0}
 
 
 def test_smoke_gate_rejects_disconnected_cross_attention_and_prefix_collapse(tmp_path: Path):
@@ -678,6 +994,16 @@ def test_hard_source_negatives_are_non_self_and_choose_nearest_document():
     assert indices[1].item() == 0
     assert torch.all(indices != torch.arange(3))
     assert torch.isfinite(similarities).all()
+
+
+def test_source_mining_respects_embedding_encoder_pooling_recipe():
+    memory = torch.tensor([[[1.0, 0.0], [1.0, 0.0], [0.0, 6.0]]])
+    mask = torch.ones(1, 3, dtype=torch.long)
+    mean = source_memory_for_mining(memory, mask, pooling="mean")
+    mean_last = source_memory_for_mining(memory, mask, pooling="mean_last")
+    assert not torch.allclose(mean, mean_last)
+    with pytest.raises(ValueError, match="pooling"):
+        source_memory_for_mining(memory, mask, pooling="unsupported")
 
 
 def test_last_prompt_states_exclude_teacher_forced_target_content():
@@ -922,6 +1248,7 @@ def _tiny_full_objective_model() -> LLM2SeqV3:
     model.source_swap_margin = 0.2
     model.source_swap_temperature = 1.0
     model.source_swap_strategy = "hard_in_batch"
+    model.contrastive_pooling = "mean_last"
     model.routing_balance_weight = 0.01
     model.label_smoothing = 0.1
     model._stage = "full_finetune"

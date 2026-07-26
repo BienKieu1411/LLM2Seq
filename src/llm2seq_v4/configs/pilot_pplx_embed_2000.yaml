@@ -1,0 +1,17 @@
+_base_: pplx_embed_v1_0_6b_psb.yaml
+
+experiment:
+  name: llm2seq_v4_pilot_pplx_embed_2000
+  output_dir: runs/llm2seq_v4/pilot_pplx_embed_2000
+
+training:
+  interface_warmup_epochs: 2
+  full_finetune_epochs: 4
+  validation_every_epochs: 1
+  validation_max_examples: 512
+
+limits:
+  max_train_examples: 2000
+  max_validation_examples: 512
+  max_test_examples: 512
+

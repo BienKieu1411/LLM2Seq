@@ -112,7 +112,12 @@ def _tokenizers(config: Dict[str, Any]) -> Tuple[Any, Any]:
     from transformers import AutoTokenizer
 
     model = config["model"]
-    encoder = AutoTokenizer.from_pretrained(model["encoder_name"], trust_remote_code=True)
+    encoder_kwargs: Dict[str, Any] = {
+        "trust_remote_code": bool(model.get("encoder_trust_remote_code", True)),
+    }
+    if model.get("encoder_revision") is not None:
+        encoder_kwargs["revision"] = str(model["encoder_revision"])
+    encoder = AutoTokenizer.from_pretrained(model["encoder_name"], **encoder_kwargs)
     decoder = AutoTokenizer.from_pretrained(model["decoder_name"], trust_remote_code=True)
     for tokenizer in (encoder, decoder):
         if tokenizer.pad_token_id is None:

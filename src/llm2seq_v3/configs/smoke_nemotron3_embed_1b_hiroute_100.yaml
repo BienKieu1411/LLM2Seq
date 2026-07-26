@@ -1,0 +1,24 @@
+_base_: nemotron3_embed_1b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v3_smoke_nemotron3_embed_1b_hiroute_100
+  output_dir: runs/llm2seq_v3/smoke_nemotron3_embed_1b_hiroute_100
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 2
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  num_workers: 0
+  validation_batch_size: 4
+  validation_num_workers: 0
+  validation_every_epochs: 1
+
+generation:
+  batch_size: 4
+
+limits:
+  max_train_examples: 100
+  max_validation_examples: 20
+  max_test_examples: 20
+

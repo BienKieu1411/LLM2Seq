@@ -1,0 +1,8 @@
+_base_: ../qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v4_adapter_4layers
+  output_dir: runs/llm2seq_v4/ablations/adapter_4layers
+
+adapter:
+  num_bidirectional_layers: 4

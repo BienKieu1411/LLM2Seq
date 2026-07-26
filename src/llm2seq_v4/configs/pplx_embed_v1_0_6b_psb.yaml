@@ -1,0 +1,25 @@
+_base_: base.yaml
+
+experiment:
+  name: llm2seq_v4_pplx_embed_v1_0_6b_psb
+  output_dir: runs/llm2seq_v4/pplx_embed_v1_0_6b_psb
+
+model:
+  encoder_name: perplexity-ai/pplx-embed-v1-0.6b
+  encoder_attention_mode: bidirectional
+  encoder_num_hidden_layers: 28
+  encoder_trust_remote_code: true
+  encoder_revision: 2c4d510dd4a732063c31a0f70193e35067b51fd8
+
+adapter:
+  # PPLX already supplies global bidirectional context. One task refiner plus
+  # the two summary-planner blocks avoids relearning its encoder geometry.
+  num_bidirectional_layers: 1
+
+objectives:
+  contrastive_pooling: mean
+
+data:
+  source_prefix: ""
+  append_source_eos: false
+  source_add_special_tokens: true

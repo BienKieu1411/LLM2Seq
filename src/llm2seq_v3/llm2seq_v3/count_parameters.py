@@ -13,20 +13,36 @@ from .config import load_config
 from .contrastive import SourceAlignmentHead
 
 
-def _model_from_config(name: str, causal_lm: bool):
+def _model_from_config(
+    name: str,
+    causal_lm: bool,
+    *,
+    trust_remote_code: bool = True,
+    revision: str | None = None,
+):
     from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
 
-    config = AutoConfig.from_pretrained(name, trust_remote_code=True)
+    pretrained_kwargs: Dict[str, Any] = {
+        "trust_remote_code": bool(trust_remote_code),
+    }
+    if revision is not None:
+        pretrained_kwargs["revision"] = str(revision)
+    config = AutoConfig.from_pretrained(name, **pretrained_kwargs)
     cls = AutoModelForCausalLM if causal_lm else AutoModel
     with torch.device("meta"):
-        model = cls.from_config(config, trust_remote_code=True)
+        model = cls.from_config(config, trust_remote_code=bool(trust_remote_code))
     return model, config
 
 
 def count(config_path: str) -> Dict[str, Any]:
     config = load_config(config_path)
     model_config = config["model"]
-    encoder, encoder_config = _model_from_config(model_config["encoder_name"], False)
+    encoder, encoder_config = _model_from_config(
+        model_config["encoder_name"],
+        False,
+        trust_remote_code=bool(model_config.get("encoder_trust_remote_code", True)),
+        revision=(str(model_config["encoder_revision"]) if model_config.get("encoder_revision") is not None else None),
+    )
     decoder, decoder_config = _model_from_config(model_config["decoder_name"], True)
     encoder_parameters = sum(parameter.numel() for parameter in encoder.parameters())
     decoder_parameters = sum(parameter.numel() for parameter in decoder.parameters())
@@ -80,6 +96,7 @@ def count(config_path: str) -> Dict[str, Any]:
     result = {
         "config": config_path,
         "encoder_name": model_config["encoder_name"],
+        "encoder_revision": model_config.get("encoder_revision"),
         "decoder_name": model_config["decoder_name"],
         "encoder_parameters": encoder_parameters,
         "adapter_parameters": adapter_parameters,

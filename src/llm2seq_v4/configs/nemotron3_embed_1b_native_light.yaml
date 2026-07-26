@@ -1,0 +1,19 @@
+_base_: nemotron3_embed_1b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v4_nemotron3_embed_1b_native_light
+  output_dir: runs/llm2seq_v4/nemotron3_embed_1b_native_light
+
+adapter:
+  # The encoder is already bidirectional and substantially larger than the
+  # decoder. Two summary-specialization blocks avoid redundant refinement.
+  num_bidirectional_layers: 2
+  depth_routed_memory: false
+  branch_global_context: false
+
+decoder:
+  memory_bank_count: 1
+  query_adaptive_routing: false
+
+objectives:
+  routing_balance_weight: 0.0

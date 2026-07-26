@@ -1,0 +1,5 @@
+_base_: base.yaml
+
+experiment:
+  name: llm2seq_v4_qwen3_embedding_0_6b_to_qwen3_0_6b
+  output_dir: runs/llm2seq_v4/qwen3_embedding_0_6b_to_qwen3_0_6b

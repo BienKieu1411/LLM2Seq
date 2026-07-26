@@ -1,0 +1,49 @@
+_base_: qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v4_nemotron3_embed_1b_hiroute
+  output_dir: runs/llm2seq_v4/nemotron3_embed_1b_hiroute
+
+model:
+  # NVIDIA's 16-layer, 2048-wide Ministral-derived bidirectional encoder.
+  encoder_name: nvidia/Nemotron-3-Embed-1B-BF16
+  encoder_hidden_size: 2048
+  encoder_num_hidden_layers: 16
+  encoder_attention_mode: bidirectional
+  encoder_attn_implementation: sdpa
+  encoder_trust_remote_code: false
+  encoder_revision: a5e0f804b9e90a1ca6784ecbf6e41595774fc834
+
+adapter:
+  # Preserve approximately the same relative encoder depths as the 28-layer
+  # profile. AutoModel returns the embedding output plus 16 layer outputs.
+  fuse_layers: [-1, -3, -6, -8]
+  lexical_layers: [-12, -10, -8, -6]
+  semantic_layers: [-1, -3, -6, -8]
+
+  # Keep the same task-refinement capacity as the main HiRoute profile. The
+  # cross-attention stride below is what keeps the complete graph below 2B.
+  num_bidirectional_layers: 8
+
+decoder:
+  # A full 28-layer cross-attention stack would push the 1.14B encoder profile
+  # beyond the declared 2B comparison budget. Fourteen evenly-spaced cross
+  # layers retain deep source access; runtime parameter preflight is exact.
+  cross_attention_every: 2
+
+training:
+  # The larger retrieval encoder receives a slightly more conservative LR.
+  full_encoder_lr: 8.0e-6
+
+objectives:
+  # Nemotron 3 Embed exposes pooling=avg in its checkpoint config.
+  contrastive_pooling: mean
+
+data:
+  # Use the document-side role prefix from NVIDIA's retrieval recipe exactly;
+  # the decoder already carries the summarization instruction.
+  source_prefix: "passage: "
+  append_source_eos: false
+  # NVIDIA's official Transformers recipe calls the tokenizer with its
+  # default add_special_tokens=True behavior.
+  source_add_special_tokens: true

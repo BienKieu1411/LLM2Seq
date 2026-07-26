@@ -19,7 +19,7 @@ from .contrastive import (
     source_swap_contrastive_loss,
 )
 from .decoder import PretrainedQwenDecoder
-from .encoder import QwenEmbeddingEncoder
+from .encoder import EmbeddingTokenEncoder
 
 
 def torch_dtype(name: str) -> torch.dtype:
@@ -34,7 +34,7 @@ def torch_dtype(name: str) -> torch.dtype:
 
 
 class LLM2SeqV3(nn.Module):
-    """Qwen3-Embedding -> bidirectional adapter -> Qwen3 decoder.
+    """Embedding token encoder -> bidirectional adapter -> Qwen3 decoder.
 
     Extends LLM2Seq-v2 with:
     - Source-summary alignment contrastive learning (InfoNCE)
@@ -50,10 +50,21 @@ class LLM2SeqV3(nn.Module):
         fallback_hidden = int(model_config.get("hidden_size", 1024))
         encoder_hidden_size = int(model_config.get("encoder_hidden_size", fallback_hidden))
         decoder_hidden_size = int(model_config.get("decoder_hidden_size", fallback_hidden))
-        self.encoder = QwenEmbeddingEncoder(
+        self.encoder = EmbeddingTokenEncoder(
             str(model_config["encoder_name"]),
             dtype,
             gradient_checkpointing,
+            attn_implementation=str(model_config.get("encoder_attn_implementation", "sdpa")),
+            expected_hidden_layers=(
+                int(model_config["encoder_num_hidden_layers"])
+                if model_config.get("encoder_num_hidden_layers") is not None
+                else None
+            ),
+            expected_attention_mode=str(model_config.get("encoder_attention_mode", "auto")),
+            trust_remote_code=bool(model_config.get("encoder_trust_remote_code", True)),
+            revision=(
+                str(model_config["encoder_revision"]) if model_config.get("encoder_revision") is not None else None
+            ),
         )
         if self.encoder.hidden_size != encoder_hidden_size:
             raise ValueError(
@@ -94,6 +105,7 @@ class LLM2SeqV3(nn.Module):
         self.source_swap_margin = float(objectives.get("source_swap_margin", 0.2))
         self.source_swap_temperature = float(objectives.get("source_swap_temperature", 1.0))
         self.source_swap_strategy = str(objectives.get("source_swap_strategy", "hard_in_batch"))
+        self.contrastive_pooling = str(objectives.get("contrastive_pooling", "mean_last"))
         self.routing_balance_weight = float(objectives.get("routing_balance_weight", 0.0))
         self.label_smoothing = float(objectives.get("label_smoothing", 0.1))
 
@@ -216,6 +228,7 @@ class LLM2SeqV3(nn.Module):
                         adapter_output.memory.detach(),
                         adapter_output.memory_mask,
                         bank_weights=positive_routing.detach() if adapter_output.memory.ndim == 4 else None,
+                        pooling=self.contrastive_pooling,
                     )
                     permutation, selected_similarity = hard_negative_indices(source_repr)
                     source_swap_negative_similarity = selected_similarity.mean().to(decoder_states.dtype)

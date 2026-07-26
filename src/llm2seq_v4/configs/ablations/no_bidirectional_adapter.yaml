@@ -1,0 +1,9 @@
+_base_: ../qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v4_no_bidirectional_adapter
+  output_dir: runs/llm2seq_v4/ablations/no_bidirectional_adapter
+
+adapter:
+  num_bidirectional_layers: 0
+  hierarchical_sentence_context: false

@@ -1,0 +1,9 @@
+_base_: ../qwen3_embedding_0_6b_psb.yaml
+
+experiment:
+  name: llm2seq_v4_ablation_cross_gate_0_30
+  output_dir: runs/llm2seq_v4/ablations/cross_gate_0_30
+
+decoder:
+  cross_gate_init: 0.30
+

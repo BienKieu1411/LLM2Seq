@@ -1,4 +1,4 @@
-"""Load the real 0.6B+0.6B graph and verify its architectural invariants (v3)."""
+"""Load a real LLM2Seq-v3 graph and verify its architectural invariants."""
 
 from __future__ import annotations
 
@@ -16,17 +16,86 @@ from .training import _tokenizers, verify_declared_parameter_budget
 
 
 @torch.inference_mode()
+def probe_future_token_influence(
+    encoder: torch.nn.Module,
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    *,
+    vocab_size: int,
+    pad_token_id: int | None = None,
+) -> dict:
+    """Measure whether changing a later token alters an earlier token state.
+
+    Config flags are useful but not sufficient for custom Hub code. This
+    behavioral probe catches an accidentally causal attention mask while
+    preserving sequence length and every attention-mask position.
+    """
+
+    if input_ids.ndim != 2 or input_ids.shape[0] != 1:
+        raise ValueError("Future-context probe requires input_ids shaped [1, sequence]")
+    if attention_mask.shape != input_ids.shape:
+        raise ValueError("Future-context probe mask must match input_ids")
+    valid_positions = torch.nonzero(attention_mask[0].bool(), as_tuple=False).flatten()
+    if valid_positions.numel() < 4:
+        raise ValueError("Future-context probe requires at least four unmasked tokens")
+    query_position = int(valid_positions[1])
+    changed_position = int(valid_positions[-2])
+    if changed_position <= query_position:
+        query_position = int(valid_positions[0])
+        changed_position = int(valid_positions[-1])
+    if changed_position <= query_position:
+        raise ValueError("Could not choose ordered query/change positions for future-context probe")
+    if vocab_size <= 1:
+        raise ValueError("Future-context probe requires a vocabulary larger than one token")
+
+    changed_ids = input_ids.clone()
+    original_id = int(changed_ids[0, changed_position])
+    replacement_id = (original_id + 1) % int(vocab_size)
+    forbidden = {original_id}
+    if pad_token_id is not None:
+        forbidden.add(int(pad_token_id))
+    while replacement_id in forbidden:
+        replacement_id = (replacement_id + 1) % int(vocab_size)
+    changed_ids[0, changed_position] = replacement_id
+
+    was_training = encoder.training
+    encoder.eval()
+    try:
+        original_states = encoder(input_ids, attention_mask)[-1]
+        changed_states = encoder(changed_ids, attention_mask)[-1]
+    finally:
+        encoder.train(was_training)
+    original_query = original_states[0, query_position].float()
+    changed_query = changed_states[0, query_position].float()
+    absolute_l2 = torch.linalg.vector_norm(changed_query - original_query)
+    relative_l2 = absolute_l2 / torch.linalg.vector_norm(original_query).clamp_min(1e-12)
+    return {
+        "query_position": query_position,
+        "changed_position": changed_position,
+        "original_token_id": original_id,
+        "replacement_token_id": replacement_id,
+        "absolute_l2_change": float(absolute_l2),
+        "relative_l2_change": float(relative_l2),
+    }
+
+
+@torch.inference_mode()
 def check(config_path: str) -> dict:
     config = load_config(config_path)
     encoder_tokenizer, decoder_tokenizer = _tokenizers(config)
-    model = LLM2SeqV3(config).eval()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = LLM2SeqV3(config).to(device).eval()
     parameter_summary = model.parameter_summary()
     parameter_budget = verify_declared_parameter_budget(config, parameter_summary)
     cross_layers = [
         layer for layer in model.decoder.backbone.layers if isinstance(layer, QwenDecoderLayerWithCrossAttention)
     ]
-    expected_cross = len(model.decoder.backbone.layers)
-    if int(config["decoder"].get("cross_attention_every", 1)) == 1 and len(cross_layers) != expected_cross:
+    decoder_layer_count = len(model.decoder.backbone.layers)
+    cross_every = int(config["decoder"].get("cross_attention_every", 1))
+    expected_cross = sum(
+        (index + 1) % cross_every == 0 or index == decoder_layer_count - 1 for index in range(decoder_layer_count)
+    )
+    if len(cross_layers) != expected_cross:
         raise RuntimeError(f"Expected cross-attention in {expected_cross} layers, found {len(cross_layers)}")
     if bool(config["decoder"].get("initialize_cross_from_self", True)):
         first = cross_layers[0]
@@ -81,6 +150,22 @@ def check(config_path: str) -> dict:
         "Mở cài đặt. Chọn mục hệ thống. Khởi động lại thiết bị.",
         {**config["data"], "max_source_length": 64},
     )
+    source_tensor = torch.tensor([source_ids], dtype=torch.long, device=device)
+    source_mask = torch.ones_like(source_tensor)
+    future_context_probe = probe_future_token_influence(
+        model.encoder,
+        source_tensor,
+        source_mask,
+        vocab_size=int(model.encoder.config.vocab_size),
+        pad_token_id=encoder_tokenizer.pad_token_id,
+    )
+    attention_mode = str(config["model"].get("encoder_attention_mode", "auto"))
+    min_future_change = float(config["model"].get("encoder_future_context_min_relative_change", 1e-6))
+    if attention_mode == "bidirectional" and (future_context_probe["relative_l2_change"] <= min_future_change):
+        raise RuntimeError(
+            "Encoder is declared bidirectional, but changing a future token did not "
+            f"change an earlier final-layer state enough: {future_context_probe}"
+        )
     alternate_source_ids, alternate_unit_ids, _ = encode_source(
         encoder_tokenizer,
         "Đun sôi nước. Cho trà vào cốc. Rót nước và chờ ba phút.",
@@ -90,12 +175,12 @@ def check(config_path: str) -> dict:
     target = decoder_tokenizer("Khởi động lại thiết bị.", add_special_tokens=False)["input_ids"]
     if decoder_tokenizer.eos_token_id is not None:
         target = [*target, decoder_tokenizer.eos_token_id]
-    decoder_input = torch.tensor([seed + target[:-1]], dtype=torch.long)
-    labels = torch.tensor([[-100] * (len(seed) - 1) + target], dtype=torch.long)
+    decoder_input = torch.tensor([seed + target[:-1]], dtype=torch.long, device=device)
+    labels = torch.tensor([[-100] * (len(seed) - 1) + target], dtype=torch.long, device=device)
     output = model(
-        input_ids=torch.tensor([source_ids], dtype=torch.long),
-        attention_mask=torch.ones(1, len(source_ids), dtype=torch.long),
-        unit_ids=torch.tensor([unit_ids], dtype=torch.long),
+        input_ids=source_tensor,
+        attention_mask=source_mask,
+        unit_ids=torch.tensor([unit_ids], dtype=torch.long, device=device),
         decoder_input_ids=decoder_input,
         decoder_attention_mask=torch.ones_like(decoder_input),
         labels=labels,
@@ -103,9 +188,9 @@ def check(config_path: str) -> dict:
     if not torch.isfinite(output["loss"]):
         raise RuntimeError("Real-model architecture check produced a non-finite loss")
     encoded = model.encode(
-        input_ids=torch.tensor([source_ids], dtype=torch.long),
-        attention_mask=torch.ones(1, len(source_ids), dtype=torch.long),
-        unit_ids=torch.tensor([unit_ids], dtype=torch.long),
+        input_ids=source_tensor,
+        attention_mask=source_mask,
+        unit_ids=torch.tensor([unit_ids], dtype=torch.long, device=device),
     )
     expected_banks = int(config["decoder"].get("memory_bank_count", 1))
     actual_banks = int(encoded.memory.shape[1]) if encoded.memory.ndim == 4 else 1
@@ -123,9 +208,9 @@ def check(config_path: str) -> dict:
         raise RuntimeError(f"Cross-attention cached {cached_banks} banks, expected {expected_cached_banks}")
     generated = generate(
         model,
-        input_ids=torch.tensor([source_ids], dtype=torch.long),
-        attention_mask=torch.ones(1, len(source_ids), dtype=torch.long),
-        unit_ids=torch.tensor([unit_ids], dtype=torch.long),
+        input_ids=source_tensor,
+        attention_mask=source_mask,
+        unit_ids=torch.tensor([unit_ids], dtype=torch.long, device=device),
         decoder_seed=seed,
         max_new_tokens=2,
         min_new_tokens=0,
@@ -147,13 +232,14 @@ def check(config_path: str) -> dict:
         (2, source_width),
         int(encoder_tokenizer.pad_token_id),
         dtype=torch.long,
+        device=device,
     )
-    training_mask = torch.zeros(2, source_width, dtype=torch.long)
-    training_units = torch.zeros(2, source_width, dtype=torch.long)
+    training_mask = torch.zeros(2, source_width, dtype=torch.long, device=device)
+    training_units = torch.zeros(2, source_width, dtype=torch.long, device=device)
     for row, (ids, units) in enumerate(((source_ids, unit_ids), (alternate_source_ids, alternate_unit_ids))):
-        training_input[row, : len(ids)] = torch.tensor(ids, dtype=torch.long)
+        training_input[row, : len(ids)] = torch.tensor(ids, dtype=torch.long, device=device)
         training_mask[row, : len(ids)] = 1
-        training_units[row, : len(units)] = torch.tensor(units, dtype=torch.long)
+        training_units[row, : len(units)] = torch.tensor(units, dtype=torch.long, device=device)
     if hasattr(model.encoder.model, "gradient_checkpointing_disable"):
         model.encoder.model.gradient_checkpointing_disable()
     if hasattr(model.decoder.backbone, "gradient_checkpointing_disable"):
@@ -164,7 +250,7 @@ def check(config_path: str) -> dict:
         attention_mask=training_mask,
         unit_ids=training_units,
         decoder_input_ids=decoder_input.expand(2, -1).clone(),
-        decoder_attention_mask=torch.ones(2, decoder_input.shape[1], dtype=torch.long),
+        decoder_attention_mask=torch.ones_like(decoder_input.expand(2, -1)),
         labels=labels.expand(2, -1).clone(),
     )
     objective_names = (
@@ -182,7 +268,7 @@ def check(config_path: str) -> dict:
         attention_mask=training_mask,
         unit_ids=training_units,
         decoder_input_ids=decoder_input.expand(2, -1).clone(),
-        decoder_attention_mask=torch.ones(2, decoder_input.shape[1], dtype=torch.long),
+        decoder_attention_mask=torch.ones_like(decoder_input.expand(2, -1)),
         labels=labels.expand(2, -1).clone(),
         compute_source_diagnostics=True,
     )
@@ -206,10 +292,20 @@ def check(config_path: str) -> dict:
     summary = {
         **parameter_summary,
         "parameter_budget": parameter_budget,
+        "device": str(device),
         "encoder_vocab_config": int(model.encoder.config.vocab_size),
         "decoder_vocab_config": int(model.decoder.config.vocab_size),
         "encoder_tokenizer_size": len(encoder_tokenizer),
         "decoder_tokenizer_size": len(decoder_tokenizer),
+        "encoder_source_add_special_tokens": bool(config["data"].get("source_add_special_tokens", False)),
+        "encoder_source_special_wrapper": getattr(
+            encoder_tokenizer,
+            "_llm2seq_v3_default_special_wrapper",
+            ([], []),
+        ),
+        "encoder_attention_mode_declared": attention_mode,
+        "encoder_future_context_probe": future_context_probe,
+        "encoder_future_context_min_relative_change": min_future_change,
         "cross_attention_layers": len(cross_layers),
         "bidirectional_adapter_layers": len(model.adapter.bidirectional_layers),
         "copied_cross_attention": bool(config["decoder"].get("initialize_cross_from_self", True)),

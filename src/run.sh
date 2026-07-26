@@ -77,6 +77,17 @@ run_llm2seq_v3() {
   bash llm2seq_v3/run.sh "${args[@]}"
 }
 
+run_llm2seq_v4() {
+  local mode="$1"
+  local -a args
+  echo "=== LLM2Seq-v4 PSB: ${mode} ==="
+  args=("${mode}")
+  if [[ "${OVERWRITE_LLM2SEQ_V4:-false}" =~ ^(true|1|yes)$ ]]; then
+    args+=(--overwrite-output-dir)
+  fi
+  bash llm2seq_v4/run.sh "${args[@]}"
+}
+
 run_paper_sequence() {
   # Fail-fast order for the B200 allocation:
   # CNN/DailyMail runs separately via run_cnndm_t5gemma.sh on another GPU.
@@ -268,6 +279,16 @@ Modes:
               Compare two completed v3 pilot runs without retraining.
   llm2seq-v3-ablation-all
               Run all registered v3 ablations, each followed by evaluation.
+  llm2seq-v4-test
+              Run all V4 synthetic checks offline; never download a model.
+  llm2seq-v4-smoke
+              Train/evaluate the 100-example Prospective Summary Bridge flow.
+  llm2seq-v4-pilot
+              Run the decisive 2k/512 held-out V4 pilot.
+  llm2seq-v4
+              Full Qwen3-Embedding 0.6B -> Qwen3 0.6B V4, then last.pt eval.
+  llm2seq-v4-pilot-ablation-all
+              Run main plus four decisive matched V4 pilot ablations.
   compare     Compare both GenBridge checkpoints with T5Gemma.
   compare-4b  Compare both GenBridge checkpoints with T5Gemma 4B-4B.
   all         Run the WikiLingua LLM2Seq-v2/T5Gemma sequence and all five
@@ -302,6 +323,8 @@ LLM2Seq-v2 overwrite:
   OVERWRITE_LLM2SEQ_V2=true bash run.sh all
 LLM2Seq-v3 overwrite:
   OVERWRITE_LLM2SEQ_V3=true bash run.sh llm2seq-v3
+LLM2Seq-v4 overwrite:
+  OVERWRITE_LLM2SEQ_V4=true bash run.sh llm2seq-v4-pilot
 
 Ablation examples:
   MODEL_SIZE=0.6B bash run.sh ablation-pilot
@@ -389,6 +412,21 @@ case "${MODE}" in
     ;;
   llm2seq-v3-ablation-all)
     run_llm2seq_v3 ablation-all
+    ;;
+  llm2seq-v4-test)
+    run_llm2seq_v4 test
+    ;;
+  llm2seq-v4-smoke)
+    run_llm2seq_v4 smoke
+    ;;
+  llm2seq-v4-pilot)
+    run_llm2seq_v4 pilot
+    ;;
+  llm2seq-v4)
+    run_llm2seq_v4 qwen
+    ;;
+  llm2seq-v4-pilot-ablation-all)
+    run_llm2seq_v4 pilot-ablation-all
     ;;
   compare)
     compare_models

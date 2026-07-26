@@ -6,6 +6,12 @@ model:
   encoder_name: Qwen/Qwen3-Embedding-0.6B
   decoder_name: Qwen/Qwen3-0.6B
   encoder_hidden_size: 1024
+  encoder_num_hidden_layers: 28
+  encoder_attention_mode: auto
+  encoder_attn_implementation: sdpa
+  encoder_trust_remote_code: true
+  # check-model verifies behavior, not only the checkpoint's config flags.
+  encoder_future_context_min_relative_change: 1.0e-6
   decoder_hidden_size: 1024
   dtype: float32
   gradient_checkpointing: true
@@ -110,6 +116,8 @@ data:
   validation_file: data/wikilingua/validation.jsonl
   test_file: data/wikilingua/test.jsonl
   source_prefix: "Nhiệm vụ: Tóm tắt văn bản thành các bước ngắn, đúng thứ tự.\nVăn bản:\n"
+  append_source_eos: true
+  source_add_special_tokens: false
   sentence_separator: "\n"
   decoder_instruction: "Hãy tóm tắt văn bản đã mã hóa thành các bước hành động ngắn, đúng thứ tự và không thêm thông tin."
   decoder_prefix: "Các bước:\n"
