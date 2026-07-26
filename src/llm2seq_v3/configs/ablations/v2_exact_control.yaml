@@ -1,0 +1,25 @@
+_base_: ../qwen3_0_6b.yaml
+
+experiment:
+  name: llm2seq_v3_v2_exact_control
+  output_dir: runs/llm2seq_v3/ablations/v2_exact_control
+
+adapter:
+  num_bidirectional_layers: 4
+
+decoder:
+  cross_gate_init: 0.10
+
+objectives:
+  use_contrastive: false
+  use_prompt_alignment: false
+  use_source_swap: false
+  contrastive_weight: 0.0
+  source_swap_weight: 0.0
+  label_smoothing: 0.0
+
+training:
+  interface_warmup_epochs: 3
+  full_encoder_lr: 8.0e-6
+  warmup_ratio: 0.05
+  weight_decay: 0.01

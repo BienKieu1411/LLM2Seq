@@ -1,0 +1,8 @@
+_base_: ../qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v3_cross_gate_0_1
+  output_dir: runs/llm2seq_v3/ablations/cross_gate_0_1
+
+decoder:
+  cross_gate_init: 0.10

@@ -1,0 +1,8 @@
+_base_: ../qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v3_ablation_mean_only_contrastive_pooling
+  output_dir: runs/llm2seq_v3/ablations/mean_only_contrastive_pooling
+
+objectives:
+  contrastive_pooling: mean

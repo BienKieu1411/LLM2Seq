@@ -1,0 +1,45 @@
+_base_: qwen3_0_6b.yaml
+
+experiment:
+  name: llm2seq_v3_hiroute8_qwen3_embedding_0_6b_to_qwen3_0_6b
+  output_dir: runs/llm2seq_v3/hiroute8_qwen3_embedding_0_6b_to_qwen3_0_6b
+
+adapter:
+  # Eight gated residual blocks are the main profile. The small initial gates
+  # keep the deeper adapter close to the pretrained encoder at step zero.
+  num_bidirectional_layers: 8
+
+  # Preserve full token memory, but expose lexical, semantic, and
+  # summary-specialized views to different depths of the decoder.
+  depth_routed_memory: true
+  lexical_layers: [-21, -17, -13, -9]
+  semantic_layers: [-1, -5, -9, -13]
+  branch_projection_ffn_size: 2048
+  branch_projection_gate_init: 0.05
+  # Position-aligned gated injection from the fully bidirectional summary
+  # stream prevents lexical/semantic banks from remaining causal-only. Two
+  # scalar gates add negligible capacity and preserve branch identity.
+  branch_global_context: true
+  branch_context_gate_init: 0.10
+
+  # Contextualize sentence representations, then broadcast them back into the
+  # token memory. This remains one encoder -> one adapter -> one decoder.
+  hierarchical_sentence_context: true
+  sentence_context_size: 256
+  sentence_context_heads: 8
+  sentence_context_ffn_size: 1024
+  sentence_context_layers: 2
+  sentence_broadcast_gate_init: 0.10
+
+decoder:
+  memory_bank_count: 3
+  memory_routing_mode: attention_output
+  # The learned depth prior is the exact initial route. A zero-initialized,
+  # bounded residual then lets each decoder token select a different mixture.
+  query_adaptive_routing: true
+  query_router_max_delta: 2.0
+
+objectives:
+  # Mild global anti-collapse regularizer. The depth priors still allow early
+  # lexical, middle semantic, and late summary specialization.
+  routing_balance_weight: 0.01

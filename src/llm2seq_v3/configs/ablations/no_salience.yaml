@@ -1,0 +1,11 @@
+_base_: ../qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v3_no_salience
+  output_dir: runs/llm2seq_v3/ablations/no_salience
+
+adapter:
+  use_salience: false
+
+objectives:
+  salience_weight: 0.0

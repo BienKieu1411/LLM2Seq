@@ -7,7 +7,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${ROOT}"
 
-export PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
+DEFAULT_PYTHON="/Users/kieugiangbien/bienkieu_env/bin/python"
+if [[ -x "$DEFAULT_PYTHON" ]]; then
+  PYTHON_BIN="${PYTHON_BIN:-$DEFAULT_PYTHON}"
+else
+  PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
+fi
+export PYTHON_BIN
 MODE="${1:-help}"
 
 run_genbridge() {
@@ -58,6 +64,17 @@ run_llm2seq_v2_main() {
 run_llm2seq_v2_all() {
   run_llm2seq_v2_main
   run_llm2seq_v2 ablation-all
+}
+
+run_llm2seq_v3() {
+  local mode="$1"
+  local -a args
+  echo "=== LLM2Seq-v3: ${mode} ==="
+  args=("${mode}")
+  if [[ "${OVERWRITE_LLM2SEQ_V3:-false}" =~ ^(true|1|yes)$ ]]; then
+    args+=(--overwrite-output-dir)
+  fi
+  bash llm2seq_v3/run.sh "${args[@]}"
 }
 
 run_paper_sequence() {
@@ -238,6 +255,19 @@ Modes:
               Run all five LLM2Seq-v2 ablations only.
   llm2seq-v2-all
               Run both main configurations, then all five ablations.
+  llm2seq-v3  Main contrastive + output-routed HiRoute run, then last.pt eval.
+  llm2seq-v3-smoke
+              Train/evaluate 100 examples to verify the v3 flow.
+  llm2seq-v3-hiroute
+              Explicit alias for the main output-routed HiRoute run.
+  llm2seq-v3-single-bank
+              Full six-layer single-bank v3 control.
+  llm2seq-v3-pilot-all
+              Run matched 2k HiRoute/single-bank pilots and compare held-out results.
+  llm2seq-v3-pilot-compare
+              Compare two completed v3 pilot runs without retraining.
+  llm2seq-v3-ablation-all
+              Run all registered v3 ablations, each followed by evaluation.
   compare     Compare both GenBridge checkpoints with T5Gemma.
   compare-4b  Compare both GenBridge checkpoints with T5Gemma 4B-4B.
   all         Run the WikiLingua LLM2Seq-v2/T5Gemma sequence and all five
@@ -270,6 +300,8 @@ Explicit GenBridge configuration:
 T5Gemma overwrite is controlled by OVERWRITE_OUTPUT_DIR in T5Gemma/env.txt.
 LLM2Seq-v2 overwrite:
   OVERWRITE_LLM2SEQ_V2=true bash run.sh all
+LLM2Seq-v3 overwrite:
+  OVERWRITE_LLM2SEQ_V3=true bash run.sh llm2seq-v3
 
 Ablation examples:
   MODEL_SIZE=0.6B bash run.sh ablation-pilot
@@ -336,6 +368,27 @@ case "${MODE}" in
     ;;
   llm2seq-v2-all)
     run_llm2seq_v2_all
+    ;;
+  llm2seq-v3)
+    run_llm2seq_v3 pipeline
+    ;;
+  llm2seq-v3-smoke)
+    run_llm2seq_v3 smoke
+    ;;
+  llm2seq-v3-hiroute)
+    run_llm2seq_v3 hiroute
+    ;;
+  llm2seq-v3-single-bank)
+    run_llm2seq_v3 single-bank
+    ;;
+  llm2seq-v3-pilot-all)
+    run_llm2seq_v3 pilot-all
+    ;;
+  llm2seq-v3-pilot-compare)
+    run_llm2seq_v3 pilot-compare
+    ;;
+  llm2seq-v3-ablation-all)
+    run_llm2seq_v3 ablation-all
     ;;
   compare)
     compare_models

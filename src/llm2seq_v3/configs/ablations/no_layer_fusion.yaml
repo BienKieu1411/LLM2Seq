@@ -1,0 +1,10 @@
+_base_: ../qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v3_no_summary_layer_fusion
+  output_dir: runs/llm2seq_v3/ablations/no_layer_fusion
+
+adapter:
+  # Lexical/semantic banks retain their explicitly selected depth fusions;
+  # this isolates the learned fusion feeding the summary bank.
+  layer_fusion: false

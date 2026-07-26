@@ -344,6 +344,8 @@ def main() -> None:
     model.config.use_cache = False
     for parameter in model.parameters():
         parameter.requires_grad_(True)
+    unique_parameter_elements = int(sum(parameter.numel() for parameter in model.parameters()))
+    logging.info("Unique parameter elements: %d", unique_parameter_elements)
     if bool(cfg["training"].get("require_fp32_master_weights", True)):
         low_precision = [
             f"{name}:{parameter.dtype}"
@@ -414,6 +416,7 @@ def main() -> None:
             "stores_base_model_weights": True,
             "checkpoint_type": "full_finetuned_seq2seq_model",
             "trainable_ratio_percent": 100.0,
+            "unique_parameter_elements": unique_parameter_elements,
             "metrics": train_result.metrics,
             "data": cfg.get("data", {}),
             "data_manifest": data_manifest,

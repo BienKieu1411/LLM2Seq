@@ -1,0 +1,12 @@
+_base_: ../qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v3_no_contrastive
+  output_dir: runs/llm2seq_v3/ablations/no_contrastive
+
+objectives:
+  use_contrastive: false
+  use_prompt_alignment: false
+  use_source_swap: false
+  contrastive_weight: 0.0
+  source_swap_weight: 0.0

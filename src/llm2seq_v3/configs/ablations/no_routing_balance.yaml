@@ -1,0 +1,8 @@
+_base_: ../qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v3_ablation_no_routing_balance
+  output_dir: runs/llm2seq_v3/ablations/no_routing_balance
+
+objectives:
+  routing_balance_weight: 0.0

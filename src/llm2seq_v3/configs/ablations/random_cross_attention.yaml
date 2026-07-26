@@ -1,0 +1,8 @@
+_base_: ../qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v3_random_cross_attention
+  output_dir: runs/llm2seq_v3/ablations/random_cross_attention
+
+decoder:
+  initialize_cross_from_self: false

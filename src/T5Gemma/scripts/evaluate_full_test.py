@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -57,6 +58,43 @@ def load_jsonl(path: Path, limit: int = -1) -> List[Dict[str, Any]]:
             if line:
                 examples.append(json.loads(line))
     return examples
+
+
+def examples_fingerprint(examples: List[Dict[str, Any]], path: Path) -> Dict[str, Any]:
+    """Fingerprint the exact evaluated rows using the shared paper protocol."""
+
+    if not examples:
+        raise ValueError(f"Dataset is empty: {path}")
+    digest = hashlib.sha256()
+    for row in examples:
+        canonical = {
+            "id": row.get("id"),
+            "source": row.get("source"),
+            "target": row.get("target"),
+        }
+        digest.update(
+            json.dumps(
+                canonical,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        digest.update(b"\n")
+    return {
+        "path": str(path.resolve()),
+        "num_examples": len(examples),
+        "sha256": digest.hexdigest(),
+    }
+
+
+def fingerprints_match(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    """Compare fingerprint identity while deliberately ignoring file paths."""
+
+    return bool(left and right) and (
+        int(left.get("num_examples", -1)) == int(right.get("num_examples", -2))
+        and str(left.get("sha256", "")) == str(right.get("sha256", "missing"))
+    )
 
 
 def torch_dtype_from_config(name: str) -> torch.dtype:
@@ -313,8 +351,24 @@ def main() -> None:
     model.config.use_cache = bool(raw_cfg["model"].get("use_cache_for_eval", True))
     model.to(device)
     model.eval()
+    # Count unique nn.Parameter objects. This is the fair deployable count for
+    # T5Gemma because tied/shared embeddings can occur under multiple state
+    # dict keys but occupy one parameter allocation.
+    unique_parameter_elements = int(sum(parameter.numel() for parameter in model.parameters()))
+    checkpoint_parameter_elements = checkpoint_manifest.get("unique_parameter_elements")
+    checkpoint_parameters_match_model = (
+        int(checkpoint_parameter_elements) == unique_parameter_elements
+        if checkpoint_parameter_elements is not None
+        else None
+    )
 
     examples = load_jsonl(test_file, limit=args.limit)
+    current_test_fingerprint = examples_fingerprint(examples, test_file)
+    checkpoint_test_fingerprint = checkpoint_manifest.get("data_manifest", {}).get("test", {})
+    checkpoint_test_matches_current = fingerprints_match(
+        checkpoint_test_fingerprint,
+        current_test_fingerprint,
+    )
     batch_size = int(args.batch_size or raw_cfg.get("generation", {}).get("eval_batch_size", 1))
     generation_settings = {
         "max_new_tokens": int(generation_value(args, raw_cfg, "max_new_tokens", 256)),
@@ -441,8 +495,16 @@ def main() -> None:
             else 0.0,
             "checkpoint": checkpoint_label,
             "base_model": model_name,
+            "checkpoint_base_model": checkpoint_manifest.get("base_model"),
+            "unique_parameter_elements": unique_parameter_elements,
+            "total_parameters": unique_parameter_elements,
+            "checkpoint_parameter_elements": checkpoint_parameter_elements,
+            "checkpoint_parameters_match_model": checkpoint_parameters_match_model,
             "config": str(config_path),
             "test_file": str(test_file),
+            "test_data_fingerprint": current_test_fingerprint,
+            "checkpoint_test_data_fingerprint": checkpoint_test_fingerprint,
+            "checkpoint_test_matches_current": checkpoint_test_matches_current,
             "predictions_file": str(predictions_path),
             "generation": generation_settings,
             "source_prefix": source_prefix,

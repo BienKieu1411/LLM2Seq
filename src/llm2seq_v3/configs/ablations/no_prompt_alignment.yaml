@@ -1,0 +1,9 @@
+_base_: ../qwen3_0_6b_hiroute.yaml
+
+experiment:
+  name: llm2seq_v3_no_prompt_alignment
+  output_dir: runs/llm2seq_v3/ablations/no_prompt_alignment
+
+objectives:
+  use_prompt_alignment: false
+  contrastive_weight: 0.0
