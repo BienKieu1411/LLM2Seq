@@ -1,0 +1,24 @@
+_base_: pubmed_qwen3_embedding_0_6b_psb_4096.yaml
+
+experiment:
+  name: llm2seq_v4_smoke_pubmed_100
+  output_dir: runs/llm2seq_v4/smoke_pubmed_100
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 2
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  num_workers: 0
+  validation_batch_size: 4
+  validation_num_workers: 0
+  validation_every_epochs: 1
+
+generation:
+  batch_size: 4
+  max_new_tokens: 128
+
+limits:
+  max_train_examples: 100
+  max_validation_examples: 20
+  max_test_examples: 20

@@ -38,6 +38,8 @@ MAIN_CONFIG="${CONFIG:-configs/qwen3_embedding_0_6b_psb.yaml}"
 SMOKE_CONFIG="configs/smoke_qwen3_embedding_100.yaml"
 CNNDM_CONFIG="configs/cnndm_qwen3_embedding_0_6b_psb_4096.yaml"
 CNNDM_SMOKE_CONFIG="configs/smoke_cnndm_100.yaml"
+PUBMED_CONFIG="configs/pubmed_qwen3_embedding_0_6b_psb_4096.yaml"
+PUBMED_SMOKE_CONFIG="configs/smoke_pubmed_100.yaml"
 ROUGE155_SCRIPT="../rouge155/evaluate_rouge.py"
 
 prepare_cnndm() {
@@ -68,6 +70,36 @@ prepare_cnndm_if_requested() {
     prepare_cnndm "$CNNDM_SOURCE_DIR"
   fi
   ensure_cnndm_data
+}
+
+prepare_pubmed() {
+  local source_dir="${1:-${PUBMED_SOURCE_DIR:-}}"
+  if [[ -z "$source_dir" ]]; then
+    echo "PubMed source is required." >&2
+    echo "Set PUBMED_SOURCE_DIR=/absolute/path/to/pubmet or run: bash run.sh pubmed-prepare /absolute/path" >&2
+    exit 2
+  fi
+  "$PYTHON_BIN" -m llm2seq_v4.prepare_pubmed \
+    --input-dir "$source_dir" \
+    --raw-copy-dir data/raw/pubmed \
+    --output-dir data/pubmed
+}
+
+ensure_pubmed_data() {
+  local split
+  for split in train validation test; do
+    if [[ ! -s "data/pubmed/${split}.jsonl" ]]; then
+      echo "Missing data/pubmed/${split}.jsonl; run pubmed-prepare first." >&2
+      exit 2
+    fi
+  done
+}
+
+prepare_pubmed_if_requested() {
+  if [[ -n "${PUBMED_SOURCE_DIR:-}" ]]; then
+    prepare_pubmed "$PUBMED_SOURCE_DIR"
+  fi
+  ensure_pubmed_data
 }
 
 output_dir_for() {
@@ -204,6 +236,32 @@ case "$MODE" in
       "$CNNDM_OUTPUT_DIR/last_test_predictions.jsonl" \
       "$CNNDM_OUTPUT_DIR/resolved_config.yaml"
     ;;
+  pubmed-prepare)
+    prepare_pubmed "${1:-}"
+    ;;
+  pubmed-smoke)
+    prepare_pubmed_if_requested
+    run_smoke "$PUBMED_SMOKE_CONFIG" "$@"
+    ;;
+  pubmed|pubmed-full)
+    prepare_pubmed_if_requested
+    run_pipeline "$PUBMED_CONFIG" "$@"
+    ;;
+  pubmed-train)
+    prepare_pubmed_if_requested
+    "$PYTHON_BIN" -m llm2seq_v4.training --config "$PUBMED_CONFIG" "$@"
+    ;;
+  pubmed-eval)
+    ensure_pubmed_data
+    PUBMED_OUTPUT_DIR="$(output_dir_for "$PUBMED_CONFIG")"
+    "$PYTHON_BIN" -m llm2seq_v4.evaluate \
+      --config "$PUBMED_OUTPUT_DIR/resolved_config.yaml" \
+      --checkpoint "$PUBMED_OUTPUT_DIR/last.pt" \
+      --output "$PUBMED_OUTPUT_DIR/last_test_predictions.jsonl" "$@"
+    run_rouge155 \
+      "$PUBMED_OUTPUT_DIR/last_test_predictions.jsonl" \
+      "$PUBMED_OUTPUT_DIR/resolved_config.yaml"
+    ;;
   pilot-pplx)
     run_pipeline configs/pilot_pplx_embed_2000.yaml "$@"
     ;;
@@ -268,6 +326,13 @@ CNN/DailyMail (4096 source tokens, 1 warm-up + 5 full = 6 epochs):
   bash run.sh cnndm --overwrite-output-dir
   CNNDM_SOURCE_DIR=/absolute/path/to/cnndm bash run.sh cnndm --overwrite-output-dir
   cnndm-train | cnndm-eval
+
+PubMed (4096 source tokens, 1 warm-up + 5 full = 6 epochs):
+  bash run.sh pubmed-prepare /absolute/path/to/pubmet
+  bash run.sh pubmed-smoke --overwrite-output-dir
+  bash run.sh pubmed --overwrite-output-dir
+  PUBMED_SOURCE_DIR=/absolute/path/to/pubmet bash run.sh pubmed --overwrite-output-dir
+  pubmed-train | pubmed-eval
 
 Ablation:
   pilot-ablation-all           Main + four decisive 2k pilots.

@@ -52,6 +52,11 @@ run_t5gemma_cnndm() {
   bash T5Gemma/run_cnndm_pipeline.sh "${scale}"
 }
 
+run_t5gemma_pubmed() {
+  local scale="${1:-all}"
+  bash T5Gemma/run_pubmed_pipeline.sh "${scale}"
+}
+
 run_llm2seq_v2() {
   local mode="$1"
   local -a args
@@ -271,6 +276,12 @@ Modes:
               Full-finetune/evaluate T5Gemma 4B-4B on CNN/DM at 4096 tokens.
   t5gemma-cnndm-all
               Copy/prepare CNN/DM once, then run both T5Gemma scales.
+  t5gemma-pubmed-1b
+              Full-finetune/evaluate T5Gemma 1B-1B on PubMed at 4096 tokens.
+  t5gemma-pubmed-4b
+              Full-finetune/evaluate T5Gemma 4B-4B on PubMed at 4096 tokens.
+  t5gemma-pubmed-all
+              Copy/prepare PubMed once, then run both T5Gemma scales.
   llm2seq-v2-0.6-0.6
               Full-train encoder 0.6B + decoder 0.6B, then evaluate last.pt.
   llm2seq-v2-smoke-hiroute
@@ -313,6 +324,12 @@ Modes:
               Smoke-test V4 on CNN/DM at 4096 source tokens.
   llm2seq-v4-cnndm
               Train V4 on CNN/DM for 1 warm-up + 5 full epochs, then test.
+  llm2seq-v4-pubmed-prepare
+              Copy/convert PubMed from PUBMED_SOURCE_DIR into V4-owned data.
+  llm2seq-v4-pubmed-smoke
+              Smoke-test V4 on PubMed at 4096 source tokens.
+  llm2seq-v4-pubmed
+              Train V4 on PubMed for 1 warm-up + 5 full epochs, then test.
   llm2seq-v4-pilot-ablation-all
               Run main plus four decisive matched V4 pilot ablations.
   llm2seq-v5-test
@@ -329,6 +346,12 @@ Modes:
               Smoke-test V5 on CNN/DM at 4096 source tokens.
   llm2seq-v5-cnndm
               Train V5 on CNN/DM for 1 warm-up + 5 full epochs, then test.
+  llm2seq-v5-pubmed-prepare
+              Copy/convert PubMed from PUBMED_SOURCE_DIR into V5-owned data.
+  llm2seq-v5-pubmed-smoke
+              Smoke-test V5 on PubMed at 4096 source tokens.
+  llm2seq-v5-pubmed
+              Train V5 on PubMed for 1 warm-up + 5 full epochs, then test.
   compare     Compare both GenBridge checkpoints with T5Gemma.
   compare-4b  Compare both GenBridge checkpoints with T5Gemma 4B-4B.
   all         Run the WikiLingua LLM2Seq-v2/T5Gemma sequence and all five
@@ -354,6 +377,16 @@ CNN/DailyMail source folder:
   CNNDM_SOURCE_DIR must contain train.txt, val.txt, and test.txt.
   Dedicated other-GPU queue:
   bash run_cnndm_t5gemma.sh /absolute/path/to/cnndm 1
+
+PubMed source folder (the current server folder is named "pubmet"):
+  PUBMED_SOURCE_DIR=/workspace/storage-shared/nlp/dungdx4/datasets/pubmet \
+    bash run.sh t5gemma-pubmed-all
+  PUBMED_SOURCE_DIR=/workspace/storage-shared/nlp/dungdx4/datasets/pubmet \
+    OVERWRITE_LLM2SEQ_V4=true bash run.sh llm2seq-v4-pubmed
+  PUBMED_SOURCE_DIR=/workspace/storage-shared/nlp/dungdx4/datasets/pubmet \
+    OVERWRITE_LLM2SEQ_V5=true bash run.sh llm2seq-v5-pubmed
+  PUBMED_SOURCE_DIR must contain train.label.jsonl, val.label.jsonl, and
+  test.label.jsonl.
 
 Intentional GenBridge rerun:
   OVERWRITE_GENBRIDGE=true bash run.sh genbridge-1.7-0.6
@@ -416,6 +449,15 @@ case "${MODE}" in
     ;;
   t5gemma-cnndm-all)
     run_t5gemma_cnndm all
+    ;;
+  t5gemma-pubmed-1b)
+    run_t5gemma_pubmed 1b
+    ;;
+  t5gemma-pubmed-4b)
+    run_t5gemma_pubmed 4b
+    ;;
+  t5gemma-pubmed-all)
+    run_t5gemma_pubmed all
     ;;
   llm2seq-v2-0.6-0.6)
     run_llm2seq_v2 pipeline
@@ -484,6 +526,19 @@ case "${MODE}" in
   llm2seq-v4-cnndm)
     run_llm2seq_v4 cnndm
     ;;
+  llm2seq-v4-pubmed-prepare)
+    if [[ -z "${PUBMED_SOURCE_DIR:-}" ]]; then
+      echo "Set PUBMED_SOURCE_DIR=/absolute/path/to/pubmet." >&2
+      exit 2
+    fi
+    bash llm2seq_v4/run.sh pubmed-prepare "$PUBMED_SOURCE_DIR"
+    ;;
+  llm2seq-v4-pubmed-smoke)
+    run_llm2seq_v4 pubmed-smoke
+    ;;
+  llm2seq-v4-pubmed)
+    run_llm2seq_v4 pubmed
+    ;;
   llm2seq-v4-pilot-ablation-all)
     run_llm2seq_v4 pilot-ablation-all
     ;;
@@ -511,6 +566,19 @@ case "${MODE}" in
     ;;
   llm2seq-v5-cnndm)
     run_llm2seq_v5 cnndm
+    ;;
+  llm2seq-v5-pubmed-prepare)
+    if [[ -z "${PUBMED_SOURCE_DIR:-}" ]]; then
+      echo "Set PUBMED_SOURCE_DIR=/absolute/path/to/pubmet." >&2
+      exit 2
+    fi
+    bash llm2seq_v5/run.sh pubmed-prepare "$PUBMED_SOURCE_DIR"
+    ;;
+  llm2seq-v5-pubmed-smoke)
+    run_llm2seq_v5 pubmed-smoke
+    ;;
+  llm2seq-v5-pubmed)
+    run_llm2seq_v5 pubmed
     ;;
   compare)
     compare_models
