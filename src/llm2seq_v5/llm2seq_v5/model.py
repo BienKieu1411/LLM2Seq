@@ -279,6 +279,11 @@ class LLM2SeqV5(nn.Module):
             use_cache=False,
         )
         positive_cross_residual_ratio = self.decoder.cross_residual_ratio_mean().detach()
+        positive_prefix_scale_metrics = (
+            self.decoder.prefix_input_scale_metrics()
+            if adapter_output.summary_prefix is not None and hasattr(self.decoder, "prefix_input_scale_metrics")
+            else None
+        )
         # Capture this immediately: source-swap and prefix-swap diagnostics run
         # additional decoder forwards and overwrite the decoder's latest state.
         # This is only a representation self-drift diagnostic; causal prefix use
@@ -512,25 +517,30 @@ class LLM2SeqV5(nn.Module):
             + auxiliary_scale * self.routing_balance_weight * self._contrastive_scale * loss_routing_balance.float()
         )
 
-        summary_prefix_rms = (
-            adapter_output.summary_prefix.detach().float().square().mean().sqrt()
-            if adapter_output.summary_prefix is not None
-            else decoder_states.new_zeros((), dtype=torch.float32)
-        )
-        with torch.no_grad():
-            decoder_token_embeddings = F.embedding(
-                decoder_input_ids,
-                decoder_embedding_weight.detach(),
-            ).float()
-            if decoder_attention_mask is None:
-                valid_decoder_embeddings = decoder_token_embeddings.reshape(
-                    -1,
-                    decoder_token_embeddings.shape[-1],
-                )
-            else:
-                valid_decoder_embeddings = decoder_token_embeddings[decoder_attention_mask.bool()]
-            decoder_embedding_rms = valid_decoder_embeddings.square().mean().sqrt()
-            prefix_to_embedding_rms_ratio = summary_prefix_rms / decoder_embedding_rms.clamp_min(1e-12)
+        if positive_prefix_scale_metrics is not None:
+            summary_prefix_rms, decoder_embedding_rms, prefix_to_embedding_rms_ratio = (
+                value.detach() for value in positive_prefix_scale_metrics
+            )
+        else:
+            summary_prefix_rms = (
+                adapter_output.summary_prefix.detach().float().square().mean().sqrt()
+                if adapter_output.summary_prefix is not None
+                else decoder_states.new_zeros((), dtype=torch.float32)
+            )
+            with torch.no_grad():
+                decoder_token_embeddings = F.embedding(
+                    decoder_input_ids,
+                    decoder_embedding_weight.detach(),
+                ).float()
+                if decoder_attention_mask is None:
+                    valid_decoder_embeddings = decoder_token_embeddings.reshape(
+                        -1,
+                        decoder_token_embeddings.shape[-1],
+                    )
+                else:
+                    valid_decoder_embeddings = decoder_token_embeddings[decoder_attention_mask.bool()]
+                decoder_embedding_rms = valid_decoder_embeddings.square().mean().sqrt()
+                prefix_to_embedding_rms_ratio = summary_prefix_rms / decoder_embedding_rms.clamp_min(1e-12)
 
         result = {
             "loss": loss,

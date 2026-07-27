@@ -54,6 +54,12 @@ adapter:
 decoder:
   cross_attention_every: 1
   initialize_cross_from_self: true
+  # Planner latents leave RMSNorm at RMS~1, whereas native Qwen token
+  # embeddings are around RMS~0.03. Match them only at the injection boundary.
+  # Saved configs without this field retain legacy behavior for old checkpoints.
+  summary_prefix_scale_mode: match_embedding_rms
+  summary_prefix_scale_multiplier: 1.0
+  summary_prefix_scale_epsilon: 1.0e-6
   # Multi-bank variants normalize attention independently per bank and route
   # the resulting context vectors, never the raw source representations.
   memory_routing_mode: attention_output

@@ -85,6 +85,36 @@ def test_prefix_is_prepended_once_and_hidden_states_remain_label_aligned():
     )
 
 
+def test_prefix_can_match_native_embedding_rms_at_injection_boundary():
+    decoder, backbone = _synthetic_decoder()
+    decoder.summary_prefix_scale_mode = "match_embedding_rms"
+    decoder.summary_prefix_scale_multiplier = 1.0
+    decoder.summary_prefix_scale_epsilon = 1e-6
+    input_ids = torch.tensor([[2, 3, 4], [5, 6, 7]])
+    token_mask = torch.tensor([[1, 1, 0], [1, 1, 1]])
+    prefix = torch.full((2, 2, 6), 20.0)
+    prefix_before = prefix.clone()
+    prefix_mask = torch.tensor([[1, 0], [1, 1]])
+
+    decoder(
+        input_ids=input_ids,
+        attention_mask=token_mask,
+        encoder_hidden_states=torch.randn(2, 4, 6),
+        summary_prefix=prefix,
+        summary_prefix_mask=prefix_mask,
+    )
+
+    injected = backbone.calls[0]["inputs_embeds"][:, :2]
+    expected_rms = decoder._masked_rms(backbone.embed_tokens(input_ids), token_mask)
+    injected_rms = decoder._masked_rms(injected, prefix_mask)
+    logged_prefix_rms, logged_embedding_rms, logged_ratio = decoder.prefix_input_scale_metrics()
+    assert torch.allclose(injected_rms, expected_rms, rtol=1e-5, atol=1e-7)
+    assert torch.allclose(logged_prefix_rms, injected_rms)
+    assert torch.allclose(logged_embedding_rms, expected_rms)
+    assert torch.allclose(logged_ratio, torch.ones_like(logged_ratio), rtol=1e-5)
+    assert torch.equal(prefix, prefix_before)
+
+
 def test_cached_step_keeps_prefix_only_in_kv_cache_and_does_not_prepend_again():
     decoder, backbone = _synthetic_decoder()
     prefix = torch.randn(1, 2, 6)

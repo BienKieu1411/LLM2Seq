@@ -457,6 +457,15 @@ class PretrainedQwenDecoder(nn.Module):
         self.memory_routing_mode = str(config.get("memory_routing_mode", "attention_output"))
         self.query_adaptive_routing = bool(config.get("query_adaptive_routing", False))
         self.last_prefix_drift_ratio: Optional[torch.Tensor] = None
+        # Old resolved configs intentionally fall back to ``legacy`` so that
+        # already-trained checkpoints retain bit-for-bit prefix injection.
+        # New configs opt into RMS matching at the decoder input boundary.
+        self.summary_prefix_scale_mode = str(config.get("summary_prefix_scale_mode", "legacy")).lower()
+        self.summary_prefix_scale_multiplier = float(config.get("summary_prefix_scale_multiplier", 1.0))
+        self.summary_prefix_scale_epsilon = float(config.get("summary_prefix_scale_epsilon", 1e-6))
+        self.last_summary_prefix_rms: Optional[torch.Tensor] = None
+        self.last_decoder_embedding_rms: Optional[torch.Tensor] = None
+        self.last_prefix_to_embedding_rms_ratio: Optional[torch.Tensor] = None
         self.query_router_max_delta = float(config.get("query_router_max_delta", 2.0))
         dropout = float(config.get("cross_attention_dropout", 0.0))
         gate_init = float(config.get("cross_gate_init", 0.1))
@@ -493,6 +502,46 @@ class PretrainedQwenDecoder(nn.Module):
         self.backbone.config.use_cache = False
         if gradient_checkpointing and hasattr(self.backbone, "gradient_checkpointing_enable"):
             self.backbone.gradient_checkpointing_enable()
+
+    @staticmethod
+    def _masked_rms(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """Return FP32 RMS over valid sequence positions and hidden units."""
+        weights = mask.to(device=values.device, dtype=torch.float32).unsqueeze(-1)
+        count = weights.sum() * values.shape[-1]
+        return ((values.float().square() * weights).sum() / count.clamp_min(1.0)).sqrt()
+
+    def _scale_prefix_at_decoder_boundary(
+        self,
+        prefix_embeddings: torch.Tensor,
+        token_embeddings: torch.Tensor,
+        prefix_mask: torch.Tensor,
+        token_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Match soft-prefix magnitude to native decoder token embeddings.
+
+        The scale statistics are detached: the adapter still receives gradients
+        through the returned prefix, while it cannot game the normalization by
+        changing only its output norm.
+        """
+        with torch.no_grad():
+            raw_prefix_rms = self._masked_rms(prefix_embeddings, prefix_mask)
+            decoder_embedding_rms = self._masked_rms(token_embeddings, token_mask)
+
+        mode = str(getattr(self, "summary_prefix_scale_mode", "legacy")).lower()
+        if mode == "match_embedding_rms":
+            epsilon = float(getattr(self, "summary_prefix_scale_epsilon", 1e-6))
+            multiplier = float(getattr(self, "summary_prefix_scale_multiplier", 1.0))
+            scale = decoder_embedding_rms / raw_prefix_rms.clamp_min(epsilon)
+            prefix_embeddings = prefix_embeddings * (scale * multiplier).to(dtype=prefix_embeddings.dtype)
+
+        with torch.no_grad():
+            injected_prefix_rms = self._masked_rms(prefix_embeddings, prefix_mask)
+            self.last_summary_prefix_rms = injected_prefix_rms.detach()
+            self.last_decoder_embedding_rms = decoder_embedding_rms.detach()
+            self.last_prefix_to_embedding_rms_ratio = (
+                injected_prefix_rms / decoder_embedding_rms.clamp_min(1e-12)
+            ).detach()
+        return prefix_embeddings
 
     def forward(
         self,
@@ -555,8 +604,6 @@ class PretrainedQwenDecoder(nn.Module):
             # The adapter may keep numerically sensitive projections in FP32;
             # cast only at the decoder boundary to avoid BF16/FP32 failures.
             prefix_embeddings = summary_prefix.to(dtype=token_embeddings.dtype)
-            backbone_inputs_embeds = torch.cat([prefix_embeddings, token_embeddings], dim=1)
-            backbone_input_ids = None
 
             if attention_mask is None:
                 token_mask = torch.ones(
@@ -591,6 +638,14 @@ class PretrainedQwenDecoder(nn.Module):
                 if summary_prefix_mask.device != input_ids.device:
                     raise ValueError("summary_prefix_mask and input_ids must be on the same device")
                 prefix_mask = summary_prefix_mask.to(dtype=token_mask.dtype)
+            prefix_embeddings = self._scale_prefix_at_decoder_boundary(
+                prefix_embeddings,
+                token_embeddings,
+                prefix_mask,
+                token_mask,
+            )
+            backbone_inputs_embeds = torch.cat([prefix_embeddings, token_embeddings], dim=1)
+            backbone_input_ids = None
             backbone_attention_mask = torch.cat([prefix_mask, token_mask], dim=1)
 
         outputs = self.backbone(
@@ -703,6 +758,21 @@ class PretrainedQwenDecoder(nn.Module):
         if self.last_prefix_drift_ratio is None:
             return next(self.parameters()).new_full((), float("nan"))
         return self.last_prefix_drift_ratio
+
+    def prefix_input_scale_metrics(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """RMS metrics for the prefix actually injected on the latest first step."""
+        if (
+            self.last_summary_prefix_rms is None
+            or self.last_decoder_embedding_rms is None
+            or self.last_prefix_to_embedding_rms_ratio is None
+        ):
+            missing = next(self.parameters()).new_full((), float("nan"), dtype=torch.float32)
+            return missing, missing.clone(), missing.clone()
+        return (
+            self.last_summary_prefix_rms,
+            self.last_decoder_embedding_rms,
+            self.last_prefix_to_embedding_rms_ratio,
+        )
 
     def cross_residual_ratio_mean(self) -> torch.Tensor:
         values = [

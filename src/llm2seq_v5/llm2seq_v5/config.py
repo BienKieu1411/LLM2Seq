@@ -79,6 +79,14 @@ def validate_config(config: Dict[str, Any]) -> None:
     if bool(data.get("append_source_eos", True)) and bool(data.get("source_add_special_tokens", False)):
         raise ValueError("data.append_source_eos and data.source_add_special_tokens cannot both be enabled")
 
+    prefix_scale_mode = str(decoder.get("summary_prefix_scale_mode", "legacy")).lower()
+    if prefix_scale_mode not in {"legacy", "match_embedding_rms"}:
+        raise ValueError("decoder.summary_prefix_scale_mode must be legacy or match_embedding_rms")
+    if float(decoder.get("summary_prefix_scale_multiplier", 1.0)) <= 0.0:
+        raise ValueError("decoder.summary_prefix_scale_multiplier must be positive")
+    if float(decoder.get("summary_prefix_scale_epsilon", 1e-6)) <= 0.0:
+        raise ValueError("decoder.summary_prefix_scale_epsilon must be positive")
+
     indices = list(adapter.get("fuse_layers", []))
     if bool(adapter.get("layer_fusion", True)) and not indices:
         raise ValueError("adapter.fuse_layers cannot be empty when layer fusion is enabled")
