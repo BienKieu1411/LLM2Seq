@@ -15,26 +15,41 @@ fi
 if [[ -n "${REQUESTED_OVERWRITE}" ]]; then
   OVERWRITE_OUTPUT_DIR="${REQUESTED_OVERWRITE}"
 fi
-if [[ -z "${PUBMED_SOURCE_DIR:-}" ]]; then
-  echo "ERROR: set PUBMED_SOURCE_DIR to the folder containing train.label.jsonl, val.label.jsonl, and test.label.jsonl." >&2
-  exit 2
-fi
-if [[ "${PUBMED_SOURCE_DIR}" != /* ]]; then
-  PUBMED_SOURCE_DIR="${CALLER_CWD}/${PUBMED_SOURCE_DIR}"
-fi
-
 PUBMED_RAW_DIR="${PUBMED_RAW_DIR:-T5Gemma/datasets/pubmed}"
 PUBMED_DATA_DIR="${PUBMED_DATA_DIR:-T5Gemma/data/processed/pubmed}"
 PUBMED_LOG_DIR="${PUBMED_LOG_DIR:-T5Gemma/logs/pubmed}"
 mkdir -p "${PUBMED_LOG_DIR}"
 
-echo "=== Copy and prepare PubMed ==="
-echo "Source: ${PUBMED_SOURCE_DIR}"
-echo "Raw copy: ${PUBMED_RAW_DIR}"
-"${PYTHON_BIN}" "${T5GEMMA_ROOT}/scripts/prepare_pubmed_json.py" \
-  --input_dir "${PUBMED_SOURCE_DIR}" \
-  --raw_copy_dir "${PUBMED_RAW_DIR}" \
-  --output_dir "${PUBMED_DATA_DIR}"
+pubmed_data_ready() {
+  [[ -s "${PUBMED_DATA_DIR}/train.jsonl" \
+    && -s "${PUBMED_DATA_DIR}/validation.jsonl" \
+    && -s "${PUBMED_DATA_DIR}/test.jsonl" ]]
+}
+
+prepare_pubmed() {
+  if [[ -z "${PUBMED_SOURCE_DIR:-}" ]]; then
+    echo "ERROR: set PUBMED_SOURCE_DIR to the folder containing train.label.jsonl, val.label.jsonl, and test.label.jsonl." >&2
+    exit 2
+  fi
+  if [[ "${PUBMED_SOURCE_DIR}" != /* ]]; then
+    PUBMED_SOURCE_DIR="${CALLER_CWD}/${PUBMED_SOURCE_DIR}"
+  fi
+  echo "=== Copy and prepare PubMed ==="
+  echo "Source: ${PUBMED_SOURCE_DIR}"
+  echo "Raw copy: ${PUBMED_RAW_DIR}"
+  "${PYTHON_BIN}" "${T5GEMMA_ROOT}/scripts/prepare_pubmed_json.py" \
+    --input_dir "${PUBMED_SOURCE_DIR}" \
+    --raw_copy_dir "${PUBMED_RAW_DIR}" \
+    --output_dir "${PUBMED_DATA_DIR}"
+}
+
+if [[ "${FORCE_PREPARE_PUBMED:-false}" =~ ^(true|1|yes)$ ]]; then
+  prepare_pubmed
+elif pubmed_data_ready; then
+  echo "PubMed processed data already exists; skipping copy/conversion."
+else
+  prepare_pubmed
+fi
 
 run_one() {
   local scale="$1"
@@ -106,6 +121,7 @@ case "${MODE}" in
     ;;
   *)
     echo "Usage: PUBMED_SOURCE_DIR=/path/to/pubmet bash run_pubmed_pipeline.sh {1b|4b|all}" >&2
+    echo "Set FORCE_PREPARE_PUBMED=true to copy/convert the source files again." >&2
     exit 2
     ;;
 esac

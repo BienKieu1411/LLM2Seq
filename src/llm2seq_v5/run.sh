@@ -96,8 +96,13 @@ ensure_pubmed_data() {
 }
 
 prepare_pubmed_if_requested() {
-  if [[ -n "${PUBMED_SOURCE_DIR:-}" ]]; then
-    prepare_pubmed "$PUBMED_SOURCE_DIR"
+  local force="${FORCE_PREPARE_PUBMED:-false}"
+  if [[ "$force" =~ ^(true|1|yes)$ ]]; then
+    prepare_pubmed "${PUBMED_SOURCE_DIR:-}"
+  elif [[ -s data/pubmed/train.jsonl && -s data/pubmed/validation.jsonl && -s data/pubmed/test.jsonl ]]; then
+    echo "PubMed processed data already exists; skipping copy/conversion."
+  else
+    prepare_pubmed "${PUBMED_SOURCE_DIR:-}"
   fi
   ensure_pubmed_data
 }
@@ -306,6 +311,7 @@ PubMed (4096 source tokens, 2 warm-up + 6 full = 8 epochs):
   bash run.sh pubmed-smoke --overwrite-output-dir
   bash run.sh pubmed --overwrite-output-dir
   PUBMED_SOURCE_DIR=/absolute/path/to/pubmet bash run.sh pubmed --overwrite-output-dir
+  FORCE_PREPARE_PUBMED=true PUBMED_SOURCE_DIR=/absolute/path/to/pubmet bash run.sh pubmed --overwrite-output-dir
 
 Core modes:
   test | setup | check-model | count-params
