@@ -725,10 +725,16 @@ def _write_smoke_artifacts(
     *,
     cross_ratio: float = 0.1,
     prefix_rate: float = 5.0,
-    source_swap_accuracy: float = 0.60,
+    source_swap_accuracy: float = 0.88,
     source_swap_nll_gap: float = 0.1,
     training_parameters: int = 1_528_477_089,
     memory_bank_count: int = 3,
+    prefix_to_embedding_rms_ratio: float = 1.0,
+    routing_entropy: float | None = None,
+    prefix_drift_ratio: float = 0.70,
+    prefix_swap_nll_gap: float = 0.10,
+    prefix_swap_accuracy: float = 0.80,
+    num_examples: int = 20,
 ) -> None:
     run_dir.mkdir()
     (run_dir / "last.pt").touch()
@@ -736,7 +742,7 @@ def _write_smoke_artifacts(
     (run_dir / "last_test_predictions.metrics.json").write_text(
         json.dumps(
             {
-                "num_examples": 20,
+                "num_examples": num_examples,
                 "rouge1": 10.0,
                 "rouge2": 2.0,
                 "rougeL": 9.0,
@@ -766,17 +772,24 @@ def _write_smoke_artifacts(
                 "eval_response_alignment_cosine": 0.4,
                 "eval_response_alignment_accuracy": 0.3,
                 "eval_summary_prefix_rms": 0.8,
+                "eval_prefix_to_embedding_rms_ratio": prefix_to_embedding_rms_ratio,
+                "eval_prefix_drift_ratio": prefix_drift_ratio,
+                "eval_prefix_swap_nll_gap": prefix_swap_nll_gap,
+                "eval_prefix_swap_accuracy": prefix_swap_accuracy,
                 "eval_loss_contrastive": 1.0,
                 "eval_loss_source_swap": 0.8,
                 "eval_cross_residual_ratio": cross_ratio,
                 "eval_prompt_retrieval_accuracy": 0.25,
                 "eval_source_swap_accuracy": source_swap_accuracy,
                 "eval_source_swap_nll_gap": source_swap_nll_gap,
-                "eval_memory_routing_entropy": 0.9 if memory_bank_count > 1 else 0.0,
+                "eval_memory_routing_entropy": (
+                    routing_entropy if routing_entropy is not None else (0.9 if memory_bank_count > 1 else 0.0)
+                ),
                 "eval_adaptive_routing_delta": 0.01 if memory_bank_count > 1 else 0.0,
                 "eval_memory_route_lexical": 0.30 if memory_bank_count > 1 else 0.0,
                 "eval_memory_route_semantic": 0.35 if memory_bank_count > 1 else 0.0,
                 "eval_memory_route_summary": 0.35 if memory_bank_count > 1 else 1.0,
+                "eval_examples": float(num_examples),
             }
         )
         + "\n",
@@ -807,7 +820,7 @@ def test_smoke_gate_rejects_disconnected_cross_attention_and_prefix_collapse(tmp
     _write_smoke_artifacts(run_dir, cross_ratio=0.0, prefix_rate=80.0)
     result = evaluate_smoke_run(run_dir)
     assert result["passed"] is False
-    assert "cross_attention_active" in result["failed_gates"]
+    assert "cross_attention_connected" in result["failed_gates"]
     assert "no_dominant_fixed_prefix" in result["failed_gates"]
 
 
@@ -821,8 +834,149 @@ def test_smoke_gate_rejects_source_ignorance_and_oversized_total(tmp_path: Path)
     )
     result = evaluate_smoke_run(run_dir)
     assert result["passed"] is False
-    assert "correct_source_preferred" in result["failed_gates"]
+    assert any("correct-source preference is weak" in message for message in result["warnings"])
     assert "total_below_declared_t5gemma_budget" in result["failed_gates"]
+
+
+def test_smoke_gate_warns_on_near_chance_source_swap_accuracy(tmp_path: Path):
+    run_dir = tmp_path / "chance_swap"
+    _write_smoke_artifacts(run_dir, source_swap_accuracy=0.56)
+    result = evaluate_smoke_run(run_dir)
+    assert result["passed"] is True
+    assert any("correct-source preference is weak" in message for message in result["warnings"])
+
+
+def test_smoke_gate_does_not_infer_source_use_from_cross_residual_magnitude(tmp_path: Path):
+    run_dir = tmp_path / "token_cross"
+    _write_smoke_artifacts(run_dir, cross_ratio=1e-3)
+    result = evaluate_smoke_run(run_dir)
+    assert result["passed"] is True
+    assert "cross_attention_connected" not in result["failed_gates"]
+
+
+def test_smoke_gate_does_not_treat_uniform_routing_as_duplicate_banks(tmp_path: Path):
+    run_dir = tmp_path / "duplicate_banks"
+    _write_smoke_artifacts(run_dir, memory_bank_count=3, routing_entropy=1.0)
+    result = evaluate_smoke_run(run_dir)
+    assert result["passed"] is True
+    assert any("entropy cannot tell" in message for message in result["warnings"])
+
+
+def test_smoke_gate_warns_when_summary_prefix_dominates_embedding_scale(tmp_path: Path):
+    run_dir = tmp_path / "prefix_scale"
+    _write_smoke_artifacts(run_dir, prefix_to_embedding_rms_ratio=30.0)
+    result = evaluate_smoke_run(run_dir)
+    # Non-blocking: the healthy band is unmeasured, so this reports, not fails.
+    assert result["passed"] is True
+    assert any("summary prefix RMS" in message for message in result["warnings"])
+
+
+def test_smoke_gate_is_quiet_when_prefix_scale_is_healthy(tmp_path: Path):
+    run_dir = tmp_path / "prefix_ok"
+    _write_smoke_artifacts(run_dir, prefix_to_embedding_rms_ratio=1.0)
+    result = evaluate_smoke_run(run_dir)
+    assert result["warnings"] == []
+
+
+def test_smoke_gate_labels_low_prefix_self_drift_as_descriptive_only(tmp_path: Path):
+    run_dir = tmp_path / "prefix_inert"
+    _write_smoke_artifacts(run_dir, prefix_to_embedding_rms_ratio=1.0, prefix_drift_ratio=0.002)
+    result = evaluate_smoke_run(run_dir)
+    assert result["passed"] is True
+    assert any("descriptive only" in message for message in result["warnings"])
+    assert not any("prefix may be inert" in message for message in result["warnings"])
+
+
+def test_smoke_gate_reports_drift_independently_of_rms_ratio(tmp_path: Path):
+    # Cosine distance is scale-free, so a badly-scaled prefix that the backbone
+    # nonetheless rewrites is a physically reachable state -- unlike a relative-L2
+    # drift, which would be pinned to ~1/RMS and could not distinguish the two.
+    run_dir = tmp_path / "prefix_scaled_but_moving"
+    _write_smoke_artifacts(run_dir, prefix_to_embedding_rms_ratio=50.0, prefix_drift_ratio=0.70)
+    result = evaluate_smoke_run(run_dir)
+    assert not any("descriptive only" in message for message in result["warnings"])
+    assert any("summary prefix RMS" in message for message in result["warnings"])
+
+
+def test_smoke_gate_does_not_report_unmeasured_prefix_as_inert(tmp_path: Path):
+    # A config with no summary planner never forwards a prefix. Reporting 0.0
+    # would read as "the prefix is inert" for a run that has no prefix at all.
+    run_dir = tmp_path / "no_planner"
+    _write_smoke_artifacts(run_dir, prefix_drift_ratio=float("nan"))
+    result = evaluate_smoke_run(run_dir)
+    assert not any("descriptive only" in message for message in result["warnings"])
+    assert "finite_source_diagnostics" not in result["failed_gates"]
+
+
+def test_smoke_gate_does_not_hardcode_source_swap_learning_threshold(tmp_path: Path):
+    run_dir = tmp_path / "smoke_swap"
+    _write_smoke_artifacts(run_dir, source_swap_accuracy=0.50, source_swap_nll_gap=0.0)
+    result = evaluate_smoke_run(run_dir, expected_examples=20)
+    assert result["passed"] is True
+    assert any("20 validation examples" in message for message in result["warnings"])
+
+
+def test_smoke_gate_uses_validation_count_in_source_warning(tmp_path: Path):
+    run_dir = tmp_path / "pilot_swap"
+    _write_smoke_artifacts(
+        run_dir,
+        source_swap_accuracy=0.50,
+        source_swap_nll_gap=0.0,
+        num_examples=2000,
+    )
+    result = evaluate_smoke_run(run_dir, expected_examples=2000)
+    assert result["passed"] is True
+    assert any("2000 validation examples" in message for message in result["warnings"])
+
+
+def test_smoke_gate_warns_when_prefix_swap_does_not_hurt_nll(tmp_path: Path):
+    run_dir = tmp_path / "prefix_unused"
+    _write_smoke_artifacts(run_dir, prefix_swap_nll_gap=-0.01, prefix_swap_accuracy=0.40)
+    result = evaluate_smoke_run(run_dir)
+    assert result["passed"] is True
+    assert any("dense-memory path may make the prefix redundant" in message for message in result["warnings"])
+
+
+def test_smoke_gate_labels_python_rouge_as_off_scale_not_wrong(tmp_path: Path):
+    # A pilot reading rouge2 ~= 8-14 has not collapsed. The warning must say the
+    # Python backend is off-SCALE from the Perl targets, not interchangeable.
+    run_dir = tmp_path / "backend_label"
+    _write_smoke_artifacts(run_dir)
+    warning = evaluate_smoke_run(run_dir)["rouge_backend_warning"]
+    assert "NOT on the same scale" in warning
+    assert "Unicode-preserving whitespace diagnostic" in warning
+    assert "do not mix the two scales" in warning
+
+
+def test_smoke_gate_requires_prefix_rms_ratio_to_be_recorded(tmp_path: Path):
+    run_dir = tmp_path / "missing_ratio"
+    _write_smoke_artifacts(run_dir)
+    history = run_dir / "validation_history.jsonl"
+    payload = json.loads(history.read_text(encoding="utf-8"))
+    payload.pop("eval_prefix_to_embedding_rms_ratio")
+    history.write_text(json.dumps(payload), encoding="utf-8")
+    result = evaluate_smoke_run(run_dir)
+    assert result["passed"] is False
+    assert "finite_source_diagnostics" in result["failed_gates"]
+
+
+def test_training_surfaces_previously_discarded_diagnostics():
+    # These are computed in LLM2SeqV4.forward but were dropped by the metric
+    # allow-list, so they never reached validation_history.jsonl.
+    from llm2seq_v4 import training as training_module
+
+    source = Path(training_module.__file__).read_text(encoding="utf-8")
+    block = source.split("metric_names = (", 1)[1].split("\n    )", 1)[0]
+    for name in (
+        "salience_precision",
+        "salience_recall",
+        "projection_gate",
+        "salience_attention_gate",
+        "prefix_to_embedding_rms_ratio",
+        "prefix_swap_nll_gap",
+        "prefix_swap_accuracy",
+    ):
+        assert f'"{name}"' in block, f"{name} is computed but not surfaced"
 
 
 def test_run_script_defaults_to_prospective_summary_bridge():
@@ -830,6 +984,18 @@ def test_run_script_defaults_to_prospective_summary_bridge():
     script = (root / "run.sh").read_text(encoding="utf-8")
     assert 'MAIN_CONFIG="${CONFIG:-configs/qwen3_embedding_0_6b_psb.yaml}"' in script
     assert 'SMOKE_CONFIG="configs/smoke_qwen3_embedding_100.yaml"' in script
+
+
+def test_architecture_check_verifies_copy_before_loading_trained_weights():
+    # Exact Q/K/V/O equality is an installation invariant. A trained checkpoint
+    # uses different LRs for native self-attention and copied cross-attention, so
+    # checking equality after load would falsely reject every healthy run.
+    from llm2seq_v4 import architecture_check as architecture_module
+
+    source = Path(architecture_module.__file__).read_text(encoding="utf-8")
+    copy_check = source.index('if bool(config["decoder"].get("initialize_cross_from_self", True)):')
+    checkpoint_load = source.index("if checkpoint_path is not None:")
+    assert copy_check < checkpoint_load
 
 
 def test_unit_test_launcher_is_offline_and_has_no_publish_commands():
@@ -1240,6 +1406,9 @@ class _TinyOutputRoutedDecoder(nn.Module):
 
     def cross_residual_ratio_mean(self) -> torch.Tensor:
         return self.last_cross_residual_ratio.to(self.cross_gate.device)
+
+    def prefix_drift_ratio(self) -> torch.Tensor:
+        return self.cross_gate.new_zeros(())
 
     def cross_gate_mean(self) -> torch.Tensor:
         return torch.tanh(self.cross_gate)

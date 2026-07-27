@@ -1,4 +1,4 @@
-"""Fail-fast sanity gate for a completed v4 smoke run.
+"""Fail-fast sanity gate for a completed v5 smoke run.
 
 This gate detects broken generation and structurally disconnected source paths.
 Learned path-strength diagnostics remain warnings until calibrated by matched
@@ -39,13 +39,21 @@ def _finite(value: Any) -> bool:
 
 def evaluate_smoke_run(run_dir: str | Path, expected_examples: int = 20) -> Dict[str, Any]:
     run_dir = Path(run_dir)
-    metrics = _read_json(run_dir / "last_test_predictions.metrics.json")
+    metrics = _read_json(run_dir / "last_validation_predictions.metrics.json")
     validation = _last_validation(run_dir / "validation_history.jsonl")
     required_validation = (
         "eval_loss",
         "eval_loss_ce",
         "eval_loss_response_alignment",
         "eval_response_alignment_cosine",
+        "eval_loss_phrase_mixture",
+        "eval_loss_phrase_copy",
+        "eval_loss_phrase_continue",
+        "eval_loss_phrase_labels",
+        "eval_loss_phrase_coverage",
+        "eval_phrase_mode_generate",
+        "eval_phrase_mode_new",
+        "eval_phrase_mode_continue",
         "eval_summary_prefix_rms",
         "eval_prefix_to_embedding_rms_ratio",
         "eval_loss_contrastive",
@@ -71,6 +79,7 @@ def evaluate_smoke_run(run_dir: str | Path, expected_examples: int = 20) -> Dict
     gates = {
         "complete_checkpoint": (run_dir / "COMPLETE").is_file() and (run_dir / "last.pt").is_file(),
         "expected_heldout_examples": int(metrics.get("num_examples", -1)) == int(expected_examples),
+        "validation_only_selection": metrics.get("evaluation_split") == "validation",
         "checkpoint_parameter_integrity": bool(metrics.get("checkpoint_parameters_match_model", False)),
         "below_t5gemma_parameter_budget": bool(metrics.get("parameter_budget_reached", False)),
         "total_below_declared_t5gemma_budget": (
@@ -90,6 +99,19 @@ def evaluate_smoke_run(run_dir: str | Path, expected_examples: int = 20) -> Dict
         "cross_attention_connected": float(validation.get("eval_cross_residual_ratio", 0.0)) > 1e-4,
         "summary_prefix_nonzero": float(validation.get("eval_summary_prefix_rms", 0.0)) > 1e-4,
     }
+    if bool(metrics.get("phrase_pointer_enabled", False)):
+        generated_modes = metrics.get("phrase_generation_modes", {})
+        mode_values = [generated_modes.get(name) for name in ("generate", "new_span", "continue_span")]
+        gates["phrase_pointer_observed_in_generation"] = (
+            int(metrics.get("phrase_generation_mode_observations", 0)) > 0
+            and all(_finite(value) for value in mode_values)
+            and abs(sum(float(value) for value in mode_values) - 1.0) < 1e-4
+        )
+        if all(_finite(value) for value in mode_values) and float(generated_modes.get("generate", 1.0)) > 0.999:
+            warnings.append(
+                "phrase pointer remains almost entirely in generate mode; run the matched pilot "
+                "before attributing any ROUGE change to phrase continuation"
+            )
     if multi_bank:
         entropy = validation.get("eval_memory_routing_entropy")
         gates["finite_router_diagnostics"] = _finite(entropy) and all(_finite(value) for value in routes.values())
@@ -176,6 +198,9 @@ def evaluate_smoke_run(run_dir: str | Path, expected_examples: int = 20) -> Dict
                 "deployable_parameters",
                 "training_parameters",
                 "parameter_target_declared",
+                "phrase_pointer_enabled",
+                "phrase_generation_modes",
+                "phrase_generation_mode_observations",
             )
         },
         "source_diagnostics": {

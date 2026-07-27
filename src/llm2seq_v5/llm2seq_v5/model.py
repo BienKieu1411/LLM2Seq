@@ -1,4 +1,4 @@
-"""LLM2Seq-v4: output-centric latent bridge for low-data summarization."""
+"""LLM2Seq-v5: output-centric latent bridge for low-data summarization."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from .contrastive import (
 )
 from .decoder import PretrainedQwenDecoder
 from .encoder import EmbeddingTokenEncoder
+from .phrase_pointer import StatefulPhrasePointer
 from .response_alignment import ordered_response_alignment_loss
 
 
@@ -34,7 +35,7 @@ def torch_dtype(name: str) -> torch.dtype:
     return mapping[name]
 
 
-class LLM2SeqV4(nn.Module):
+class LLM2SeqV5(nn.Module):
     """One encoder -> one prospective-summary bridge -> one causal decoder.
 
     The adapter keeps dense token memory for coverage and additionally predicts
@@ -88,6 +89,9 @@ class LLM2SeqV4(nn.Module):
             config.get("decoder", {}),
             dtype,
             gradient_checkpointing,
+            revision=(
+                str(model_config["decoder_revision"]) if model_config.get("decoder_revision") is not None else None
+            ),
         )
         decoder_hidden = int(self.decoder.config.hidden_size)
         if decoder_hidden != decoder_hidden_size:
@@ -110,8 +114,35 @@ class LLM2SeqV4(nn.Module):
         self.contrastive_pooling = str(objectives.get("contrastive_pooling", "mean_last"))
         self.routing_balance_weight = float(objectives.get("routing_balance_weight", 0.0))
         self.label_smoothing = float(objectives.get("label_smoothing", 0.0))
-        self.response_alignment_weight = float(objectives.get("response_alignment_weight", 0.15))
+        self.response_alignment_weight = float(objectives.get("response_alignment_weight", 0.0))
         self.response_alignment_temperature = float(objectives.get("response_alignment_temperature", 0.10))
+
+        # V5 realizes source-supported phrases through the normal decoder
+        # output distribution. This remains a single encoder -> bridge ->
+        # decoder model; the pointer is a compact output head on decoder states,
+        # not a second encoder/decoder or an inference-time retriever.
+        phrase_config = config.get("phrase_pointer", {})
+        self.use_phrase_pointer = bool(phrase_config.get("enabled", False))
+        self.phrase_mixture_weight = float(objectives.get("phrase_mixture_weight", 1.0))
+        self.phrase_copy_weight = float(objectives.get("phrase_copy_weight", 0.10))
+        self.phrase_continue_weight = float(objectives.get("phrase_continue_weight", 0.10))
+        self.phrase_label_weight = float(objectives.get("phrase_label_weight", 0.05))
+        self.phrase_coverage_weight = float(objectives.get("phrase_coverage_weight", 0.02))
+        if self.use_phrase_pointer:
+            self.phrase_pointer: Optional[StatefulPhrasePointer] = StatefulPhrasePointer(
+                hidden_size=decoder_hidden_size,
+                vocabulary_size=int(self.decoder.config.vocab_size),
+                rank=int(phrase_config.get("rank", 128)),
+                phrase_hidden_size=int(phrase_config.get("phrase_hidden_size", 256)),
+                dropout=float(phrase_config.get("dropout", 0.10)),
+                phrase_bias_scale=float(phrase_config.get("phrase_bias_scale", 0.5)),
+                continuation_strength=float(phrase_config.get("continuation_strength", 1.0)),
+                generate_probability_init=float(phrase_config.get("generate_probability_init", 0.98)),
+                use_continuation=bool(phrase_config.get("use_continuation", True)),
+                detach_recurrent_state=bool(phrase_config.get("detach_recurrent_state", True)),
+            )
+        else:
+            self.phrase_pointer = None
 
         if self.use_prompt_alignment:
             projection_size = int(objectives.get("contrastive_projection_size", 256))
@@ -202,6 +233,7 @@ class LLM2SeqV4(nn.Module):
         decoder_attention_mask: Optional[torch.Tensor] = None,
         unit_ids: Optional[torch.Tensor] = None,
         evidence_labels: Optional[torch.Tensor] = None,
+        phrase_labels: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         compute_source_diagnostics: bool = False,
     ) -> Dict[str, torch.Tensor]:
@@ -271,7 +303,7 @@ class LLM2SeqV4(nn.Module):
         )
 
         decoder_embedding_weight = self._decoder_embedding_weight()
-        if adapter_output.summary_prefix is not None:
+        if adapter_output.summary_prefix is not None and getattr(self, "response_alignment_weight", 0.0) > 0.0:
             alignment = ordered_response_alignment_loss(
                 adapter_output.summary_prefix,
                 labels,
@@ -287,6 +319,43 @@ class LLM2SeqV4(nn.Module):
                 "valid_slots": torch.zeros((), dtype=torch.long, device=decoder_states.device),
             }
         loss_response_alignment = alignment["loss"]
+
+        phrase_zero = decoder_states.float().sum() * 0.0
+        phrase_losses = {
+            "loss_phrase_mixture": loss_ce,
+            "loss_phrase_copy": phrase_zero,
+            "loss_phrase_continue": phrase_zero,
+            "loss_phrase_labels": phrase_zero,
+            "loss_phrase_coverage": phrase_zero,
+            "phrase_copyable_rate": phrase_zero.detach(),
+            "phrase_continuation_available_rate": phrase_zero.detach(),
+            "phrase_mode_generate": decoder_states.new_tensor(1.0),
+            "phrase_mode_new": phrase_zero.detach(),
+            "phrase_mode_continue": phrase_zero.detach(),
+            "phrase_copy_support_accuracy": phrase_zero.detach(),
+        }
+        phrase_pointer = getattr(self, "phrase_pointer", None)
+        if phrase_pointer is not None:
+            if unit_ids is None:
+                raise ValueError("unit_ids are required when the phrase pointer is enabled")
+            source_copy_mask = attention_mask.bool() & unit_ids.gt(0)
+            # Preserve the meaning of the V4 plan-only curriculum: examples
+            # selected for that intervention must not recover a dense source
+            # shortcut through the new pointer path.
+            if bool(plan_only_mask.any()):
+                source_copy_mask = source_copy_mask & ~plan_only_mask[:, None]
+            phrase_losses = phrase_pointer.teacher_forced_loss(
+                decoder_states=decoder_states,
+                lm_logits=logits,
+                labels=labels,
+                decoder_input_ids=decoder_input_ids,
+                source_memory=adapter_output.memory,
+                source_token_ids=input_ids,
+                source_unit_ids=unit_ids,
+                source_copy_mask=source_copy_mask,
+                attention_bias=adapter_output.attention_bias,
+                phrase_labels=phrase_labels,
+            )
 
         # --- Contrastive loss ---
         loss_contrastive = decoder_states.new_zeros(())
@@ -422,10 +491,22 @@ class LLM2SeqV4(nn.Module):
         # --- Total loss ---
         effective_contrastive_weight = self.contrastive_weight * self._contrastive_scale
         auxiliary_scale = 1.0 if self.training else 0.0
+        mixture_weight = getattr(self, "phrase_mixture_weight", 0.0) if phrase_pointer is not None else 0.0
+        primary_generation_loss = (1.0 - mixture_weight) * loss_ce + mixture_weight * phrase_losses[
+            "loss_phrase_mixture"
+        ].float()
         loss = (
-            loss_ce
+            primary_generation_loss
             + self.salience_weight * adapter_output.loss_salience.float()
             + auxiliary_scale * getattr(self, "response_alignment_weight", 0.15) * loss_response_alignment.float()
+            + auxiliary_scale * getattr(self, "phrase_copy_weight", 0.0) * phrase_losses["loss_phrase_copy"].float()
+            + auxiliary_scale
+            * getattr(self, "phrase_continue_weight", 0.0)
+            * phrase_losses["loss_phrase_continue"].float()
+            + auxiliary_scale * getattr(self, "phrase_label_weight", 0.0) * phrase_losses["loss_phrase_labels"].float()
+            + auxiliary_scale
+            * getattr(self, "phrase_coverage_weight", 0.0)
+            * phrase_losses["loss_phrase_coverage"].float()
             + auxiliary_scale * effective_contrastive_weight * loss_contrastive.float()
             + auxiliary_scale * self.source_swap_weight * self._contrastive_scale * loss_source_swap.float()
             + auxiliary_scale * self.routing_balance_weight * self._contrastive_scale * loss_routing_balance.float()
@@ -459,6 +540,7 @@ class LLM2SeqV4(nn.Module):
             "response_alignment_cosine": alignment["cosine"].detach(),
             "response_alignment_accuracy": alignment["accuracy"].detach(),
             "response_alignment_valid_slots": alignment["valid_slots"].detach(),
+            **phrase_losses,
             "plan_only_rate": plan_only_mask.float().mean().detach(),
             "plan_only_probability": decoder_states.new_tensor(getattr(self, "_plan_only_probability", 0.0)),
             "oracle_evidence_mix": decoder_states.new_tensor(getattr(self, "_oracle_evidence_mix", 0.0)),
@@ -522,6 +604,10 @@ class LLM2SeqV4(nn.Module):
         if self.alignment_head is not None:
             for parameter in self.alignment_head.parameters():
                 parameter.requires_grad = True
+        phrase_pointer = getattr(self, "phrase_pointer", None)
+        if phrase_pointer is not None:
+            for parameter in phrase_pointer.parameters():
+                parameter.requires_grad = True
         self._stage = stage
         if full:
             frozen = [
@@ -538,10 +624,16 @@ class LLM2SeqV4(nn.Module):
             if self.alignment_head is not None
             else 0
         )
+        phrase_pointer_params = (
+            sum(parameter.numel() for parameter in getattr(self, "phrase_pointer", ()).parameters())
+            if getattr(self, "phrase_pointer", None) is not None
+            else 0
+        )
         return {
             "encoder": sum(parameter.numel() for parameter in self.encoder.parameters()),
             "adapter": sum(parameter.numel() for parameter in self.adapter.parameters()),
             "alignment_head": alignment_params,
+            "phrase_pointer": phrase_pointer_params,
             "decoder": sum(parameter.numel() for parameter in self.decoder.parameters()),
             "total": sum(parameter.numel() for parameter in self.parameters()),
             "trainable": sum(parameter.numel() for parameter in self.parameters() if parameter.requires_grad),

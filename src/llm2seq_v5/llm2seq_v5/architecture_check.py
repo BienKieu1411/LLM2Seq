@@ -1,4 +1,4 @@
-"""Load a real LLM2Seq-v4 graph and verify its architectural invariants."""
+"""Load a real LLM2Seq-v5 graph and verify its architectural invariants."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from .config import load_config
 from .data import decoder_seed_ids, encode_source
 from .decoder import QwenDecoderLayerWithCrossAttention
 from .generation import generate
-from .model import LLM2SeqV4
+from .model import LLM2SeqV5
 from .training import _tokenizers, verify_declared_parameter_budget
 
 
@@ -85,7 +85,7 @@ def check(config_path: str, checkpoint_path: str | None = None) -> dict:
     config = load_config(config_path)
     encoder_tokenizer, decoder_tokenizer = _tokenizers(config)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = LLM2SeqV4(config).to(device).eval()
+    model = LLM2SeqV5(config).to(device).eval()
     cross_layers = [
         layer for layer in model.decoder.backbone.layers if isinstance(layer, QwenDecoderLayerWithCrossAttention)
     ]
@@ -307,6 +307,11 @@ def check(config_path: str, checkpoint_path: str | None = None) -> dict:
     objective_names = (
         "loss",
         "loss_response_alignment",
+        "loss_phrase_mixture",
+        "loss_phrase_copy",
+        "loss_phrase_continue",
+        "loss_phrase_labels",
+        "loss_phrase_coverage",
         "loss_contrastive",
         "loss_source_swap",
         "loss_routing_balance",
@@ -336,8 +341,15 @@ def check(config_path: str, checkpoint_path: str | None = None) -> dict:
     )
     if not all(torch.isfinite(diagnostic_output[name]) for name in diagnostic_names):
         raise RuntimeError("Held-out source-utilization diagnostics produced a non-finite value")
+    phrase_mixture_weight = (
+        float(getattr(model, "phrase_mixture_weight", 0.0))
+        if getattr(model, "phrase_pointer", None) is not None
+        else 0.0
+    )
     expected_eval_loss = (
-        diagnostic_output["loss_ce"].float() + model.salience_weight * diagnostic_output["loss_salience"].float()
+        (1.0 - phrase_mixture_weight) * diagnostic_output["loss_ce"].float()
+        + phrase_mixture_weight * diagnostic_output["loss_phrase_mixture"].float()
+        + model.salience_weight * diagnostic_output["loss_salience"].float()
     )
     if not torch.allclose(diagnostic_output["loss"].float(), expected_eval_loss, atol=1e-6):
         raise RuntimeError("Validation diagnostics leaked auxiliary objectives into eval loss")
@@ -352,7 +364,7 @@ def check(config_path: str, checkpoint_path: str | None = None) -> dict:
         "encoder_source_add_special_tokens": bool(config["data"].get("source_add_special_tokens", False)),
         "encoder_source_special_wrapper": getattr(
             encoder_tokenizer,
-            "_llm2seq_v4_default_special_wrapper",
+            "_llm2seq_v5_default_special_wrapper",
             ([], []),
         ),
         "encoder_attention_mode_declared": attention_mode,
@@ -376,6 +388,8 @@ def check(config_path: str, checkpoint_path: str | None = None) -> dict:
         "training_contrastive_loss": float(training_output["loss_contrastive"]),
         "training_source_swap_loss": float(training_output["loss_source_swap"]),
         "training_response_alignment_loss": float(training_output["loss_response_alignment"]),
+        "training_phrase_mixture_loss": float(training_output["loss_phrase_mixture"]),
+        "training_phrase_continue_loss": float(training_output["loss_phrase_continue"]),
         "training_routing_balance_loss": float(training_output["loss_routing_balance"]),
         "heldout_diagnostics_checked": list(diagnostic_names),
         "heldout_prompt_retrieval_accuracy": float(diagnostic_output["prompt_retrieval_accuracy"]),
@@ -396,7 +410,7 @@ def check(config_path: str, checkpoint_path: str | None = None) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/qwen3_embedding_0_6b_psb.yaml")
+    parser.add_argument("--config", default="configs/qwen3_embedding_0_6b_phrase_continuation.yaml")
     parser.add_argument(
         "--checkpoint",
         default=None,

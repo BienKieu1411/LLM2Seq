@@ -88,6 +88,17 @@ run_llm2seq_v4() {
   bash llm2seq_v4/run.sh "${args[@]}"
 }
 
+run_llm2seq_v5() {
+  local mode="$1"
+  local -a args
+  echo "=== LLM2Seq-v5: ${mode} ==="
+  args=("${mode}")
+  if [[ "${OVERWRITE_LLM2SEQ_V5:-false}" =~ ^(true|1|yes)$ ]]; then
+    args+=(--overwrite-output-dir)
+  fi
+  bash llm2seq_v5/run.sh "${args[@]}"
+}
+
 run_paper_sequence() {
   # Fail-fast order for the B200 allocation:
   # CNN/DailyMail runs separately via run_cnndm_t5gemma.sh on another GPU.
@@ -289,6 +300,20 @@ Modes:
               Full Qwen3-Embedding 0.6B -> Qwen3 0.6B V4, then last.pt eval.
   llm2seq-v4-pilot-ablation-all
               Run main plus four decisive matched V4 pilot ablations.
+  llm2seq-v5-test
+              Run all V5 offline tests without downloading a model.
+  llm2seq-v5-smoke
+              Smoke-test the V5 phrase-continuation WikiLingua flow.
+  llm2seq-v5-pilot-ablation-all
+              Run the matched V5 validation pilot suite.
+  llm2seq-v5
+              Full WikiLingua V5 train and last.pt test evaluation.
+  llm2seq-v5-cnndm-prepare
+              Copy/convert CNN/DM from CNNDM_SOURCE_DIR into V5-owned data.
+  llm2seq-v5-cnndm-smoke
+              Smoke-test V5 on CNN/DM at 4096 source tokens.
+  llm2seq-v5-cnndm
+              Train V5 on CNN/DM for 1 warm-up + 5 full epochs, then test.
   compare     Compare both GenBridge checkpoints with T5Gemma.
   compare-4b  Compare both GenBridge checkpoints with T5Gemma 4B-4B.
   all         Run the WikiLingua LLM2Seq-v2/T5Gemma sequence and all five
@@ -307,6 +332,8 @@ Before T5Gemma 4B/all:
 
 CNN/DailyMail source folder:
   CNNDM_SOURCE_DIR=/absolute/path/to/cnndm bash run.sh t5gemma-cnndm-all
+  CNNDM_SOURCE_DIR=/absolute/path/to/cnndm OVERWRITE_LLM2SEQ_V5=true \
+    bash run.sh llm2seq-v5-cnndm
   CNNDM_SOURCE_DIR must contain train.txt, val.txt, and test.txt.
   Dedicated other-GPU queue:
   bash run_cnndm_t5gemma.sh /absolute/path/to/cnndm 1
@@ -325,6 +352,8 @@ LLM2Seq-v3 overwrite:
   OVERWRITE_LLM2SEQ_V3=true bash run.sh llm2seq-v3
 LLM2Seq-v4 overwrite:
   OVERWRITE_LLM2SEQ_V4=true bash run.sh llm2seq-v4-pilot
+LLM2Seq-v5 overwrite:
+  OVERWRITE_LLM2SEQ_V5=true bash run.sh llm2seq-v5-cnndm
 
 Ablation examples:
   MODEL_SIZE=0.6B bash run.sh ablation-pilot
@@ -427,6 +456,31 @@ case "${MODE}" in
     ;;
   llm2seq-v4-pilot-ablation-all)
     run_llm2seq_v4 pilot-ablation-all
+    ;;
+  llm2seq-v5-test)
+    run_llm2seq_v5 test
+    ;;
+  llm2seq-v5-smoke)
+    run_llm2seq_v5 smoke
+    ;;
+  llm2seq-v5-pilot-ablation-all)
+    run_llm2seq_v5 pilot-ablation-all
+    ;;
+  llm2seq-v5)
+    run_llm2seq_v5 full
+    ;;
+  llm2seq-v5-cnndm-prepare)
+    if [[ -z "${CNNDM_SOURCE_DIR:-}" ]]; then
+      echo "Set CNNDM_SOURCE_DIR=/absolute/path/to/cnndm." >&2
+      exit 2
+    fi
+    bash llm2seq_v5/run.sh cnndm-prepare "$CNNDM_SOURCE_DIR"
+    ;;
+  llm2seq-v5-cnndm-smoke)
+    run_llm2seq_v5 cnndm-smoke
+    ;;
+  llm2seq-v5-cnndm)
+    run_llm2seq_v5 cnndm
     ;;
   compare)
     compare_models

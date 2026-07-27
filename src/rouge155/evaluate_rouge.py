@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -17,6 +18,14 @@ from pyrouge import Rouge155
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 _WORK_DIR_MARKER = ".generated_by_evaluate_rouge"
 _ROUGE_PROTOCOL = "-c 95 -2 -1 -U -r 1000 -n 4 -w 1.2 -a -m"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _sentences(text: Any) -> list[str]:
@@ -155,6 +164,7 @@ def evaluate(
         "prediction_field": prediction_field,
         "reference_field": reference_field,
         "predictions_file": str(predictions_file),
+        "predictions_sha256": _sha256(predictions_file),
         "prepared_data_dir": str(work_dir),
         "rouge_home": str(rouge_home),
         "raw_scores": raw_scores,

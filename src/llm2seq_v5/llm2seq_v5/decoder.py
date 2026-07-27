@@ -16,16 +16,19 @@ except ImportError:  # pragma: no cover - compatibility guard for older Transfor
     GradientCheckpointingLayer = nn.Module
 
 
-def _load_causal_lm(model_name: str, dtype: torch.dtype) -> Tuple[Any, Any]:
+def _load_causal_lm(model_name: str, dtype: torch.dtype, revision: Optional[str] = None) -> Tuple[Any, Any]:
     from transformers import AutoConfig, AutoModelForCausalLM
 
-    raw_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+    pretrained_kwargs: Dict[str, Any] = {"trust_remote_code": True}
+    if revision is not None:
+        pretrained_kwargs["revision"] = str(revision)
+    raw_config = AutoConfig.from_pretrained(model_name, **pretrained_kwargs)
     config = raw_config.get_text_config() if hasattr(raw_config, "get_text_config") else raw_config
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         config=config,
         dtype=dtype,
-        trust_remote_code=True,
+        **pretrained_kwargs,
         attn_implementation="sdpa",
     )
     return model, config
@@ -444,10 +447,12 @@ class PretrainedQwenDecoder(nn.Module):
         config: Dict[str, Any],
         dtype: torch.dtype,
         gradient_checkpointing: bool,
+        revision: Optional[str] = None,
     ):
         super().__init__()
-        causal_lm, qwen_config = _load_causal_lm(model_name, dtype)
+        causal_lm, qwen_config = _load_causal_lm(model_name, dtype, revision)
         self.model_name = str(model_name)
+        self.revision = str(revision) if revision is not None else None
         self.config = qwen_config
         self.backbone = causal_lm.model
         self.lm_head = causal_lm.lm_head
@@ -466,7 +471,7 @@ class PretrainedQwenDecoder(nn.Module):
         for index, layer in enumerate(base_layers):
             self_attention = getattr(layer, "self_attn", None)
             if self_attention is None:
-                raise ValueError("LLM2Seq-v4 requires a Qwen decoder layer with self_attn")
+                raise ValueError("LLM2Seq-v5 requires a Qwen decoder layer with self_attn")
             if hasattr(self_attention, "layer_idx"):
                 self_attention.layer_idx = index
             inject = (index + 1) % self.cross_attention_every == 0 or index == len(self.backbone.layers) - 1

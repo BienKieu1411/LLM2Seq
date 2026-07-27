@@ -60,6 +60,16 @@ def load_jsonl(path: Path, limit: int = -1) -> List[Dict[str, Any]]:
     return examples
 
 
+def file_sha256(path: Path) -> str:
+    """Hash the exact serialized artifact consumed by downstream scorers."""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def examples_fingerprint(examples: List[Dict[str, Any]], path: Path) -> Dict[str, Any]:
     """Fingerprint the exact evaluated rows using the shared paper protocol."""
 
@@ -506,6 +516,8 @@ def main() -> None:
             "checkpoint_test_data_fingerprint": checkpoint_test_fingerprint,
             "checkpoint_test_matches_current": checkpoint_test_matches_current,
             "predictions_file": str(predictions_path),
+            "predictions_sha256": file_sha256(predictions_path),
+            "evaluation_split": "test",
             "generation": generation_settings,
             "source_prefix": source_prefix,
             # Persist the exact length contract so cross-model paper audits do
@@ -531,6 +543,8 @@ def main() -> None:
                 "generation": generation_settings,
                 "metrics_file": str(metrics_path),
                 "predictions_file": str(predictions_path),
+                "predictions_sha256": metrics["predictions_sha256"],
+                "evaluation_split": "test",
             },
             f,
             ensure_ascii=False,

@@ -1,0 +1,16 @@
+_base_: ../qwen3_embedding_0_6b_phrase_continuation.yaml
+
+experiment:
+  name: llm2seq_v5_ablation_v4_psb_control
+  output_dir: runs/llm2seq_v5/ablations/v4_psb_control
+
+phrase_pointer:
+  enabled: false
+
+objectives:
+  response_alignment_weight: 0.15
+  phrase_mixture_weight: 0.0
+  phrase_copy_weight: 0.0
+  phrase_continue_weight: 0.0
+  phrase_label_weight: 0.0
+  phrase_coverage_weight: 0.0

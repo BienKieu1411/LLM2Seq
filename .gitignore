@@ -26,6 +26,8 @@ T5Gemma/data/processed/
 T5Gemma/logs/
 T5Gemma/eval_outputs/
 T5Gemma/wikilingua/*.json
+src/llm2seq_v5/data/raw/cnndm/
+src/llm2seq_v5/data/cnndm/
 
 # IDE
 .vscode/
@@ -57,3 +59,5 @@ Qwen3Baseline/
 *.sty
 
 *.bst
+
+reports/

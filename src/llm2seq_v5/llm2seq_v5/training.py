@@ -29,9 +29,9 @@ from .data import (
     dataset_fingerprint,
     decoder_seed_ids,
 )
-from .model import LLM2SeqV4
+from .model import LLM2SeqV5
 
-LOGGER = logging.getLogger("llm2seq_v4")
+LOGGER = logging.getLogger("llm2seq_v5")
 
 
 def _set_seed(seed: int) -> None:
@@ -118,14 +118,36 @@ def _tokenizers(config: Dict[str, Any]) -> Tuple[Any, Any]:
     }
     if model.get("encoder_revision") is not None:
         encoder_kwargs["revision"] = str(model["encoder_revision"])
+    encoder_tokenizer_revision = model.get("encoder_tokenizer_revision", model.get("encoder_revision"))
+    if encoder_tokenizer_revision is not None:
+        encoder_kwargs["revision"] = str(encoder_tokenizer_revision)
+    decoder_kwargs: Dict[str, Any] = {"trust_remote_code": True}
+    decoder_tokenizer_revision = model.get("decoder_tokenizer_revision", model.get("decoder_revision"))
+    if decoder_tokenizer_revision is not None:
+        decoder_kwargs["revision"] = str(decoder_tokenizer_revision)
     encoder = AutoTokenizer.from_pretrained(model["encoder_name"], **encoder_kwargs)
-    decoder = AutoTokenizer.from_pretrained(model["decoder_name"], trust_remote_code=True)
+    decoder = AutoTokenizer.from_pretrained(model["decoder_name"], **decoder_kwargs)
     for tokenizer in (encoder, decoder):
         if tokenizer.pad_token_id is None:
             if tokenizer.eos_token_id is None:
                 raise ValueError("Tokenizer has neither PAD nor EOS")
             tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "right"
+    if bool(config.get("phrase_pointer", {}).get("enabled", False)):
+        encoder_vocab = encoder.get_vocab()
+        decoder_vocab = decoder.get_vocab()
+        if encoder_vocab != decoder_vocab:
+            raise ValueError(
+                "The V5 phrase pointer requires encoder and decoder tokenizers "
+                "with an identical token->id vocabulary mapping"
+            )
+        for special in ("bos_token_id", "eos_token_id", "pad_token_id", "unk_token_id"):
+            if getattr(encoder, special, None) != getattr(decoder, special, None):
+                raise ValueError(
+                    f"The V5 phrase pointer requires matching tokenizer {special}: "
+                    f"encoder={getattr(encoder, special, None)!r}, "
+                    f"decoder={getattr(decoder, special, None)!r}"
+                )
     return encoder, decoder
 
 
@@ -133,9 +155,9 @@ def build_experiment(
     config: Dict[str, Any],
     *,
     include_train: bool = True,
-) -> Tuple[LLM2SeqV4, Any, Any, SummarizationDataset | None, SummarizationDataset | None]:
+) -> Tuple[LLM2SeqV5, Any, Any, SummarizationDataset | None, SummarizationDataset | None]:
     encoder_tokenizer, decoder_tokenizer = _tokenizers(config)
-    model = LLM2SeqV4(config)
+    model = LLM2SeqV5(config)
     data = config["data"]
     limits = config.get("limits", {})
     train_dataset = None
@@ -179,6 +201,8 @@ def _parameter_component(name: str) -> str:
         return "adapter"
     if name.startswith("alignment_head."):
         return "adapter"  # alignment head trains at adapter LR
+    if name.startswith("phrase_pointer."):
+        return "adapter"  # compact output bridge trains at adapter LR
     if ".cross_attn" in name or name.endswith(".cross_gate") or ".memory_router" in name:
         return "cross_attention"
     if name.startswith("encoder."):
@@ -203,7 +227,7 @@ def _component_lrs(training: Dict[str, Any], stage: str) -> Dict[str, float]:
 
 
 def build_optimizer(
-    model: LLM2SeqV4,
+    model: LLM2SeqV5,
     training: Dict[str, Any],
     stage: str,
     total_steps: int,
@@ -339,7 +363,7 @@ def _capture_optimizer_moments(
 
 @torch.no_grad()
 def validation_loss(
-    model: LLM2SeqV4,
+    model: LLM2SeqV5,
     loader: DataLoader,
     device: torch.device,
     training: Dict[str, Any],
@@ -359,6 +383,17 @@ def validation_loss(
         "response_alignment_cosine",
         "response_alignment_accuracy",
         "response_alignment_valid_slots",
+        "loss_phrase_mixture",
+        "loss_phrase_copy",
+        "loss_phrase_continue",
+        "loss_phrase_labels",
+        "loss_phrase_coverage",
+        "phrase_copyable_rate",
+        "phrase_continuation_available_rate",
+        "phrase_mode_generate",
+        "phrase_mode_new",
+        "phrase_mode_continue",
+        "phrase_copy_support_accuracy",
         "plan_only_rate",
         "summary_prefix_rms",
         "decoder_embedding_rms",
@@ -382,7 +417,7 @@ def validation_loss(
         "memory_route_summary",
         "cross_gate_mean",
         "cross_residual_ratio",
-        # Computed in LLM2SeqV4.forward diagnostics but previously absent from this
+        # Computed in LLM2SeqV5.forward diagnostics but previously absent from this
         # allow-list, so they were accumulated and then discarded every run.
         # salience_precision/recall are the only signal on whether the evidence head
         # -- which drives both the attention bias and the planner bias -- learned.
@@ -423,7 +458,7 @@ def validation_loss(
 
 
 def _run_stage(
-    model: LLM2SeqV4,
+    model: LLM2SeqV5,
     loader: DataLoader,
     validation_loader: DataLoader,
     device: torch.device,
@@ -539,6 +574,18 @@ def _run_stage(
                     "response_alignment_cosine": running.get("response_alignment_cosine", 0.0) / divisor,
                     "response_alignment_accuracy": running.get("response_alignment_accuracy", 0.0) / divisor,
                     "response_alignment_valid_slots": running.get("response_alignment_valid_slots", 0.0) / divisor,
+                    "loss_phrase_mixture": running.get("loss_phrase_mixture", 0.0) / divisor,
+                    "loss_phrase_copy": running.get("loss_phrase_copy", 0.0) / divisor,
+                    "loss_phrase_continue": running.get("loss_phrase_continue", 0.0) / divisor,
+                    "loss_phrase_labels": running.get("loss_phrase_labels", 0.0) / divisor,
+                    "loss_phrase_coverage": running.get("loss_phrase_coverage", 0.0) / divisor,
+                    "phrase_copyable_rate": running.get("phrase_copyable_rate", 0.0) / divisor,
+                    "phrase_continuation_available_rate": running.get("phrase_continuation_available_rate", 0.0)
+                    / divisor,
+                    "phrase_mode_generate": running.get("phrase_mode_generate", 0.0) / divisor,
+                    "phrase_mode_new": running.get("phrase_mode_new", 0.0) / divisor,
+                    "phrase_mode_continue": running.get("phrase_mode_continue", 0.0) / divisor,
+                    "phrase_copy_support_accuracy": running.get("phrase_copy_support_accuracy", 0.0) / divisor,
                     "summary_prefix_rms": running.get("summary_prefix_rms", 0.0) / divisor,
                     "decoder_embedding_rms": running.get("decoder_embedding_rms", 0.0) / divisor,
                     "prefix_to_embedding_rms_ratio": running.get("prefix_to_embedding_rms_ratio", 0.0) / divisor,
@@ -634,6 +681,8 @@ def train(config_path: str, overwrite_output_dir: bool = False) -> Path:
             split: dataset_fingerprint(
                 data[f"{split}_file"],
                 int(limits.get(f"max_{split}_examples", 0)),
+                subset_strategy=str(data.get("subset_strategy", "head")),
+                subset_seed=int(data.get("subset_seed", 0)),
             )
             for split in ("train", "validation", "test")
         }

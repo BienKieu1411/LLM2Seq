@@ -1,0 +1,58 @@
+_base_: ../qwen3_embedding_0_6b_phrase_continuation.yaml
+
+experiment:
+  name: llm2seq_v5_pilot_v2_core_single_bank_2000
+  output_dir: runs/llm2seq_v5/pilots/v2_core_single_bank_2000
+
+# Matched strong control for the proven V2 core: one dense bidirectional
+# memory, copied cross-attention, CE and salience. It deliberately keeps the
+# V5 prompt/data/subset/LR implementation so the paired validation comparison
+# changes architecture rather than protocol. It is not a byte-for-byte V2
+# reproduction because V5's fusion highway is identity preserving.
+adapter:
+  # Preserve the proven V2 core depth while the V5 main profile uses six
+  # refiners; otherwise this control would silently stop representing V2.
+  num_bidirectional_layers: 4
+  depth_routed_memory: false
+  use_summary_planner: false
+
+decoder:
+  memory_bank_count: 1
+
+phrase_pointer:
+  enabled: false
+
+objectives:
+  salience_weight: 0.10
+  use_contrastive: false
+  use_prompt_alignment: false
+  use_source_swap: false
+  contrastive_weight: 0.0
+  source_swap_weight: 0.0
+  routing_balance_weight: 0.0
+  response_alignment_weight: 0.0
+  phrase_mixture_weight: 0.0
+  phrase_copy_weight: 0.0
+  phrase_continue_weight: 0.0
+  phrase_label_weight: 0.0
+  phrase_coverage_weight: 0.0
+  plan_only_probability_start: 0.0
+  plan_only_probability_end: 0.0
+  oracle_evidence_mix_start: 0.0
+  oracle_evidence_mix_end: 0.0
+  label_smoothing: 0.0
+
+training:
+  interface_warmup_epochs: 2
+  full_finetune_epochs: 4
+  validation_every_epochs: 1
+  validation_max_examples: 512
+
+data:
+  subset_strategy: hashed
+  subset_seed: 42
+
+limits:
+  max_train_examples: 2000
+  max_validation_examples: 512
+  max_test_examples: 0

@@ -1,0 +1,5 @@
+_base_: base.yaml
+
+experiment:
+  name: llm2seq_v5_qwen3_embedding_0_6b_phrase_continuation
+  output_dir: runs/llm2seq_v5/qwen3_embedding_0_6b_phrase_continuation

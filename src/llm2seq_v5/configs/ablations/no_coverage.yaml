@@ -1,0 +1,8 @@
+_base_: ../qwen3_embedding_0_6b_phrase_continuation.yaml
+
+experiment:
+  name: llm2seq_v5_ablation_no_coverage
+  output_dir: runs/llm2seq_v5/ablations/no_coverage
+
+objectives:
+  phrase_coverage_weight: 0.0
