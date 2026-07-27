@@ -12,7 +12,11 @@ import yaml
 def _merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     result = copy.deepcopy(base)
     for key, value in override.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
+        if isinstance(value, dict) and value.get("_replace_") is True:
+            replacement = copy.deepcopy(value)
+            replacement.pop("_replace_")
+            result[key] = replacement
+        elif isinstance(value, dict) and isinstance(result.get(key), dict):
             result[key] = _merge(result[key], value)
         else:
             result[key] = copy.deepcopy(value)
@@ -255,6 +259,7 @@ def validate_config(config: Dict[str, Any]) -> None:
     for profile, required_backend in (
         ("diagnostic", "rouge==1.0.0"),
         ("paper", "Perl ROUGE-1.5.5"),
+        ("reference_only", "Perl ROUGE-1.5.5"),
     ):
         target = benchmark.get(profile, {})
         if not target:
@@ -266,8 +271,10 @@ def validate_config(config: Dict[str, Any]) -> None:
             )
         if any(float(target.get(name, -1.0)) < 0.0 for name in ("rouge1", "rouge2", "rougeL")):
             raise ValueError(f"benchmark.{profile} requires non-negative ROUGE-1/2/L")
-        if int(target.get("num_examples", 0)) <= 0:
+        if profile != "reference_only" and int(target.get("num_examples", 0)) <= 0:
             raise ValueError(f"benchmark.{profile}.num_examples must be positive")
+        if profile == "reference_only" and not str(target.get("comparability", "")).strip():
+            raise ValueError("benchmark.reference_only.comparability must explain why the target is not formal")
 
     paper_protocol = benchmark.get("paper_protocol", {})
     if benchmark.get("paper") and not paper_protocol:

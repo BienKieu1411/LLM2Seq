@@ -8,10 +8,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${ROOT}"
 
 DEFAULT_PYTHON="/Users/kieugiangbien/bienkieu_env/bin/python"
-if [[ -x "$DEFAULT_PYTHON" ]]; then
-  PYTHON_BIN="${PYTHON_BIN:-$DEFAULT_PYTHON}"
-else
-  PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
+PYTHON_BIN="${PYTHON_BIN:-$DEFAULT_PYTHON}"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  echo "Python environment not found or not executable: $PYTHON_BIN" >&2
+  echo "Set PYTHON_BIN to bienkieu_env on this machine; no system-Python fallback is used." >&2
+  exit 2
 fi
 export PYTHON_BIN
 MODE="${1:-help}"
@@ -298,6 +299,12 @@ Modes:
               Run the decisive 2k/512 held-out V4 pilot.
   llm2seq-v4
               Full Qwen3-Embedding 0.6B -> Qwen3 0.6B V4, then last.pt eval.
+  llm2seq-v4-cnndm-prepare
+              Copy/convert CNN/DM from CNNDM_SOURCE_DIR into V4-owned data.
+  llm2seq-v4-cnndm-smoke
+              Smoke-test V4 on CNN/DM at 4096 source tokens.
+  llm2seq-v4-cnndm
+              Train V4 on CNN/DM for 1 warm-up + 5 full epochs, then test.
   llm2seq-v4-pilot-ablation-all
               Run main plus four decisive matched V4 pilot ablations.
   llm2seq-v5-test
@@ -332,6 +339,8 @@ Before T5Gemma 4B/all:
 
 CNN/DailyMail source folder:
   CNNDM_SOURCE_DIR=/absolute/path/to/cnndm bash run.sh t5gemma-cnndm-all
+  CNNDM_SOURCE_DIR=/absolute/path/to/cnndm OVERWRITE_LLM2SEQ_V4=true \
+    bash run.sh llm2seq-v4-cnndm
   CNNDM_SOURCE_DIR=/absolute/path/to/cnndm OVERWRITE_LLM2SEQ_V5=true \
     bash run.sh llm2seq-v5-cnndm
   CNNDM_SOURCE_DIR must contain train.txt, val.txt, and test.txt.
@@ -453,6 +462,19 @@ case "${MODE}" in
     ;;
   llm2seq-v4)
     run_llm2seq_v4 qwen
+    ;;
+  llm2seq-v4-cnndm-prepare)
+    if [[ -z "${CNNDM_SOURCE_DIR:-}" ]]; then
+      echo "Set CNNDM_SOURCE_DIR=/absolute/path/to/cnndm." >&2
+      exit 2
+    fi
+    bash llm2seq_v4/run.sh cnndm-prepare "$CNNDM_SOURCE_DIR"
+    ;;
+  llm2seq-v4-cnndm-smoke)
+    run_llm2seq_v4 cnndm-smoke
+    ;;
+  llm2seq-v4-cnndm)
+    run_llm2seq_v4 cnndm
     ;;
   llm2seq-v4-pilot-ablation-all)
     run_llm2seq_v4 pilot-ablation-all

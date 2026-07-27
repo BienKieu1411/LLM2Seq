@@ -5,10 +5,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 DEFAULT_PYTHON="/Users/kieugiangbien/bienkieu_env/bin/python"
-if [[ -x "$DEFAULT_PYTHON" ]]; then
-  PYTHON_BIN="${PYTHON_BIN:-$DEFAULT_PYTHON}"
-else
-  PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON_BIN="${PYTHON_BIN:-$DEFAULT_PYTHON}"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  echo "Python environment not found or not executable: $PYTHON_BIN" >&2
+  echo "Set PYTHON_BIN to bienkieu_env on the B200 machine; no unrelated Python fallback is used." >&2
+  exit 2
 fi
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export HF_HUB_DISABLE_TELEMETRY=1
@@ -26,7 +27,39 @@ fi
 
 MAIN_CONFIG="${CONFIG:-configs/qwen3_embedding_0_6b_psb.yaml}"
 SMOKE_CONFIG="configs/smoke_qwen3_embedding_100.yaml"
+CNNDM_CONFIG="configs/cnndm_qwen3_embedding_0_6b_psb_4096.yaml"
+CNNDM_SMOKE_CONFIG="configs/smoke_cnndm_100.yaml"
 ROUGE155_SCRIPT="../rouge155/evaluate_rouge.py"
+
+prepare_cnndm() {
+  local source_dir="${1:-${CNNDM_SOURCE_DIR:-}}"
+  if [[ -z "$source_dir" ]]; then
+    echo "CNN/DailyMail source is required." >&2
+    echo "Set CNNDM_SOURCE_DIR=/absolute/path or run: bash run.sh cnndm-prepare /absolute/path" >&2
+    exit 2
+  fi
+  "$PYTHON_BIN" -m llm2seq_v4.prepare_cnndm \
+    --input-dir "$source_dir" \
+    --raw-copy-dir data/raw/cnndm \
+    --output-dir data/cnndm
+}
+
+ensure_cnndm_data() {
+  local split
+  for split in train validation test; do
+    if [[ ! -s "data/cnndm/${split}.jsonl" ]]; then
+      echo "Missing data/cnndm/${split}.jsonl; run cnndm-prepare first." >&2
+      exit 2
+    fi
+  done
+}
+
+prepare_cnndm_if_requested() {
+  if [[ -n "${CNNDM_SOURCE_DIR:-}" ]]; then
+    prepare_cnndm "$CNNDM_SOURCE_DIR"
+  fi
+  ensure_cnndm_data
+}
 
 output_dir_for() {
   "$PYTHON_BIN" - "$1" <<'PY'
@@ -45,11 +78,25 @@ run_rouge155() {
   fi
   local scores="${predictions%.*}.rouge155.json"
   "$PYTHON_BIN" "$ROUGE155_SCRIPT" "$predictions" --output "$scores"
-  "$PYTHON_BIN" -m llm2seq_v4.paper_compare \
-    --config "$config" \
-    --scores "$scores" \
-    --candidate-metrics "${predictions%.*}.metrics.json" \
-    --output "$(dirname "$predictions")/t5gemma_paper_gap_report.json"
+  # WikiLingua has a fully locked paper contract. CNN/DM currently retains
+  # the user-provided T5Gemma scores as reference-only until its exact test
+  # count/fingerprint is bound, so a formal superiority report would be false.
+  if "$PYTHON_BIN" - "$config" <<'PY'
+import sys
+from llm2seq_v4.config import load_config
+
+target = load_config(sys.argv[1]).get("benchmark", {}).get("paper", {})
+raise SystemExit(0 if all(name in target for name in ("rouge1", "rouge2", "rougeL")) else 1)
+PY
+  then
+    "$PYTHON_BIN" -m llm2seq_v4.paper_compare \
+      --config "$config" \
+      --scores "$scores" \
+      --candidate-metrics "${predictions%.*}.metrics.json" \
+      --output "$(dirname "$predictions")/t5gemma_paper_gap_report.json"
+  else
+    echo "Formal baseline comparison skipped: benchmark.paper is not locked in $config." >&2
+  fi
 }
 
 run_pipeline() {
@@ -122,6 +169,32 @@ case "$MODE" in
   pilot)
     run_pipeline configs/pilot_qwen3_embedding_2000.yaml "$@"
     ;;
+  cnndm-prepare)
+    prepare_cnndm "${1:-}"
+    ;;
+  cnndm-smoke)
+    prepare_cnndm_if_requested
+    run_smoke "$CNNDM_SMOKE_CONFIG" "$@"
+    ;;
+  cnndm|cnndm-full)
+    prepare_cnndm_if_requested
+    run_pipeline "$CNNDM_CONFIG" "$@"
+    ;;
+  cnndm-train)
+    prepare_cnndm_if_requested
+    "$PYTHON_BIN" -m llm2seq_v4.training --config "$CNNDM_CONFIG" "$@"
+    ;;
+  cnndm-eval)
+    ensure_cnndm_data
+    CNNDM_OUTPUT_DIR="$(output_dir_for "$CNNDM_CONFIG")"
+    "$PYTHON_BIN" -m llm2seq_v4.evaluate \
+      --config "$CNNDM_OUTPUT_DIR/resolved_config.yaml" \
+      --checkpoint "$CNNDM_OUTPUT_DIR/last.pt" \
+      --output "$CNNDM_OUTPUT_DIR/last_test_predictions.jsonl" "$@"
+    run_rouge155 \
+      "$CNNDM_OUTPUT_DIR/last_test_predictions.jsonl" \
+      "$CNNDM_OUTPUT_DIR/resolved_config.yaml"
+    ;;
   pilot-pplx)
     run_pipeline configs/pilot_pplx_embed_2000.yaml "$@"
     ;;
@@ -179,6 +252,13 @@ Core:
   qwen-base                    Full causal Qwen3-Base encoder control.
   pplx                         Full PPLX 0.6B encoder score candidate.
   train | eval | rouge155 | final-audit | check-model | count-params
+
+CNN/DailyMail (4096 source tokens, 1 warm-up + 5 full = 6 epochs):
+  bash run.sh cnndm-prepare /absolute/path/to/cnndm
+  bash run.sh cnndm-smoke --overwrite-output-dir
+  bash run.sh cnndm --overwrite-output-dir
+  CNNDM_SOURCE_DIR=/absolute/path/to/cnndm bash run.sh cnndm --overwrite-output-dir
+  cnndm-train | cnndm-eval
 
 Ablation:
   pilot-ablation-all           Main + four decisive 2k pilots.

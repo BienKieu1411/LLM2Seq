@@ -568,7 +568,7 @@ class ProspectiveSummaryBridge(nn.Module):
             dropout,
             float(config.get("projection_gate_init", 0.1)),
         )
-        layer_count = int(config.get("num_bidirectional_layers", 4))
+        layer_count = int(config.get("num_bidirectional_layers", 6))
         self.bidirectional_layers = nn.ModuleList(
             BidirectionalAdapterLayer(
                 self.hidden_size,

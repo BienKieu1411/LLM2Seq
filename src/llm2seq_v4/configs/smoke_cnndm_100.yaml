@@ -1,0 +1,27 @@
+_base_: cnndm_qwen3_embedding_0_6b_psb_4096.yaml
+
+experiment:
+  name: llm2seq_v4_smoke_cnndm_100
+  output_dir: runs/llm2seq_v4/smoke_cnndm_100
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 1
+  batch_size: 20
+  gradient_accumulation_steps: 1
+  validation_batch_size: 20
+  validation_every_epochs: 1
+  validation_max_examples: 20
+
+generation:
+  batch_size: 20
+
+data:
+  # V4's bounded smoke loader reads the first N canonical rows.
+  subset_strategy: head
+  subset_seed: 42
+
+limits:
+  max_train_examples: 100
+  max_validation_examples: 20
+  max_test_examples: 20

@@ -28,6 +28,8 @@ T5Gemma/eval_outputs/
 T5Gemma/wikilingua/*.json
 src/llm2seq_v5/data/raw/cnndm/
 src/llm2seq_v5/data/cnndm/
+src/llm2seq_v4/data/raw/cnndm/
+src/llm2seq_v4/data/cnndm/
 
 # IDE
 .vscode/

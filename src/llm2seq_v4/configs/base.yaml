@@ -29,9 +29,9 @@ adapter:
   projection_ffn_size: 2048
   projection_gate_init: 0.10
   final_memory_norm: false
-  # Four token refiners plus two compact planner blocks use less random
-  # interface capacity than v3's six/eight full-length blocks.
-  num_bidirectional_layers: 4
+  # Six full-length token refiners match the selected V5 bridge depth while
+  # the explicit 4-layer/V2 configs remain available as controlled ablations.
+  num_bidirectional_layers: 6
   num_heads: 16
   ffn_size: 4096
   rope_theta: 1000000.0

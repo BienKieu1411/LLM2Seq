@@ -274,12 +274,18 @@ def evaluate(
     benchmark = config.get("benchmark", {})
     diagnostic_benchmark = benchmark.get("diagnostic", {})
     paper_benchmark = benchmark.get("paper", {})
+    reference_only_benchmark = benchmark.get("reference_only", {})
     locked_test = benchmark.get("data", {}).get("test", {})
-    locked_test_matches = int(locked_test.get("num_examples", -1)) == int(
-        current_test_fingerprint["num_examples"]
-    ) and str(locked_test.get("sha256", "")) == str(current_test_fingerprint["sha256"])
+    locked_test_matches = None
+    locked_test_status = "unlocked"
+    if locked_test:
+        locked_test_matches = int(locked_test.get("num_examples", -1)) == int(
+            current_test_fingerprint["num_examples"]
+        ) and str(locked_test.get("sha256", "")) == str(current_test_fingerprint["sha256"])
+        locked_test_status = "exact_match" if locked_test_matches else "mismatch"
     metrics["locked_test_data_fingerprint"] = locked_test
     metrics["locked_test_matches"] = locked_test_matches
+    metrics["locked_test_status"] = locked_test_status
     if all(name in diagnostic_benchmark for name in ("rouge1", "rouge2", "rougeL")):
         expected_examples = int(diagnostic_benchmark.get("num_examples", len(rows)))
         comparable = len(rows) == expected_examples
@@ -304,6 +310,16 @@ def evaluate(
             "num_examples": int(paper_benchmark.get("num_examples", len(rows))),
         }
         metrics["paper_comparison_status"] = "pending_perl_rouge155"
+    elif all(name in reference_only_benchmark for name in ("rouge1", "rouge2", "rougeL")):
+        metrics["reference_only_benchmark"] = {
+            "name": str(reference_only_benchmark.get("name", "T5Gemma")),
+            "backend": str(reference_only_benchmark.get("backend", "Perl ROUGE-1.5.5")),
+            "rouge1": float(reference_only_benchmark["rouge1"]),
+            "rouge2": float(reference_only_benchmark["rouge2"]),
+            "rougeL": float(reference_only_benchmark["rougeL"]),
+            "comparability": str(reference_only_benchmark["comparability"]),
+        }
+        metrics["paper_comparison_status"] = "reference_only_not_comparable"
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as handle:

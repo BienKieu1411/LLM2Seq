@@ -55,7 +55,7 @@ def test_main_v4_profile_is_output_centric_single_memory():
     config = load_config(root / "configs/qwen3_embedding_0_6b_psb.yaml")
     assert config["model"]["encoder_name"] == "Qwen/Qwen3-Embedding-0.6B"
     assert config["model"]["decoder_name"] == "Qwen/Qwen3-0.6B"
-    assert config["adapter"]["num_bidirectional_layers"] == 4
+    assert config["adapter"]["num_bidirectional_layers"] == 6
     assert config["adapter"]["use_summary_planner"] is True
     assert config["adapter"]["num_summary_slots"] == 16
     assert config["adapter"]["summary_planner_layers"] == 2

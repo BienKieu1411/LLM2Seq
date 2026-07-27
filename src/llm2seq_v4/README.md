@@ -35,7 +35,7 @@ equal, the projection base is an exact identity; normalization is confined to
 the learned residual branch.  This avoids destroying pretrained coordinates at
 step zero, a weakness of the V3 `RMSNorm -> identity matrix -> RMSNorm` path.
 
-Four full bidirectional refinement blocks produce dense token memory.  Native
+Six full bidirectional refinement blocks produce dense token memory.  Native
 bidirectional encoders such as PPLX use one refinement block.
 
 The primary Qwen3-Embedding checkpoint still uses causal attention internally;
@@ -147,6 +147,9 @@ Main files:
   candidate.
 - `configs/smoke_qwen3_embedding_100.yaml`: 100 train / 20 validation-test.
 - `configs/pilot_qwen3_embedding_2000.yaml`: 2,000 train / 512 held-out.
+- `configs/cnndm_qwen3_embedding_0_6b_psb_4096.yaml`: CNN/DailyMail,
+  4,096-token source, one interface warm-up plus five full-finetune epochs.
+- `configs/smoke_cnndm_100.yaml`: 100/20/20 CNN/DailyMail flow check.
 
 The actual model path or local checkpoint path is set in `model.encoder_name`
 and `model.decoder_name`.  The code never uploads checkpoints.
@@ -155,7 +158,7 @@ Important parameters are in `configs/base.yaml`:
 
 ```yaml
 adapter:
-  num_bidirectional_layers: 4
+  num_bidirectional_layers: 6
   num_summary_slots: 16
   summary_planner_layers: 2
 
@@ -201,6 +204,31 @@ bash run.sh check-model \
 bash run.sh qwen-base --overwrite-output-dir
 bash run.sh pplx --overwrite-output-dir
 ```
+
+### CNN/DailyMail
+
+V4 owns its CNN/DailyMail copy and does not read V5 or T5Gemma runtime files.
+The preparation step converts `article_text`/`abstract_text` and common aliases
+to canonical JSONL, rejects duplicate/cross-split IDs, and writes a manifest.
+The full profile uses the same English source instruction, 4,096/256
+source/target limits, and greedy 8--192-token generation contract as T5Gemma.
+
+From `src/llm2seq_v4`:
+
+```bash
+bash run.sh cnndm-prepare /absolute/path/to/cnndm
+bash run.sh cnndm-smoke --overwrite-output-dir
+bash run.sh cnndm --overwrite-output-dir
+
+# Equivalent one-command prepare + full run:
+CNNDM_SOURCE_DIR=/absolute/path/to/cnndm \
+  bash run.sh cnndm --overwrite-output-dir
+```
+
+This run saves/evaluates only `last.pt`. The recorded T5Gemma CNN/DailyMail
+score (43.591/19.396/40.436, Perl ROUGE-1.5.5) remains `reference_only` until
+the exact baseline test count and fingerprint are bound to the local manifest;
+the runner will not emit a false formal-comparability claim before then.
 
 Only `last.pt` is saved and evaluated.  If Perl ROUGE is configured, each
 pipeline also writes `last_test_predictions.rouge155.json`; otherwise scoring
