@@ -4,13 +4,22 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-DEFAULT_PYTHON="/Users/kieugiangbien/bienkieu_env/bin/python"
-PYTHON_BIN="${PYTHON_BIN:-$DEFAULT_PYTHON}"
-if [[ ! -x "$PYTHON_BIN" ]]; then
-  echo "Python environment not found or not executable: $PYTHON_BIN" >&2
-  echo "Set PYTHON_BIN to the B200 environment explicitly; do not fall back to an unrelated Python." >&2
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+  if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+    PYTHON_BIN="${VIRTUAL_ENV}/bin/python"
+  elif [[ -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
+    PYTHON_BIN="${CONDA_PREFIX}/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python)"
+  fi
+fi
+if [[ -z "${PYTHON_BIN:-}" || ! -x "$PYTHON_BIN" ]]; then
+  echo "No executable Python found. Activate the intended environment or set PYTHON_BIN." >&2
   exit 2
 fi
+export PYTHON_BIN
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export HF_HUB_DISABLE_TELEMETRY=1
 export HF_HUB_DISABLE_IMPLICIT_TOKEN=1
