@@ -4,11 +4,11 @@ experiment:
   name: llm2seq_v4_pubmed_qwen3_embedding_0_6b_psb_4096
   output_dir: runs/llm2seq_v4/pubmed_qwen3_embedding_0_6b_psb_4096
 
-# PubMed is a large long-document corpus. Use one frozen-backbone interface
-# epoch, followed by five full-parameter epochs, matching the CNN/DM budget.
+# PubMed is a large long-document corpus. Warm the newly installed interface
+# for two epochs, then update all parameters for six epochs.
 training:
-  interface_warmup_epochs: 1
-  full_finetune_epochs: 5
+  interface_warmup_epochs: 2
+  full_finetune_epochs: 6
   batch_size: 16
   gradient_accumulation_steps: 2
   validation_batch_size: 8
@@ -16,7 +16,7 @@ training:
   warmup_ratio: 0.05
 
 objectives:
-  contrastive_warmup_epochs: 1
+  contrastive_warmup_epochs: 2
   plan_only_anneal_epochs: 2.0
   oracle_evidence_anneal_epochs: 2.0
 

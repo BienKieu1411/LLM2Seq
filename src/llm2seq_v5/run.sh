@@ -301,7 +301,7 @@ CNN/DailyMail (4096 source tokens, 1 warm-up + 5 full = 6 epochs):
   # Or prepare and run in one command:
   CNNDM_SOURCE_DIR=/absolute/path/to/cnndm bash run.sh cnndm --overwrite-output-dir
 
-PubMed (4096 source tokens, 1 warm-up + 5 full = 6 epochs):
+PubMed (4096 source tokens, 2 warm-up + 6 full = 8 epochs):
   bash run.sh pubmed-prepare /absolute/path/to/pubmet
   bash run.sh pubmed-smoke --overwrite-output-dir
   bash run.sh pubmed --overwrite-output-dir

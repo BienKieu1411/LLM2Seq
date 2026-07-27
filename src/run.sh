@@ -329,7 +329,7 @@ Modes:
   llm2seq-v4-pubmed-smoke
               Smoke-test V4 on PubMed at 4096 source tokens.
   llm2seq-v4-pubmed
-              Train V4 on PubMed for 1 warm-up + 5 full epochs, then test.
+              Train V4 on PubMed for 2 warm-up + 6 full epochs, then test.
   llm2seq-v4-pilot-ablation-all
               Run main plus four decisive matched V4 pilot ablations.
   llm2seq-v5-test
@@ -351,7 +351,7 @@ Modes:
   llm2seq-v5-pubmed-smoke
               Smoke-test V5 on PubMed at 4096 source tokens.
   llm2seq-v5-pubmed
-              Train V5 on PubMed for 1 warm-up + 5 full epochs, then test.
+              Train V5 on PubMed for 2 warm-up + 6 full epochs, then test.
   compare     Compare both GenBridge checkpoints with T5Gemma.
   compare-4b  Compare both GenBridge checkpoints with T5Gemma 4B-4B.
   all         Run the WikiLingua LLM2Seq-v2/T5Gemma sequence and all five

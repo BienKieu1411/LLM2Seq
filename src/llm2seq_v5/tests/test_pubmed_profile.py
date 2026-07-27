@@ -46,4 +46,6 @@ def test_pubmed_preparation_and_profile(tmp_path: Path) -> None:
     assert config["data"]["max_source_length"] == 4096
     assert config["data"]["max_target_length"] == 512
     assert config["data"]["source_prefix"] == t5["data"]["source_prefix"]
-    assert config["training"]["interface_warmup_epochs"] + config["training"]["full_finetune_epochs"] == 6
+    assert config["training"]["interface_warmup_epochs"] == 2
+    assert config["training"]["full_finetune_epochs"] == 6
+    assert t5["training"]["num_train_epochs"] == 4
