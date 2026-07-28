@@ -10,6 +10,50 @@ import torch.nn.functional as F
 Variant = Literal["causal", "full", "dec2enc", "evidence"]
 
 
+def align_trainable_sdpa_bias_heads(attention_bias: torch.Tensor, query_heads: int) -> torch.Tensor:
+    """Materialize a trainable broadcast bias on SDPA's query-head axis.
+
+    CUDA memory-efficient backward indexes differentiable masks by query head.
+    EviSeq's compact evidence bias is ``[B,1,1,K]``; expanding only its
+    singleton head axis costs ``B*H*K`` rather than a quadratic ``B*H*Q*K``.
+    """
+
+    if attention_bias.ndim != 4:
+        raise ValueError("SDPA attention bias must have [B,H,Q,K] rank")
+    if attention_bias.shape[1] not in (1, query_heads):
+        raise ValueError("SDPA attention-bias heads must be 1 or match query heads")
+    if attention_bias.requires_grad and attention_bias.shape[1] == 1 and query_heads > 1:
+        return attention_bias.expand(-1, query_heads, -1, -1).contiguous()
+    return attention_bias
+
+
+def ensure_sdpa_lse_for_bias_backward(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_bias: torch.Tensor | None,
+) -> torch.Tensor:
+    """Keep fused SDPA backward valid when only its bias needs gradients.
+
+    During interface warm-up the pretrained Q/K/V path is frozen, while the
+    learned evidence-key bias remains differentiable.  Some CUDA
+    memory-efficient SDPA versions decide whether to retain log-sum-exp (LSE)
+    state from Q/K/V alone.  A bias-only backward then fails with
+    ``LSE is not correctly aligned (strideH)``.  Giving the query a leaf
+    gradient in exactly that case makes the kernel retain its backward state;
+    the disposable query gradient does not update any pretrained parameter or
+    alter the forward values.
+    """
+
+    needs_bias_backward = (
+        torch.is_grad_enabled()
+        and attention_bias is not None
+        and attention_bias.requires_grad
+        and not (query.requires_grad or key.requires_grad or value.requires_grad)
+    )
+    return query.detach().requires_grad_(True) if needs_bias_backward else query
+
+
 def pool_units(
     token_states: torch.Tensor,
     unit_ids: torch.Tensor,

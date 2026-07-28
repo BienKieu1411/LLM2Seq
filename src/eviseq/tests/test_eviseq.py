@@ -21,6 +21,8 @@ from eviseq.data_integrity import audit
 from eviseq.encoder import EncoderOutput, NativeDualMaskQwenEncoder
 from eviseq.model import EviSeq
 from eviseq.native_attention import (
+    align_trainable_sdpa_bias_heads,
+    ensure_sdpa_lse_for_bias_backward,
     evidence_key_attention_bias,
     mix_attention_outputs,
     sdpa_mask,
@@ -322,6 +324,44 @@ def test_native_evidence_zero_init_matches_causal_and_receives_gradient() -> Non
     assert encoder.evidence_view_gate.grad is not None
     assert torch.isfinite(encoder.evidence_view_gate.grad).all()
     assert encoder.model.layers[0].self_attn.q_proj.weight.grad is not None
+
+
+def test_frozen_native_encoder_supports_bias_only_sdpa_backward() -> None:
+    """Warm-up must train evidence routing while pretrained Q/K/V stay frozen."""
+
+    torch.manual_seed(13)
+    encoder = _tiny_native_encoder("evidence")
+    encoder.set_trainable(False)
+    encoder.evidence_view_gate.data.fill_(0.1)
+    ids = torch.tensor([[1, 2, 3, 4]])
+    mask = torch.ones_like(ids)
+    unit_ids = torch.tensor([[1, 1, 2, 2]])
+    output = encoder(ids, mask, unit_ids)
+    output.memory.float().square().mean().backward()
+    assert encoder.model.layers[0].self_attn.q_proj.weight.grad is None
+    assert encoder.evidence_head[-1].weight.grad is not None
+    assert torch.isfinite(encoder.evidence_head[-1].weight.grad).all()
+
+
+def test_sdpa_lse_guard_is_numerically_exact_and_narrow() -> None:
+    query = torch.randn(1, 4, 3, 8)
+    key = torch.randn(1, 4, 3, 8)
+    value = torch.randn(1, 4, 3, 8)
+    bias = torch.randn(1, 1, 1, 3, requires_grad=True)
+    guarded = ensure_sdpa_lse_for_bias_backward(query, key, value, bias)
+    assert guarded.requires_grad
+    torch.testing.assert_close(guarded, query, rtol=0, atol=0)
+    already_differentiable = query.detach().requires_grad_(True)
+    assert ensure_sdpa_lse_for_bias_backward(already_differentiable, key, value, bias) is already_differentiable
+
+
+def test_trainable_sdpa_bias_is_materialized_per_query_head() -> None:
+    compact = torch.randn(2, 1, 1, 5, requires_grad=True)
+    aligned = align_trainable_sdpa_bias_heads(compact, 4)
+    assert aligned.shape == (2, 4, 1, 5)
+    assert aligned.is_contiguous()
+    aligned.sum().backward()
+    torch.testing.assert_close(compact.grad, torch.full_like(compact, 4.0))
 
 
 def test_hard_controls_are_exact() -> None:

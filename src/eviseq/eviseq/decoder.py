@@ -89,7 +89,7 @@ class QwenCopiedCrossAttention(nn.Module):
     ) -> torch.Tensor:
         batch, query_length, _ = hidden_states.shape
         query = self.q_proj(hidden_states).view(batch, query_length, self.num_heads, self.head_dim)
-        query = self.q_norm(query).transpose(1, 2)
+        query = self.q_norm(query).transpose(1, 2).contiguous()
         cached = self._memory_cache if not self.training else None
         if cached is None:
             if encoder_hidden_states.ndim != 3:
@@ -105,6 +105,8 @@ class QwenCopiedCrossAttention(nn.Module):
         if repeats > 1:
             key = key.repeat_interleave(repeats, dim=1)
             value = value.repeat_interleave(repeats, dim=1)
+        key = key.contiguous()
+        value = value.contiguous()
 
         mask = None
         if encoder_attention_bias is not None:

@@ -9,7 +9,14 @@ import torch
 import torch.nn as nn
 import torch.utils.checkpoint
 
-from .native_attention import evidence_key_attention_bias, mix_attention_outputs, pool_units, sdpa_mask
+from .native_attention import (
+    align_trainable_sdpa_bias_heads,
+    ensure_sdpa_lse_for_bias_backward,
+    evidence_key_attention_bias,
+    mix_attention_outputs,
+    pool_units,
+    sdpa_mask,
+)
 
 
 @dataclass
@@ -134,9 +141,12 @@ class NativeDualMaskQwenEncoder(nn.Module):
                 backend_mask = attention_mask if not bool(attention_mask.bool().all()) else None
             elif backend_mask is None:
                 backend_mask = sdpa_mask(attention_mask, is_causal, hidden_states.shape[1])
+            if backend_mask is not None and backend_mask.requires_grad:
+                backend_mask = align_trainable_sdpa_bias_heads(backend_mask, query.shape[1])
+            backend_query = ensure_sdpa_lse_for_bias_backward(query, key, value, backend_mask)
             output, _ = interface(
                 attention,
-                query,
+                backend_query,
                 key,
                 value,
                 backend_mask,
