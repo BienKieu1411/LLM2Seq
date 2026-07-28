@@ -8,7 +8,7 @@ import pytest
 import torch
 import torch.nn as nn
 import yaml
-from eviseq.bridge import EvidenceBridge
+from eviseq.bridge import EvidenceBridge, balanced_salience_loss
 from eviseq.config import architecture_contract, load_config, validate_config
 from eviseq.contrastive import (
     SourcePromptAlignmentHead,
@@ -34,6 +34,7 @@ from eviseq.training import (
     _parameter_component,
     _restore_optimizer_moments,
     _restore_rng_state,
+    _salience_ranking_accuracy,
     _salience_scores,
     _virtual_duplicate_mask,
 )
@@ -292,6 +293,28 @@ def test_zero_initialized_dual_mask_is_exactly_causal() -> None:
     torch.testing.assert_close(actual_generic, causal, rtol=0, atol=0)
 
 
+def test_main_uses_conservative_nonzero_evidence_gate_initialization() -> None:
+    config = load_config(ROOT / "configs" / "wikilingua.yaml")
+    assert config["native_attention"]["evidence_view_gate_init"] == 0.01
+
+
+def test_pairwise_salience_term_rewards_positive_unit_ranking() -> None:
+    labels = torch.tensor([[1.0, 0.0, 0.0]])
+    valid = torch.ones_like(labels, dtype=torch.bool)
+    correct = torch.tensor([[2.0, -1.0, -2.0]], requires_grad=True)
+    reversed_order = torch.tensor([[-2.0, 1.0, 2.0]])
+    correct_loss = balanced_salience_loss(correct, labels, valid, ranking_weight=0.25)
+    reversed_loss = balanced_salience_loss(reversed_order, labels, valid, ranking_weight=0.25)
+    assert correct_loss < reversed_loss
+    correct_loss.backward()
+    assert correct.grad is not None and torch.isfinite(correct.grad).all()
+
+
+def test_salience_ranking_accuracy_uses_pair_counts() -> None:
+    totals = {"salience_correct_pairs": 7.5, "salience_pair_count": 10.0}
+    assert _salience_ranking_accuracy(totals) == 0.75
+
+
 def test_manual_native_causal_loop_exactly_matches_transformers_qwen() -> None:
     torch.manual_seed(7)
     encoder = _tiny_native_encoder("causal").eval()
@@ -509,6 +532,7 @@ def test_forbidden_objectives_fail_closed() -> None:
 
 def test_main_contrastive_uses_the_audited_minimal_objective() -> None:
     config = load_config(ROOT / "configs" / "wikilingua.yaml")
+    assert config["bridge"]["salience_ranking_weight"] == 0.25
     objectives = config["objectives"]
     assert objectives["use_contrastive"] is True
     assert objectives["contrastive_weight"] == 0.10

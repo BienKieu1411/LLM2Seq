@@ -195,6 +195,22 @@ class EviSeq(nn.Module):
                 result["salience_gold_count"] = gold.sum().float().detach()
                 result["salience_precision"] = (tp / predictions.sum().float().clamp_min(1)).detach()
                 result["salience_recall"] = (tp / gold.sum().float().clamp_min(1)).detach()
+                correct_pairs = probabilities.new_zeros(())
+                pair_count = probabilities.new_zeros(())
+                logits = bridge.salience_logits[:, :width].float()
+                for row in range(logits.shape[0]):
+                    row_valid = valid[row]
+                    row_gold = evidence_labels[row, :width].gt(0.5) & row_valid
+                    row_negative = ~evidence_labels[row, :width].gt(0.5) & row_valid
+                    positives = logits[row][row_gold]
+                    negatives = logits[row][row_negative]
+                    if positives.numel() and negatives.numel():
+                        differences = positives[:, None] - negatives[None, :]
+                        correct_pairs = correct_pairs + differences.gt(0).float().sum()
+                        correct_pairs = correct_pairs + 0.5 * differences.eq(0).float().sum()
+                        pair_count = pair_count + differences.new_tensor(differences.numel())
+                result["salience_correct_pairs"] = correct_pairs.detach()
+                result["salience_pair_count"] = pair_count.detach()
         if self.alignment_head is not None and self.alignment_head.pool_gate is not None:
             result["alignment_last_pool_weight"] = torch.sigmoid(self.alignment_head.pool_gate.float()).mean().detach()
         return result

@@ -36,6 +36,8 @@ _SALIENCE_COUNT_METRICS = (
     "salience_tp",
     "salience_predicted_count",
     "salience_gold_count",
+    "salience_correct_pairs",
+    "salience_pair_count",
 )
 
 
@@ -53,6 +55,11 @@ def _salience_scores(totals: Dict[str, float]) -> tuple[float, float, float]:
     recall = tp / gold if gold > 0.0 else 0.0
     f1 = 2.0 * precision * recall / (precision + recall) if precision + recall > 0.0 else 0.0
     return precision, recall, f1
+
+
+def _salience_ranking_accuracy(totals: Dict[str, float]) -> float:
+    pairs = totals.get("salience_pair_count", 0.0)
+    return totals.get("salience_correct_pairs", 0.0) / pairs if pairs > 0.0 else 0.0
 
 
 def _contrastive_scale(
@@ -236,6 +243,7 @@ def validation_loss(
             "eval_salience_precision": salience_precision,
             "eval_salience_recall": salience_recall,
             "eval_salience_f1": salience_f1,
+            "eval_salience_ranking_accuracy": _salience_ranking_accuracy(totals),
         }
     )
     result["eval_examples"] = float(examples)
@@ -362,6 +370,7 @@ def _run_stage(
                     "ce": _rounded(running.get("loss_ce", 0.0) / divisor),
                     "sal": _rounded(running.get("loss_salience", 0.0) / divisor),
                     "sal_f1": _rounded(salience_f1),
+                    "sal_rank": _rounded(_salience_ranking_accuracy(running)),
                     "cl": _rounded(running.get("loss_contrastive", 0.0) / divisor),
                     "cl_acc": _rounded(running.get("prompt_retrieval_accuracy", 0.0) / divisor),
                     "cl_n": int(round(running.get("contrastive_candidates", 0.0) / divisor)),
@@ -384,6 +393,7 @@ def _run_stage(
                 "ce": _rounded(metrics["eval_loss_ce"]),
                 "sal": _rounded(metrics["eval_loss_salience"]),
                 "sal_f1": _rounded(metrics["eval_salience_f1"]),
+                "sal_rank": _rounded(metrics["eval_salience_ranking_accuracy"]),
                 "cl_acc": _rounded(metrics["eval_prompt_retrieval_accuracy"]),
                 "cl_n": int(round(metrics["eval_contrastive_candidates"])),
                 "cross_res": _rounded(metrics["eval_cross_residual_ratio"]),

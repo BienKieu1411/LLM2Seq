@@ -27,7 +27,11 @@ contains:
 Unlike V2, bidirectionality is not delegated to scratch Transformer blocks
 after a causal encoder. EviSeq reuses each native Qwen layer's Q/K/V, Q/K norms,
 RoPE, GQA, MLP, and output projection. The layer computes causal and full
-attention views from the same Q/K/V and applies a zero-initialized correction.
+attention views from the same Q/K/V and applies a conservatively initialized
+correction. The canonical run starts with a 1% evidence-view contribution;
+zero remains an available exact-causal ablation. This avoids starving the
+evidence path of generation gradients at the beginning of training while
+remaining close to the pretrained causal computation.
 The second view is noncausal but key-selective: it adds each predicted unit
 log-odds directly to the scores of that unit's source keys, while the separate
 causal view keeps the original prefix, past, and EOS path:
@@ -47,10 +51,12 @@ same allocation rule. Encoder prompt and EOS tokens form one neutral
 pseudo-unit, so they cannot gain extra prior mass just because their unit id is
 zero.
 
-At initialization this is exactly the pretrained causal encoder. Gold summary
-evidence never enters the encoder; it supervises only source-unit logits. The
-same predicted source logits control the encoder correction and softly bias
-decoder cross-attention.
+Gold summary evidence never enters the encoder; it supervises only source-unit
+logits. The same predicted source logits control the encoder correction and
+softly bias decoder cross-attention. Salience supervision combines balanced
+pointwise logistic loss with a small within-document pairwise ranking term,
+because the logits are consumed as relative attention scores rather than only
+as independent binary decisions.
 
 The main training objective restores V3's target-free source--prompt InfoNCE:
 
@@ -77,12 +83,15 @@ pretrained encoder and decoder are unfrozen.
 
 Training writes one compact JSON line every `training.log_every_steps` and at
 each epoch boundary. It keeps only total/CE/salience loss, micro-averaged
-salience F1, InfoNCE loss and retrieval accuracy, `cl_n` (the retrieval
-candidate count), cross-attention residual use, the bidirectional gate,
-gradient norm and component learning rates. `cl_scale` appears only while it
-is ramped during interface warm-up. Phrase, source-swap, routing-bank, and
-response-alignment payloads are not emitted, and a log window is never carried
-across epoch boundaries.
+salience F1, within-document salience ranking accuracy, InfoNCE loss and
+retrieval accuracy, `cl_n` (the retrieval candidate count), cross-attention
+residual use, the bidirectional gate, gradient norm and component learning
+rates. `sal_rank` is the fraction of positive--negative source-unit pairs
+ordered correctly (ties count as one half), so ranking improvements remain
+visible before logits cross the fixed 0.5 threshold used by `sal_f1`.
+`cl_scale` appears only while it is ramped during interface warm-up. Phrase,
+source-swap, routing-bank, and response-alignment payloads are not emitted, and
+a log window is never carried across epoch boundaries.
 
 ## Main method and three decisive ablations
 

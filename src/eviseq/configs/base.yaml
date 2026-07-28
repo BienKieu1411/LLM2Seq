@@ -17,11 +17,13 @@ native_attention:
   variant: evidence
   implementation_revision: evidence_key_v1
   evidence_key_bias_scale: 1.0
+  evidence_view_gate_init: 0.01
 
 bridge:
   salience_hidden_size: 512
   salience_gate_init: 0.10
   salience_bias_scale: 1.00
+  salience_ranking_weight: 0.25
   dropout: 0.10
 
 decoder:

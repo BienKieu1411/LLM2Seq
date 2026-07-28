@@ -6,7 +6,7 @@ contract:
   # These two strings are the only rename-sensitive link to the paper method.
   reference_config: eviseq/configs/wikilingua.yaml
   reference_loader: eviseq.config:load_config
-  eviseq_architecture_sha256: 282f7f6323286ccd4db5745b115a20bff5f5928333b9167efc9fa9a1e8a7180a
+  eviseq_architecture_sha256: 3e1896e4285f9ff94c000b1d1d2937693096c65c414e92a45f06406299ee447a
   # Hash of the data paths, all prompt strings/limits, generation, and split limits.
   eviseq_shared_contract_sha256: 12aa80557844b989e6ce991d720b1af42dd3d33cd1392f737ed852601857f1a7
   prompt_layout: eviseq_source_ids_then_eviseq_decoder_seed

@@ -160,11 +160,16 @@ def validate_config(config: Dict[str, Any]) -> None:
         raise ValueError("Evidence-key routing requires model.encoder_attn_implementation=sdpa")
     if backend == "qwen_native" and float(attention.get("evidence_key_bias_scale", 0.0)) <= 0.0:
         raise ValueError("native_attention.evidence_key_bias_scale must be positive")
+    gate_init = float(attention.get("evidence_view_gate_init", 0.0))
+    if not 0.0 <= gate_init < 1.0:
+        raise ValueError("native_attention.evidence_view_gate_init must be in [0, 1)")
 
     if int(bridge.get("salience_hidden_size", 0)) <= 0:
         raise ValueError("bridge.salience_hidden_size must be positive")
     if not 0.0 <= float(bridge.get("salience_gate_init", 0.0)) < 1.0:
         raise ValueError("bridge.salience_gate_init must be in [0, 1)")
+    if float(bridge.get("salience_ranking_weight", 0.0)) < 0.0:
+        raise ValueError("bridge.salience_ranking_weight must be non-negative")
     if int(decoder.get("cross_attention_every", 1)) != 1:
         raise ValueError("EviSeq requires copied cross-attention in every decoder layer")
     if int(decoder.get("memory_bank_count", 1)) != 1:

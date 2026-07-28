@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -88,7 +89,14 @@ class NativeDualMaskQwenEncoder(nn.Module):
         )
         nn.init.zeros_(self.evidence_head[-1].weight)
         nn.init.zeros_(self.evidence_head[-1].bias)
-        self.evidence_view_gate = nn.Parameter(torch.zeros(self.num_hidden_layers, self.num_heads))
+        gate_init = float(attention_config.get("evidence_view_gate_init", 0.0))
+        self.evidence_view_gate = nn.Parameter(
+            torch.full(
+                (self.num_hidden_layers, self.num_heads),
+                math.atanh(gate_init),
+                dtype=torch.float32,
+            )
+        )
         self.generic_token_gate = nn.Linear(self.hidden_size, self.num_heads, bias=True)
         nn.init.zeros_(self.generic_token_gate.weight)
         nn.init.zeros_(self.generic_token_gate.bias)

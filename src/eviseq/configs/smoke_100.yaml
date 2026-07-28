@@ -8,10 +8,12 @@ training:
   interface_warmup_epochs: 1
   full_finetune_epochs: 4
   batch_size: 2
-  gradient_accumulation_steps: 1
+  # Match the audited smoke log: GradCache sees 16 candidates per update.
+  gradient_accumulation_steps: 8
   validation_batch_size: 2
   num_workers: 0
   validation_num_workers: 0
+  validation_every_epochs: 1
   log_every_steps: 1
 
 objectives:

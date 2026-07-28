@@ -27,7 +27,18 @@ def balanced_salience_loss(
     logits: torch.Tensor,
     labels: torch.Tensor,
     valid: torch.Tensor,
+    *,
+    ranking_weight: float = 0.0,
 ) -> torch.Tensor:
+    """Balanced pointwise supervision plus within-document evidence ranking.
+
+    The pointwise term calibrates evidence probabilities.  The optional
+    pairwise term matches how the logits are actually consumed: as relative
+    attention scores over source units.  It also avoids the all-zero cold
+    start where balanced positive and negative pointwise gradients can nearly
+    cancel before the evidence features become discriminative.
+    """
+
     width = min(logits.shape[1], labels.shape[1], valid.shape[1])
     logits, labels, valid = logits[:, :width], labels[:, :width], valid[:, :width]
     supervised = valid & labels.ge(0)
@@ -38,7 +49,20 @@ def balanced_salience_loss(
         terms.append(F.softplus(-logits[positive].float()).mean())
     if bool(negative.any()):
         terms.append(F.softplus(logits[negative].float()).mean())
-    return torch.stack(terms).mean() if terms else logits.float().sum() * 0.0
+    pointwise = torch.stack(terms).mean() if terms else logits.float().sum() * 0.0
+    if ranking_weight <= 0.0:
+        return pointwise
+
+    ranking_terms = []
+    for row in range(logits.shape[0]):
+        positives = logits[row][positive[row]].float()
+        negatives = logits[row][negative[row]].float()
+        if positives.numel() and negatives.numel():
+            differences = positives[:, None] - negatives[None, :]
+            ranking_terms.append(F.softplus(-differences).mean())
+    if not ranking_terms:
+        return pointwise
+    return pointwise + float(ranking_weight) * torch.stack(ranking_terms).mean()
 
 
 class EvidenceBridge(nn.Module):
@@ -55,6 +79,7 @@ class EvidenceBridge(nn.Module):
         gate_init = float(config.get("salience_gate_init", 0.1))
         self.salience_attention_gate = nn.Parameter(torch.tensor(math.atanh(gate_init), dtype=torch.float32))
         self.salience_bias_scale = float(config.get("salience_bias_scale", 1.0))
+        self.salience_ranking_weight = float(config.get("salience_ranking_weight", 0.0))
 
     def forward(
         self,
@@ -72,7 +97,12 @@ class EvidenceBridge(nn.Module):
             return BridgeOutput(memory, attention_mask, None, unit_logits, zero)
         loss = zero
         if evidence_labels is not None:
-            loss = balanced_salience_loss(unit_logits, evidence_labels, valid_units)
+            loss = balanced_salience_loss(
+                unit_logits,
+                evidence_labels,
+                valid_units,
+                ranking_weight=self.salience_ranking_weight,
+            )
         token_bias, source_tokens = unit_evidence_token_bias(
             unit_logits,
             valid_units,
