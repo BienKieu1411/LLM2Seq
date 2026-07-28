@@ -28,6 +28,11 @@ generation:
   min_new_tokens: 32
   max_new_tokens: 512
 
+# Preserve the same official PubMed splits used by the T5Gemma baseline.
+# Exact overlaps remain counted in the audit artifact, but do not abort the run.
+data_integrity:
+  fail_on_cross_split: false
+
 benchmark:
   _replace_: true
   paper:

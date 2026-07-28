@@ -22,7 +22,11 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def audit(config: Dict[str, Any], fail_on_cross_split: bool = True) -> Dict[str, Any]:
+def audit(config: Dict[str, Any], fail_on_cross_split: bool | None = None) -> Dict[str, Any]:
+    if fail_on_cross_split is None:
+        fail_on_cross_split = bool(
+            config.get("data_integrity", {}).get("fail_on_cross_split", True)
+        )
     data = config["data"]
     limits = config.get("limits", {})
     rows: Dict[str, list[Dict[str, Any]]] = {
@@ -33,7 +37,11 @@ def audit(config: Dict[str, Any], fail_on_cross_split: bool = True) -> Dict[str,
         for split in ("train", "validation", "test")
     }
     signatures: Dict[str, Dict[str, set[str]]] = {}
-    report: Dict[str, Any] = {"splits": {}, "cross_split": {}}
+    report: Dict[str, Any] = {
+        "splits": {},
+        "cross_split": {},
+        "fail_on_cross_split": fail_on_cross_split,
+    }
     for split, values in rows.items():
         ids = [_digest(_normalise(row.get("id", ""))) for row in values]
         sources = [_digest(_normalise(row["source"])) for row in values]

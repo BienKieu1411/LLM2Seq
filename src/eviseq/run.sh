@@ -18,6 +18,7 @@ export PYTHONUNBUFFERED=1
 WIKI_CONFIG="$PACKAGE_ROOT/configs/wikilingua.yaml"
 CNN_CONFIG="$PACKAGE_ROOT/configs/cnndm.yaml"
 PUBMED_CONFIG="$PACKAGE_ROOT/configs/pubmed.yaml"
+PPLX_PUBMED_CONFIG="$PACKAGE_ROOT/configs/encoders/pplx_0_6b_pubmed.yaml"
 SMOKE_CONFIG="$PACKAGE_ROOT/configs/smoke_100.yaml"
 
 config_value() {
@@ -121,6 +122,9 @@ case "$MODE" in
   pubmed)
     train_and_validate "$PUBMED_CONFIG" "$@"
     ;;
+  pplx-pubmed)
+    train_and_validate "$PPLX_PUBMED_CONFIG" "$@"
+    ;;
   c0|c2|c3-no-cl)
     case "$MODE" in
       c0) ABLATION="c0_causal" ;;
@@ -166,6 +170,9 @@ case "$MODE" in
     ;;
   paper-test-pubmed)
     paper_test "$PUBMED_CONFIG"
+    ;;
+  paper-test-pplx-pubmed)
+    paper_test "$PPLX_PUBMED_CONFIG"
     ;;
   paper-test)
     paper_test "${1:-$WIKI_CONFIG}"
@@ -233,6 +240,7 @@ Data and other datasets:
   bash eviseq/run.sh prepare-pubmed /absolute/path/to/pubmed
   bash eviseq/run.sh cnndm --overwrite-output-dir
   bash eviseq/run.sh pubmed --overwrite-output-dir
+  bash eviseq/run.sh pplx-pubmed --overwrite-output-dir
 
 Final test is intentionally separate and allowed only on the complete split:
   bash eviseq/run.sh paper-test-wiki

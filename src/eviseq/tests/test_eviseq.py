@@ -164,7 +164,7 @@ def _toy_objective_model() -> EviSeq:
 
 def test_all_configs_load_offline() -> None:
     paths = sorted((ROOT / "configs").rglob("*.yaml"))
-    assert len(paths) == 11
+    assert len(paths) == 12
     for path in paths:
         config = load_config(path)
         assert len(config["_meta"]["architecture_sha256"]) == 64
@@ -766,6 +766,23 @@ def test_pretrained_encoder_controls_keep_one_decoder_and_one_memory() -> None:
     assert pplx["model"]["decoder_name"] == nemo["model"]["decoder_name"] == "Qwen/Qwen3-0.6B"
 
 
+def test_pplx_pubmed_changes_only_the_encoder_specific_contract() -> None:
+    config = load_config(ROOT / "configs" / "encoders" / "pplx_0_6b_pubmed.yaml")
+    assert config["model"]["encoder_name"] == "perplexity-ai/pplx-embed-v1-0.6b"
+    assert config["model"]["decoder_name"] == "Qwen/Qwen3-0.6B"
+    assert config["native_attention"] == {
+        "backend": "pretrained_native",
+        "variant": "pretrained",
+    }
+    assert config["training"]["interface_warmup_epochs"] == 2
+    assert config["training"]["full_finetune_epochs"] == 6
+    assert config["training"]["batch_size"] == 32
+    assert config["training"]["gradient_accumulation_steps"] == 4
+    assert config["data"]["max_source_length"] == 4096
+    assert config["data"]["max_target_length"] == 512
+    assert config["data"]["source_prefix"] == ""
+
+
 def test_run_script_has_no_upload_or_push_operation() -> None:
     script = (ROOT / "run.sh").read_text(encoding="utf-8").lower()
     assert "push_to_hub" not in script
@@ -798,6 +815,12 @@ def test_data_audit_detects_content_leakage(tmp_path: Path) -> None:
     }
     with pytest.raises(ValueError, match="cross-split"):
         audit(config)
+
+    config["data_integrity"] = {"fail_on_cross_split": False}
+    report = audit(config)
+    assert report["passed"] is False
+    assert report["fail_on_cross_split"] is False
+    assert report["cross_split"]["train__validation"]["source"] == 1
 
 
 def test_validation_is_default_and_test_requires_explicit_gate() -> None:
