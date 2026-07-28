@@ -269,6 +269,8 @@ Modes:
               then evaluate last.pt.
   llm2seq-v2-0.6-1.7
               Full-train encoder 0.6B + decoder 1.7B, then evaluate last.pt.
+  llm2seq-v2-pubmed
+              Full-train the original v2 on matched PubMed data, then evaluate last.pt.
   llm2seq-v2-main
               Run both main LLM2Seq-v2 configurations sequentially.
   llm2seq-v2-ablation-all
@@ -394,6 +396,9 @@ case "${MODE}" in
     ;;
   llm2seq-v2-0.6-1.7)
     run_llm2seq_v2 decoder-1.7b
+    ;;
+  llm2seq-v2-pubmed)
+    run_llm2seq_v2 pubmed
     ;;
   llm2seq-v2-main)
     run_llm2seq_v2_main

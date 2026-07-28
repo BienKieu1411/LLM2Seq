@@ -1,0 +1,37 @@
+_base_: base.yaml
+
+experiment:
+  name: llm2seq_v2_pubmed_qwen3_embedding_0_6b_to_qwen3_0_6b
+  output_dir: runs/llm2seq_v2/pubmed_qwen3_embedding_0_6b_to_qwen3_0_6b
+
+# Match EviSeq PubMed exactly on schedule, batch, preprocessing, context and
+# generation. The architecture/objective remain the original LLM2Seq-v2.
+training:
+  interface_warmup_epochs: 2
+  full_finetune_epochs: 6
+  batch_size: 32
+  gradient_accumulation_steps: 4
+  validation_batch_size: 2
+
+data:
+  train_file: ../eviseq/data/pubmed/train.jsonl
+  validation_file: ../eviseq/data/pubmed/validation.jsonl
+  test_file: ../eviseq/data/pubmed/test.jsonl
+  source_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
+  decoder_instruction: "Write a concise, factual abstract of the encoded biomedical article. Preserve the key objective, methods, results, and conclusion; do not add information."
+  decoder_prefix: "Abstract:\n"
+  clean_wikihow_metadata: false
+  max_source_length: 4096
+  max_target_length: 512
+  oracle_max_units: 12
+
+generation:
+  batch_size: 2
+  min_new_tokens: 32
+  max_new_tokens: 512
+
+benchmark:
+  _replace_: true
+  name: T5Gemma2-1B-1B-full-PubMed
+  backend: Perl ROUGE-1.5.5 via pyrouge
+  status: pending_baseline_artifact

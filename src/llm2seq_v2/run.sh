@@ -25,6 +25,8 @@ HIROUTE_CONFIG="configs/qwen3_0_6b_hiroute.yaml"
 HIROUTE_SMOKE_CONFIG="configs/smoke_hiroute_100.yaml"
 DECODER_HEAVY_CONFIG="configs/qwen3_embedding_0_6b_decoder_1_7b.yaml"
 DECODER_HEAVY_SMOKE_CONFIG="configs/smoke_decoder_1_7b_100.yaml"
+PUBMED_CONFIG="configs/pubmed.yaml"
+PUBMED_DATA_DIR="../eviseq/data/pubmed"
 
 run_pipeline() {
   local config="$1"
@@ -41,6 +43,42 @@ PY
     --config "$output_dir/resolved_config.yaml" \
     --checkpoint "$output_dir/last.pt" \
     --output "$output_dir/last_test_predictions.jsonl"
+}
+
+pubmed_data_ready() {
+  [[ -s "$PUBMED_DATA_DIR/train.jsonl" \
+    && -s "$PUBMED_DATA_DIR/validation.jsonl" \
+    && -s "$PUBMED_DATA_DIR/test.jsonl" ]]
+}
+
+prepare_pubmed() {
+  local source_dir="${1:-${PUBMED_SOURCE_DIR:-}}"
+  if [[ -z "$source_dir" ]]; then
+    echo "ERROR: pass the PubMed folder or set PUBMED_SOURCE_DIR." >&2
+    echo "Expected train.label.jsonl, val.label.jsonl, and test.label.jsonl." >&2
+    exit 2
+  fi
+  bash ../eviseq/run.sh prepare-pubmed "$source_dir"
+}
+
+ensure_pubmed() {
+  if pubmed_data_ready; then
+    echo "PubMed processed data already exists; skipping copy/conversion."
+    return
+  fi
+  prepare_pubmed "${PUBMED_SOURCE_DIR:-}"
+}
+
+run_pubmed() {
+  ensure_pubmed
+  run_pipeline "$PUBMED_CONFIG" "$@"
+  if [[ -n "${PYROUGE_HOME_DIR:-}" ]]; then
+    "$PYTHON_BIN" ../rouge155/evaluate_rouge.py \
+      "runs/llm2seq_v2/pubmed_qwen3_embedding_0_6b_to_qwen3_0_6b/last_test_predictions.jsonl" \
+      --details
+  else
+    echo "Perl ROUGE skipped: export PYROUGE_HOME_DIR to calculate the paper score automatically." >&2
+  fi
 }
 
 case "$MODE" in
@@ -86,6 +124,12 @@ PY
     ;;
   decoder-1.7b)
     run_pipeline "$DECODER_HEAVY_CONFIG" "$@"
+    ;;
+  prepare-pubmed)
+    prepare_pubmed "${1:-}"
+    ;;
+  pubmed)
+    run_pubmed "$@"
     ;;
   smoke-decoder-1.7b)
     run_pipeline "$DECODER_HEAVY_SMOKE_CONFIG" "$@"
@@ -133,6 +177,11 @@ Modes:
                               Seen-example flow check with the 1.7B decoder.
   decoder-1.7b --overwrite-output-dir
                               Full encoder-0.6B/decoder-1.7B run, then test last.pt.
+  prepare-pubmed /absolute/path/to/pubmed
+                              Convert the shared PubMed text/summary splits once.
+  pubmed --overwrite-output-dir
+                              Matched 2-warm + 6-full PubMed run, test last.pt,
+                              then Perl ROUGE-155 when PYROUGE_HOME_DIR is set.
   train [--overwrite-output-dir]
   eval [--max-samples N]      Evaluate the existing last.pt only.
   ablation-no-fusion

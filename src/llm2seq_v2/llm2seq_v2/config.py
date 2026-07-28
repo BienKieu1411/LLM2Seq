@@ -12,6 +12,9 @@ import yaml
 def _merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     result = copy.deepcopy(base)
     for key, value in override.items():
+        if isinstance(value, dict) and value.get("_replace_") is True:
+            result[key] = {name: copy.deepcopy(item) for name, item in value.items() if name != "_replace_"}
+            continue
         if isinstance(value, dict) and isinstance(result.get(key), dict):
             result[key] = _merge(result[key], value)
         else:

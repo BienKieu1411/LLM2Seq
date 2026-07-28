@@ -31,6 +31,23 @@ def test_main_config_is_last_only_and_faithful():
     }
 
 
+def test_pubmed_config_is_matched_to_eviseq_without_changing_v2():
+    root = Path(__file__).resolve().parents[1]
+    config = load_config(root / "configs/pubmed.yaml")
+    assert config["model"]["encoder_name"] == "Qwen/Qwen3-Embedding-0.6B"
+    assert config["model"]["decoder_name"] == "Qwen/Qwen3-0.6B"
+    assert config["adapter"]["num_bidirectional_layers"] == 4
+    assert config["objectives"] == {"salience_weight": 0.10}
+    assert config["training"]["interface_warmup_epochs"] == 2
+    assert config["training"]["full_finetune_epochs"] == 6
+    assert config["training"]["batch_size"] == 32
+    assert config["training"]["gradient_accumulation_steps"] == 4
+    assert config["data"]["max_source_length"] == 4096
+    assert config["data"]["max_target_length"] == 512
+    assert config["benchmark"]["status"] == "pending_baseline_artifact"
+    assert "rouge2" not in config["benchmark"]
+
+
 def test_hiroute_config_enables_one_three_bank_adapter():
     root = Path(__file__).parents[1]
     config = load_config(root / "configs/qwen3_0_6b_hiroute.yaml")
