@@ -1,0 +1,56 @@
+experiment:
+  name: direct_qwen3_0_6b_full_wikilingua
+  output_dir: runs/direct_qwen/qwen3_0_6b_full_wikilingua
+
+contract:
+  # These two strings are the only rename-sensitive link to the paper method.
+  reference_config: eviseq/configs/wikilingua.yaml
+  reference_loader: eviseq.config:load_config
+  eviseq_architecture_sha256: 282f7f6323286ccd4db5745b115a20bff5f5928333b9167efc9fa9a1e8a7180a
+  # Hash of the data paths, all prompt strings/limits, generation, and split limits.
+  eviseq_shared_contract_sha256: 12aa80557844b989e6ce991d720b1af42dd3d33cd1392f737ed852601857f1a7
+  prompt_layout: eviseq_source_ids_then_eviseq_decoder_seed
+  preserve_source_terminal_eos: true
+
+model:
+  base_model_id: Qwen/Qwen3-0.6B
+  # May be overridden with DIRECT_QWEN_MODEL_PATH. local_files_only remains true.
+  name_or_path: Qwen/Qwen3-0.6B
+  trust_remote_code: true
+  local_files_only: true
+  torch_dtype: float32
+  eval_torch_dtype: bfloat16
+  attn_implementation: sdpa
+  gradient_checkpointing: true
+  minimum_context_length: 4096
+
+training:
+  mode: full_finetune
+  # EviSeq sees 2 interface + 12 full epochs. This matched-segment control
+  # updates all pretrained weights throughout the same 14 passes; it is not
+  # claimed to be a separately tuned native-chat Qwen ceiling.
+  num_train_epochs: 14
+  batch_size: 32
+  gradient_accumulation_steps: 4
+  validation_batch_size: 16
+  num_workers: 4
+  validation_num_workers: 2
+  learning_rate: 1.0e-5
+  warmup_ratio: 0.05
+  min_lr_ratio: 0.0
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_epsilon: 1.0e-8
+  max_grad_norm: 1.0
+  bf16: true
+  fp16: false
+  tf32: true
+  fused_optimizer: true
+  seed: 42
+  log_every_steps: 10
+
+checkpoint:
+  save_best: false
+  save_each_epoch: false
+  save_last: true

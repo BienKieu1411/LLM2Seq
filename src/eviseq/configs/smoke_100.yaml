@@ -1,0 +1,27 @@
+_base_: wikilingua.yaml
+
+experiment:
+  name: eviseq_smoke_100
+  output_dir: runs/eviseq/smoke_100
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 4
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  validation_batch_size: 2
+  num_workers: 0
+  validation_num_workers: 0
+  log_every_steps: 1
+
+objectives:
+  contrastive_warmup_epochs: 1
+
+generation:
+  batch_size: 2
+  max_new_tokens: 64
+
+limits:
+  max_train_examples: 500
+  max_validation_examples: 20
+  max_test_examples: 20

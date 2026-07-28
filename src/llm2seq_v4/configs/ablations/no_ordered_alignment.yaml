@@ -1,9 +1,0 @@
-_base_: ../qwen3_embedding_0_6b_psb.yaml
-
-experiment:
-  name: llm2seq_v4_ablation_no_ordered_alignment
-  output_dir: runs/llm2seq_v4/ablations/no_ordered_alignment
-
-objectives:
-  response_alignment_weight: 0.0
-

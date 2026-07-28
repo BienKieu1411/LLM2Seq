@@ -1,6 +1,0 @@
-_base_: base.yaml
-
-experiment:
-  name: llm2seq_v4_qwen3_embedding_0_6b_psb
-  output_dir: runs/llm2seq_v4/qwen3_embedding_0_6b_psb
-

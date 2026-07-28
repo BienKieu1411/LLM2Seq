@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -17,7 +18,14 @@ from pyrouge import Rouge155
 
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 _WORK_DIR_MARKER = ".generated_by_evaluate_rouge"
-_ROUGE_PROTOCOL = "-c 95 -2 -1 -U -r 1000 -n 4 -w 1.2 -a -m"
+_FILENAME_ID_WIDTH = 9
+_ROUGE_BASE_PROTOCOL = "-c 95 -2 -1 -U -r 1000 -n 4 -w 1.2 -a"
+# PyRouge appends ``-m <config>`` to both its default and explicit options.
+_ROUGE_PROTOCOL = f"{_ROUGE_BASE_PROTOCOL} -m"
+_DETAIL_PATTERN = re.compile(
+    r"^(\d+)\s+ROUGE-(1|2|L)\s+Eval\s+(\d+)\.(\d+)\s+"
+    r"R:([+\-0-9.eE]+)\s+P:([+\-0-9.eE]+)\s+F:([+\-0-9.eE]+)$"
+)
 
 
 def _sha256(path: Path) -> str:
@@ -26,6 +34,26 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _canonical(value: Any) -> Any:
+    if isinstance(value, str):
+        return unicodedata.normalize("NFC", value)
+    if isinstance(value, list):
+        return [_canonical(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _canonical(item) for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))}
+    return value
+
+
+def _json_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        _canonical(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _sentences(text: Any) -> list[str]:
@@ -58,7 +86,7 @@ def _prepare_data(
     work_dir: Path,
     prediction_field: str,
     reference_field: str,
-) -> int:
+) -> list[dict[str, Any]]:
     _reset_work_dir(work_dir)
     system_dir = work_dir / "system"
     reference_dir = work_dir / "reference"
@@ -69,7 +97,7 @@ def _prepare_data(
         encoding="utf-8",
     )
 
-    count = 0
+    bindings: list[dict[str, Any]] = []
     with predictions_file.open("r", encoding="utf-8") as handle:
         for line_number, raw in enumerate(handle, start=1):
             if not raw.strip():
@@ -82,20 +110,28 @@ def _prepare_data(
                 raise ValueError(
                     f"Missing {prediction_field!r}/{reference_field!r} at {predictions_file}:{line_number}"
                 )
-            (system_dir / f"summary.{count}.txt").write_text(
+            count = len(bindings)
+            file_id = f"{count:0{_FILENAME_ID_WIDTH}d}"
+            (system_dir / f"summary.{file_id}.txt").write_text(
                 "\n".join(_sentences(row[prediction_field])) + "\n",
                 encoding="utf-8",
             )
             for reference_index, reference in enumerate(_references(row[reference_field])):
                 label = chr(ord("A") + reference_index)
-                (reference_dir / f"summary.{label}.{count}.txt").write_text(
+                (reference_dir / f"summary.{label}.{file_id}.txt").write_text(
                     "\n".join(_sentences(reference)) + "\n",
                     encoding="utf-8",
                 )
-            count += 1
-    if count == 0:
+            binding = {
+                "row_index": count,
+                "id": _canonical(row.get("id", count)),
+                "reference": _canonical(row[reference_field]),
+            }
+            binding["row_contract_sha256"] = _json_sha256({"id": binding["id"], "reference": binding["reference"]})
+            bindings.append(binding)
+    if not bindings:
         raise ValueError(f"No examples found in {predictions_file}")
-    return count
+    return bindings
 
 
 def _pyrouge_version() -> str:
@@ -105,12 +141,74 @@ def _pyrouge_version() -> str:
         return "unknown"
 
 
+def _scorer_fingerprint(rouge_home: Path) -> str:
+    files = (
+        rouge_home / "ROUGE-1.5.5.pl",
+        rouge_home / "data/WordNet-2.0.exc.db",
+        rouge_home / "data/smart_common_words.txt",
+    )
+    for path in files:
+        if not path.is_file():
+            raise FileNotFoundError(f"Required ROUGE scorer asset not found: {path}")
+    return _json_sha256(
+        {
+            "pyrouge_version": _pyrouge_version(),
+            "files": {str(path.relative_to(rouge_home)): _sha256(path) for path in files},
+        }
+    )
+
+
+def _parse_per_example(raw_output: str, count: int) -> list[dict[str, Any]]:
+    """Parse ROUGE's ``-d`` output and bind each score to input row order."""
+
+    grouped: dict[int, dict[str, dict[str, float]]] = {}
+    names = {"1": "rouge1", "2": "rouge2", "L": "rougeL"}
+    for raw_line in raw_output.splitlines():
+        match = _DETAIL_PATTERN.match(raw_line.strip())
+        if match is None:
+            continue
+        system_id, order, raw_task_id, peer_id, recall, precision, f_score = match.groups()
+        if system_id != "1" or peer_id != "1":
+            raise ValueError(f"Unexpected detailed ROUGE system/peer ID: system={system_id} peer={peer_id}")
+        task_id = int(raw_task_id)
+        index = task_id - 1
+        metric = names[order]
+        values = {
+            "recall": float(recall),
+            "precision": float(precision),
+            "f1": float(f_score),
+        }
+        if any(not math.isfinite(value) or not 0.0 <= value <= 1.0 for value in values.values()):
+            raise ValueError(f"Invalid detailed ROUGE value for task={task_id} metric={metric}")
+        if metric in grouped.setdefault(index, {}):
+            raise ValueError(f"Duplicate detailed ROUGE score for row={index} metric={metric}")
+        grouped[index][metric] = values
+
+    expected_indices = list(range(count))
+    if sorted(grouped) != expected_indices:
+        raise ValueError(
+            f"Detailed ROUGE IDs do not match prediction row order: expected 0..{count - 1}, got {sorted(grouped)[:10]}"
+        )
+    required = {"rouge1", "rouge2", "rougeL"}
+    rows = []
+    for index in expected_indices:
+        if set(grouped[index]) != required:
+            raise ValueError(f"Detailed ROUGE row {index} is missing metrics")
+        rows.append({"row_index": index, "eval_task_id": index + 1, **grouped[index]})
+    return rows
+
+
+def _details_path(output_file: Path) -> Path:
+    return output_file.with_name(f"{output_file.stem}.per_example.json")
+
+
 def evaluate(
     predictions_file: Path,
     work_dir: Path,
     output_file: Path,
     prediction_field: str = "prediction",
     reference_field: str = "reference",
+    write_details: bool = False,
 ) -> dict[str, Any]:
     predictions_file = predictions_file.expanduser().resolve()
     work_dir = work_dir.expanduser().resolve()
@@ -118,12 +216,13 @@ def evaluate(
     if not predictions_file.is_file():
         raise FileNotFoundError(f"Predictions JSONL not found: {predictions_file}")
 
-    count = _prepare_data(
+    bindings = _prepare_data(
         predictions_file,
         work_dir,
         prediction_field,
         reference_field,
     )
+    count = len(bindings)
     default_home = Path(__file__).resolve().parent / ".runtime/pyrouge-source/tools/ROUGE-1.5.5"
     rouge_home = Path(os.environ.get("PYROUGE_HOME_DIR", default_home)).resolve()
     rouge_script = rouge_home / "ROUGE-1.5.5.pl"
@@ -153,12 +252,14 @@ def evaluate(
     # the WordNet-2.0 exception database are enabled.
     raw_output = rouge.convert_and_evaluate()
     raw_scores = rouge.output_to_dict(raw_output)
+    scorer_fingerprint = _scorer_fingerprint(rouge_home)
     result = {
         "rouge1": raw_scores["rouge_1_f_score"] * 100.0,
         "rouge2": raw_scores["rouge_2_f_score"] * 100.0,
         "rougeL": raw_scores["rouge_l_f_score"] * 100.0,
         "num_examples": count,
         "backend": f"Perl ROUGE-1.5.5 via pyrouge=={_pyrouge_version()}",
+        "scorer_fingerprint_sha256": scorer_fingerprint,
         "stemming": True,
         "pyrouge_default_args": _ROUGE_PROTOCOL,
         "prediction_field": prediction_field,
@@ -169,6 +270,54 @@ def evaluate(
         "rouge_home": str(rouge_home),
         "raw_scores": raw_scores,
     }
+    if write_details:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        detail_protocol = f"{_ROUGE_PROTOCOL} -d"
+        # Explicit rouge_args replace PyRouge defaults, so retain the data
+        # directory option while adding only the per-evaluation ``-d`` flag.
+        detail_raw_output = rouge.evaluate(rouge_args=f"-e {rouge_home / 'data'} {_ROUGE_BASE_PROTOCOL} -d")
+        detail_rows = _parse_per_example(detail_raw_output, count)
+        for row, binding in zip(detail_rows, bindings, strict=True):
+            row.update(
+                {
+                    "id": binding["id"],
+                    "row_contract_sha256": binding["row_contract_sha256"],
+                }
+            )
+        # ROUGE-1.5.5 replaces Average_F with the mean of its 1,000 bootstrap
+        # resamples, not the literal arithmetic mean of the printed Eval rows.
+        # Preserve both rather than asserting that two distinct estimators are
+        # identical (their difference is normally tiny on a full test split).
+        per_example_f1_mean = {
+            metric: sum(row[metric]["f1"] for row in detail_rows) / count for metric in ("rouge1", "rouge2", "rougeL")
+        }
+        detail_file = _details_path(output_file)
+        detail_raw_file = detail_file.with_suffix(".raw.txt")
+        detail_raw_file.write_text(detail_raw_output, encoding="utf-8")
+        detail_artifact = {
+            "schema_version": "eviseq.perl_rouge155_details.v1",
+            "num_examples": count,
+            "backend": f"Perl ROUGE-1.5.5 via pyrouge=={_pyrouge_version()}",
+            "scorer_fingerprint_sha256": scorer_fingerprint,
+            "headline_protocol": _ROUGE_PROTOCOL,
+            "detail_protocol": detail_protocol,
+            "prediction_field": prediction_field,
+            "reference_field": reference_field,
+            "predictions_file": str(predictions_file),
+            "predictions_sha256": _sha256(predictions_file),
+            "id_reference_sha256": _json_sha256([binding["row_contract_sha256"] for binding in bindings]),
+            "raw_detail_file": str(detail_raw_file),
+            "raw_detail_sha256": _sha256(detail_raw_file),
+            "per_example_f1_mean": per_example_f1_mean,
+            "rows": detail_rows,
+        }
+        detail_file.write_text(
+            json.dumps(detail_artifact, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        result["per_example_scores_file"] = str(detail_file)
+        result["per_example_scores_sha256"] = _sha256(detail_file)
+        result["raw_detail_sha256"] = detail_artifact["raw_detail_sha256"]
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n",
@@ -191,6 +340,11 @@ def main() -> None:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--prediction-field", default="prediction")
     parser.add_argument("--reference-field", default="reference")
+    parser.add_argument(
+        "--details",
+        action="store_true",
+        help="Also run Perl ROUGE with -d and save per-example scores for paired bootstrap",
+    )
     args = parser.parse_args()
     predictions = args.predictions.expanduser().resolve()
     work_dir = args.work_dir or predictions.with_suffix(".rouge_data")
@@ -201,10 +355,13 @@ def main() -> None:
         output,
         args.prediction_field,
         args.reference_field,
+        args.details,
     )
     print(f"ROUGE-1={result['rouge1']:.3f} ROUGE-2={result['rouge2']:.3f} ROUGE-L={result['rougeL']:.3f}")
     print(f"Saved metrics: {output.resolve()}")
     print(f"Saved raw output: {output.resolve().with_suffix('.raw.txt')}")
+    if args.details:
+        print(f"Saved per-example scores: {_details_path(output.resolve())}")
 
 
 if __name__ == "__main__":

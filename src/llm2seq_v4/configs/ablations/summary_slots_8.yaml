@@ -1,9 +1,0 @@
-_base_: ../qwen3_embedding_0_6b_psb.yaml
-
-experiment:
-  name: llm2seq_v4_analysis_summary_slots_8
-  output_dir: runs/llm2seq_v4/ablations/summary_slots_8
-
-adapter:
-  num_summary_slots: 8
-

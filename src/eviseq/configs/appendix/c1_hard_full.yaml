@@ -1,0 +1,8 @@
+_base_: ../wikilingua.yaml
+
+experiment:
+  name: eviseq_c1_hard_full_appendix
+  output_dir: runs/eviseq/appendix/c1_hard_full
+
+native_attention:
+  variant: full
