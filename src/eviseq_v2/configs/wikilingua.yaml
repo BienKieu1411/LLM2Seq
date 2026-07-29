@@ -1,0 +1,9 @@
+_base_: base.yaml
+
+experiment:
+  name: eviseq_wikilingua_qwen3_evidence
+  output_dir: runs/eviseq_v2/wikilingua_qwen3_evidence
+
+training:
+  interface_warmup_epochs: 2
+  full_finetune_epochs: 12

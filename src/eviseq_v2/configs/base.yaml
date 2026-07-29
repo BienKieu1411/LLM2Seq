@@ -1,0 +1,128 @@
+experiment:
+  name: eviseq_v2_qwen3_evidence
+  output_dir: runs/eviseq_v2/qwen3_evidence
+
+model:
+  encoder_name: Qwen/Qwen3-Embedding-0.6B
+  decoder_name: Qwen/Qwen3-0.6B
+  encoder_hidden_size: 1024
+  decoder_hidden_size: 1024
+  dtype: float32
+  gradient_checkpointing: true
+  encoder_attn_implementation: sdpa
+  encoder_trust_remote_code: true
+
+native_attention:
+  backend: qwen_native
+  variant: evidence
+  implementation_revision: evidence_key_v1
+  evidence_key_bias_scale: 1.0
+  evidence_view_gate_init: 0.01
+
+bridge:
+  salience_hidden_size: 512
+  salience_gate_init: 0.10
+  salience_bias_scale: 1.00
+  salience_ranking_weight: 0.25
+  dropout: 0.10
+
+decoder:
+  cross_attention_every: 1
+  initialize_cross_from_self: true
+  cross_gate_init: 0.10
+  cross_attention_dropout: 0.0
+  memory_bank_count: 1
+
+objectives:
+  salience_weight: 0.10
+  use_contrastive: true
+  contrastive_weight: 0.10
+  contrastive_temperature: 0.07
+  contrastive_projection_size: 256
+  contrastive_pooling: mean_last
+  contrastive_warmup_epochs: 2
+  contrastive_across_accumulation: true
+
+training:
+  interface_warmup_epochs: 2
+  full_finetune_epochs: 10
+  batch_size: 32
+  gradient_accumulation_steps: 4
+  num_workers: 4
+  validation_batch_size: 16
+  validation_num_workers: 2
+  validation_every_epochs: 0
+  warmup_adapter_lr: 1.0e-4
+  warmup_cross_attention_lr: 1.0e-4
+  full_encoder_lr: 1.0e-5
+  full_decoder_lr: 1.0e-5
+  full_adapter_lr: 3.0e-5
+  full_cross_attention_lr: 5.0e-5
+  warmup_ratio: 0.05
+  min_lr_ratio: 0.0
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_epsilon: 1.0e-8
+  max_grad_norm: 1.0
+  bf16: true
+  fp16: false
+  tf32: true
+  fused_optimizer: true
+  seed: 42
+  log_every_steps: 10
+
+data:
+  train_file: eviseq_v2/data/wikilingua/train.jsonl
+  validation_file: eviseq_v2/data/wikilingua/validation.jsonl
+  test_file: eviseq_v2/data/wikilingua/test.jsonl
+  source_prefix: "Tóm tắt thành các bước hành động ngắn, đúng thứ tự; không thêm thông tin.\nVăn bản:\n"
+  sentence_separator: "\n"
+  decoder_instruction: "Hãy tóm tắt văn bản đã mã hóa thành các bước hành động ngắn, đúng thứ tự và không thêm thông tin."
+  decoder_prefix: "Các bước:\n"
+  use_decoder_chat_template: true
+  enable_thinking: false
+  clean_wikihow_metadata: true
+  max_source_length: 3072
+  max_target_length: 384
+  oracle_max_units: 12
+  precompute_evidence: true
+  precompute_validation_evidence: false
+
+generation:
+  batch_size: 32
+  min_new_tokens: 16
+  max_new_tokens: 256
+  repetition_penalty: 1.05
+  no_repeat_ngram_size: 3
+
+checkpoint:
+  save_best: false
+  save_each_epoch: false
+  save_last: true
+
+benchmark:
+  diagnostic:
+    backend: rouge==1.0.0
+    rouge1: 39.3040
+    rouge2: 19.5308
+    rougeL: 39.2955
+  paper:
+    name: T5Gemma2-1B-1B-full
+    model_id: google/t5gemma-2-1b-1b
+    backend: Perl ROUGE-1.5.5 via pyrouge
+    score_tolerance: 0.02
+    rouge1: 62.013
+    rouge2: 32.654
+    rougeL: 58.143
+    num_examples: 3901
+    test_sha256: 03fba36a916a16598134d1daa211417922ff31dd294abcd0e75df7159bad3558
+
+reporting:
+  parameter_efficiency_claim_eligible: true
+  target_total_footprint_approx: 1700000000
+
+limits:
+  max_train_examples: 0
+  max_validation_examples: 0
+  max_test_examples: 0

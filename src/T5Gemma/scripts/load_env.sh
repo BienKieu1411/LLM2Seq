@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 
+# A GPU chosen by the caller must take precedence over a stale value in
+# T5Gemma/env.txt. This is essential when independent queues use GPU 0 and 1.
+CALLER_CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES-}"
+CALLER_SET_CUDA_VISIBLE_DEVICES=false
+if [[ "${CUDA_VISIBLE_DEVICES+x}" == "x" ]]; then
+  CALLER_SET_CUDA_VISIBLE_DEVICES=true
+fi
+
 LOAD_ENV_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export T5GEMMA_ROOT="$(cd "${LOAD_ENV_SCRIPT_DIR}/.." && pwd)"
 export PROJECT_ROOT="$(cd "${T5GEMMA_ROOT}/.." && pwd)"
@@ -19,6 +27,10 @@ if [[ -f "${ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
   set +a
+fi
+
+if [[ "${CALLER_SET_CUDA_VISIBLE_DEVICES}" == "true" ]]; then
+  export CUDA_VISIBLE_DEVICES="${CALLER_CUDA_VISIBLE_DEVICES}"
 fi
 
 BIENKIEU_PYTHON="/Users/kieugiangbien/bienkieu_env/bin/python"

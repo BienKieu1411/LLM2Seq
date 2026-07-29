@@ -1,0 +1,8 @@
+_base_: ../wikilingua.yaml
+
+experiment:
+  name: eviseq_c2_dec2enc
+  output_dir: runs/eviseq/ablations/c2_dec2enc
+
+native_attention:
+  variant: dec2enc

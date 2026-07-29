@@ -24,6 +24,7 @@ data:
   max_source_length: 4096
   max_target_length: 512
   oracle_max_units: 12
+  precompute_evidence: false
 
 generation:
   batch_size: 2
