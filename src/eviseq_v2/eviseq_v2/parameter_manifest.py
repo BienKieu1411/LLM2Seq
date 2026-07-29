@@ -8,7 +8,7 @@ import torch.nn as nn
 
 
 def _component(name: str) -> str:
-    if name.startswith("alignment_head."):
+    if name.startswith(("alignment_head.", "evidence_contrastive_head.")):
         return "training_only_contrastive"
     if name.startswith("adapter."):
         return "bridge"

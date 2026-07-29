@@ -34,6 +34,7 @@ class _ToyEviSeq(nn.Module):
         self.encoder.generic_token_gate = nn.Linear(4, 2)
         self.adapter = nn.Linear(4, 4, bias=False)
         self.alignment_head = nn.Linear(4, 3, bias=False)
+        self.evidence_contrastive_head = nn.Linear(4, 2, bias=False)
         self.decoder = nn.Module()
         self.decoder.embed_tokens = nn.Embedding(8, 4)
         self.decoder.cross_attn = nn.Linear(4, 4, bias=False)
@@ -69,6 +70,9 @@ def test_parameter_manifest_counts_tied_weights_once_and_uses_resident_budget() 
     assert manifest["deployable_resident_without_train_aux"] + manifest["training_only_total_unique"] == unique
     assert manifest["strictly_under_budget"] is True
     assert manifest["by_component"]["decoder_cross_attention"] == 25
+    expected_training_only = model.alignment_head.weight.numel() + model.evidence_contrastive_head.weight.numel()
+    assert manifest["by_component"]["training_only_contrastive"] == expected_training_only
+    assert manifest["training_only_total_unique"] == expected_training_only
 
 
 def test_parameter_budget_fails_closed_but_ineligible_control_is_reported() -> None:
