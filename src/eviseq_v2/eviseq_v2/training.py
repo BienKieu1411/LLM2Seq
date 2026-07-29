@@ -8,9 +8,13 @@ Extends the V1 training with:
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
 import math
+import os
+import shutil
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -62,6 +66,8 @@ _RANKING_METRICS = (
     "loss_rank",
     "loss_salience",
     "candidate_pair_accuracy",
+    "candidate_pair_count",
+    "ranking_to_ce_ratio",
     "cross_residual_ratio",
     "bidirectional_gate_mean",
 )
@@ -101,6 +107,12 @@ def _contrastive_scale(
         return 1.0
     progress = float(stage_epoch - 1) + float(batch_index) / max(1, batches_per_epoch)
     return min(1.0, progress / float(warmup_epochs))
+
+
+def _uses_virtual_gradcache(model: EviSeq, accumulation: int) -> bool:
+    """A one-microbatch window already has the exact local InfoNCE matrix."""
+
+    return model.alignment_head is not None and model.contrastive_across_accumulation and int(accumulation) > 1
 
 
 def _evidence_contrastive_scale(
@@ -318,6 +330,7 @@ def _run_stage(
         return epoch_offset, global_step
     model.set_training_stage(stage)
     accumulation = int(training.get("gradient_accumulation_steps", 1))
+    use_virtual_gradcache = _uses_virtual_gradcache(model, accumulation)
     optimizer_steps_per_epoch = math.ceil(len(loader) / accumulation)
     total_steps = max(1, optimizer_steps_per_epoch * stage_epochs)
     optimizer, scheduler = stable.build_optimizer(model, training, stage, total_steps)
@@ -332,14 +345,17 @@ def _run_stage(
     validation_every = int(training.get("validation_every_epochs", 0))
     optimizer.zero_grad(set_to_none=True)
     local_step = 0
+    log_started = time.perf_counter()
+    steps_since_log = 0
+    examples_since_log = 0
 
     LOGGER.info(
-        "Starting stage=%s epochs=%d trainable=%s restored_optimizer_states=%d contrastive_batch=%d",
+        "Starting stage=%s epochs=%d trainable=%s restored_optimizer_states=%d evidence_hard_negatives=%d",
         stage,
         stage_epochs,
         f"{sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad):,}",
         restored_moments,
-        int(training.get("batch_size", 1)) * accumulation if model.alignment_head is not None else 0,
+        model.evidence_hard_negatives if model.use_evidence_contrastive else 0,
     )
     for stage_epoch in range(1, stage_epochs + 1):
         model.train()
@@ -373,7 +389,7 @@ def _run_stage(
 
             # Document-level GradCache (V1, only if enabled)
             cache = None
-            if model.alignment_head is not None and model.contrastive_across_accumulation:
+            if use_virtual_gradcache:
                 cache = _build_virtual_contrastive_cache(model, batches, device, training, scale)
 
             for microbatch_index, batch in enumerate(batches):
@@ -395,6 +411,7 @@ def _run_stage(
                         backward_loss = backward_loss + source_surrogate + prompt_surrogate
                 scaler.scale(backward_loss).backward()
                 metric_count += 1
+                examples_since_log += int(batch["input_ids"].shape[0])
                 metrics = dict(outputs)
                 if cache is not None:
                     weighted = cache["weighted_loss"]
@@ -424,8 +441,10 @@ def _run_stage(
             scheduler.step()
             local_step += 1
             global_step += 1
+            steps_since_log += 1
             if local_step % log_every == 0 or window_end == len(loader):
                 divisor = max(1, metric_count)
+                elapsed = max(1.0e-6, time.perf_counter() - log_started)
                 _, _, salience_f1 = _salience_scores(running)
                 payload = {
                     "stage": stage,
@@ -436,9 +455,6 @@ def _run_stage(
                     "sal": _rounded(running.get("loss_salience", 0.0) / divisor),
                     "sal_f1": _rounded(salience_f1),
                     "sal_rank": _rounded(_salience_ranking_accuracy(running)),
-                    "cl": _rounded(running.get("loss_contrastive", 0.0) / divisor),
-                    "cl_acc": _rounded(running.get("prompt_retrieval_accuracy", 0.0) / divisor),
-                    "cl_n": int(round(running.get("contrastive_candidates", 0.0) / divisor)),
                     # Evidence contrastive metrics (V2)
                     "evi_cl": _rounded(running.get("loss_evidence_contrastive", 0.0) / divisor),
                     "evi_acc": _rounded(running.get("evidence_top1_accuracy", 0.0) / divisor),
@@ -447,15 +463,28 @@ def _run_stage(
                     "evi_gap": _rounded(running.get("evidence_similarity_gap", 0.0) / divisor),
                     "cross_res": _rounded(running.get("cross_residual_ratio", 0.0) / divisor),
                     "bidir": _rounded(running.get("bidirectional_gate_mean", 0.0) / divisor),
+                    "step_s": _rounded(elapsed / max(1, steps_since_log)),
+                    "samples_s": _rounded(examples_since_log / elapsed),
                     "grad": _rounded(float(grad_norm)),
                     "lr": {str(group["component"]): float(group["lr"]) for group in optimizer.param_groups},
                 }
+                if model.alignment_head is not None:
+                    payload.update(
+                        {
+                            "doc_cl": _rounded(running.get("loss_contrastive", 0.0) / divisor),
+                            "doc_cl_acc": _rounded(running.get("prompt_retrieval_accuracy", 0.0) / divisor),
+                        }
+                    )
                 if stage == "interface_warmup":
-                    payload["cl_scale"] = _rounded(scale)
                     payload["evi_scale"] = _rounded(evi_scale)
+                    if model.alignment_head is not None:
+                        payload["doc_cl_scale"] = _rounded(scale)
                 LOGGER.info("train %s", json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
                 running.clear()
                 metric_count = 0
+                log_started = time.perf_counter()
+                steps_since_log = 0
+                examples_since_log = 0
         absolute_epoch = epoch_offset + stage_epoch
         LOGGER.info("completed epoch=%d stage=%s", absolute_epoch, stage)
         if validation_every > 0 and (absolute_epoch % validation_every == 0 or stage_epoch == stage_epochs):
@@ -466,8 +495,6 @@ def _run_stage(
                 "sal": _rounded(metrics["eval_loss_salience"]),
                 "sal_f1": _rounded(metrics["eval_salience_f1"]),
                 "sal_rank": _rounded(metrics["eval_salience_ranking_accuracy"]),
-                "cl_acc": _rounded(metrics["eval_prompt_retrieval_accuracy"]),
-                "cl_n": int(round(metrics["eval_contrastive_candidates"])),
                 "evi_cl": _rounded(metrics.get("eval_loss_evidence_contrastive", 0.0)),
                 "evi_acc": _rounded(metrics.get("eval_evidence_top1_accuracy", 0.0)),
                 "evi_gap": _rounded(metrics.get("eval_evidence_similarity_gap", 0.0)),
@@ -475,6 +502,8 @@ def _run_stage(
                 "bidir": _rounded(metrics["eval_bidirectional_gate_mean"]),
                 "examples": int(metrics["eval_examples"]),
             }
+            if model.alignment_head is not None:
+                payload["doc_cl_acc"] = _rounded(metrics["eval_prompt_retrieval_accuracy"])
             LOGGER.info("validation %s", json.dumps(payload, separators=(",", ":")))
     model._carried_optimizer_moments = (  # type: ignore[attr-defined]
         _capture_optimizer_moments(model, optimizer) if stage == "interface_warmup" else {}
@@ -504,7 +533,7 @@ def _run_ranking_stage(
 
     stage = "ranking_finetune"
     model.set_training_stage(stage)
-    accumulation = int(training.get("gradient_accumulation_steps", 1))
+    accumulation = int(training.get("ranking_gradient_accumulation_steps", 1))
     optimizer_steps_per_epoch = math.ceil(len(ranking_loader) / accumulation)
     total_steps = max(1, optimizer_steps_per_epoch * stage_epochs)
     optimizer, scheduler = stable.build_optimizer(model, training, stage, total_steps)
@@ -530,25 +559,27 @@ def _run_ranking_stage(
         model.train()
         running: Dict[str, float] = {}
         metric_count = 0
-        accumulation_count = 0
+        iterator = iter(ranking_loader)
+        processed_batches = 0
+        interval_started = time.perf_counter()
 
-        for batch_index, batch in enumerate(ranking_loader, start=1):
-            batch = stable._move(batch, device)
-            with stable._autocast(device, training):
-                outputs = model.forward_ranking(**batch)
-                loss = outputs["loss"] / accumulation
-            scaler.scale(loss).backward()
-            accumulation_count += 1
-            metric_count += 1
+        while processed_batches < len(ranking_loader):
+            # Scale the final partial window by its real size, not by the
+            # configured accumulation factor.
+            window_size = min(accumulation, len(ranking_loader) - processed_batches)
+            for _ in range(window_size):
+                batch = stable._move(next(iterator), device)
+                with stable._autocast(device, training):
+                    outputs = model.forward_ranking(**batch)
+                    loss = outputs["loss"] / window_size
+                scaler.scale(loss).backward()
+                processed_batches += 1
+                metric_count += 1
 
-            for name in _RANKING_METRICS:
-                value = outputs.get(name)
-                if value is not None and hasattr(value, "numel") and value.numel() == 1:
-                    running[name] = running.get(name, 0.0) + float(value.detach().float())
-
-            update = accumulation_count == accumulation or batch_index == len(ranking_loader)
-            if not update:
-                continue
+                for name in _RANKING_METRICS:
+                    value = outputs.get(name)
+                    if value is not None and hasattr(value, "numel") and value.numel() == 1:
+                        running[name] = running.get(name, 0.0) + float(value.detach().float())
 
             scaler.unscale_(optimizer)
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -556,12 +587,12 @@ def _run_ranking_stage(
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
             scheduler.step()
-            accumulation_count = 0
             local_step += 1
             global_step += 1
 
-            if local_step % log_every == 0 or batch_index == len(ranking_loader):
+            if local_step % log_every == 0 or processed_batches == len(ranking_loader):
                 divisor = max(1, metric_count)
+                elapsed = max(1.0e-6, time.perf_counter() - interval_started)
                 payload = {
                     "stage": stage,
                     "epoch": epoch_offset + stage_epoch,
@@ -571,14 +602,18 @@ def _run_ranking_stage(
                     "rank": _rounded(running.get("loss_rank", 0.0) / divisor),
                     "sal": _rounded(running.get("loss_salience", 0.0) / divisor),
                     "pair_acc": _rounded(running.get("candidate_pair_accuracy", 0.0) / divisor),
+                    "pairs": int(round(running.get("candidate_pair_count", 0.0))),
+                    "rank_ce": _rounded(running.get("ranking_to_ce_ratio", 0.0) / divisor),
                     "cross_res": _rounded(running.get("cross_residual_ratio", 0.0) / divisor),
                     "bidir": _rounded(running.get("bidirectional_gate_mean", 0.0) / divisor),
                     "grad": _rounded(float(grad_norm)),
+                    "step_s": _rounded(elapsed / divisor),
                     "lr": {str(group["component"]): float(group["lr"]) for group in optimizer.param_groups},
                 }
                 LOGGER.info("train %s", json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
                 running.clear()
                 metric_count = 0
+                interval_started = time.perf_counter()
 
         absolute_epoch = epoch_offset + stage_epoch
         LOGGER.info("completed epoch=%d stage=%s", absolute_epoch, stage)
@@ -686,21 +721,58 @@ def train(config_path: str, overwrite_output_dir: bool = False) -> Path:
     try:
         last_path = stable.train(config_path, overwrite_output_dir)
 
-        # --- Phase 3: Ranking fine-tune (if enabled) ---
+        # ``stable.train`` enriches its own config object with the exact
+        # parameter manifest before writing the Phase-2 checkpoint.  Reload
+        # that resolved sidecar here so the separately saved ranked checkpoint
+        # embeds the identical manifest and can pass strict evaluation.
+        phase2_config_path = output_dir / "resolved_config.yaml"
+        config = load_config(phase2_config_path)
+
+        # --- Phase 3: generate candidates and ranking fine-tune in one run ---
         ranking = config.get("ranking", {})
         ranking_enabled = bool(ranking.get("enabled", False))
         ranking_epochs = int(config.get("training", {}).get("ranking_finetune_epochs", 0))
         candidates_file = str(ranking.get("candidates_file", "")).strip()
 
-        if ranking_enabled and ranking_epochs > 0 and candidates_file:
-            LOGGER.info("Starting Phase 3: ranking fine-tune from candidates=%s", candidates_file)
+        if ranking_enabled and ranking_epochs > 0:
+            output_complete = output_dir / "COMPLETE"
+            phase2_complete = output_dir / "PHASE2_COMPLETE"
+            output_complete.replace(phase2_complete)
+            phase3_marker = output_dir / "RUNNING"
+            phase3_marker.write_text(f"pid={os.getpid()}\nstage=candidate_generation\n", encoding="utf-8")
+
+            LOGGER.info(
+                "Starting Phase 3: candidates=%d max_documents=%d output=%s",
+                int(ranking["num_candidates"]),
+                int(ranking.get("max_examples", 0)),
+                candidates_file,
+            )
             training = config["training"]
+
+            # Candidate generation is part of the same atomic pipeline.  The
+            # Phase-2 last.pt remains untouched as an explicit control.
+            from .generate_candidates import generate_candidates
+
+            candidate_stats = generate_candidates(
+                str(phase2_config_path),
+                str(last_path),
+                candidates_file,
+                max_examples=None,
+                seed=int(training.get("seed", 42)),
+                num_candidates=int(ranking["num_candidates"]),
+            )
+            if int(candidate_stats.get("generated", 0)) <= 0:
+                raise RuntimeError("Candidate generation produced no ranking examples")
+            phase3_marker.write_text(f"pid={os.getpid()}\nstage=ranking_finetune\n", encoding="utf-8")
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             # Reload checkpoint
             from .checkpoint import load_last_checkpoint
 
             model = EviSeq(config)
-            load_last_checkpoint(model, last_path)
+            phase2_payload = load_last_checkpoint(model, last_path)
 
             device = stable._device()
             model.to(device)
@@ -714,6 +786,7 @@ def train(config_path: str, overwrite_output_dir: bool = False) -> Path:
                 encoder_tokenizer,
                 decoder_tokenizer,
                 data,
+                max_candidates=int(ranking["num_candidates"]),
             )
 
             prompt_length = len(decoder_seed_ids(decoder_tokenizer, data))
@@ -726,17 +799,24 @@ def train(config_path: str, overwrite_output_dir: bool = False) -> Path:
 
             ranking_loader = DataLoader(
                 ranking_dataset,
-                batch_size=max(1, int(training.get("batch_size", 32)) // 4),  # Smaller batch for ranking
+                batch_size=int(training.get("ranking_batch_size", 2)),
                 shuffle=True,
                 collate_fn=ranking_collator,
                 num_workers=int(training.get("num_workers", 4)),
                 pin_memory=device.type == "cuda",
+                persistent_workers=int(training.get("num_workers", 4)) > 0,
                 drop_last=False,
             )
 
             # Build validation loader for periodic validation
-            _, _, _, _, validation_dataset = build_experiment(config, include_train=False)
-            from .data import decoder_seed_ids as _dsi
+            validation_dataset = SummarizationDataset(
+                data["validation_file"],
+                encoder_tokenizer,
+                decoder_tokenizer,
+                data,
+                max_examples=int(config.get("limits", {}).get("max_validation_examples", 0)),
+                precompute_evidence=False,
+            )
 
             val_collator = Seq2SeqCollator(
                 encoder_pad_id=encoder_tokenizer.pad_token_id,
@@ -751,26 +831,13 @@ def train(config_path: str, overwrite_output_dir: bool = False) -> Path:
                 collate_fn=val_collator,
                 num_workers=int(training.get("validation_num_workers", 2)),
                 pin_memory=device.type == "cuda",
+                persistent_workers=int(training.get("validation_num_workers", 2)) > 0,
             )
 
-            # Get epoch/step from checkpoint
-            import yaml
-
-            resolved = yaml.safe_load((output_dir / "resolved_config.yaml").read_text(encoding="utf-8"))
-            warmup_epochs = int(resolved.get("training", {}).get("interface_warmup_epochs", 2))
-            full_epochs = int(resolved.get("training", {}).get("full_finetune_epochs", 6))
-            epoch_offset = warmup_epochs + full_epochs
-
-            # Estimate global step
-            from .data import read_jsonl
-
-            train_count = len(
-                read_jsonl(data["train_file"], max_examples=int(config.get("limits", {}).get("max_train_examples", 0)))
-            )
-            steps_per_epoch = math.ceil(train_count / int(training.get("batch_size", 32))) // int(
-                training.get("gradient_accumulation_steps", 1)
-            )
-            global_step = steps_per_epoch * epoch_offset
+            # Exact Phase-2 counters come from the checkpoint; never infer them
+            # from dataset size or accumulation arithmetic.
+            epoch_offset = int(phase2_payload["epoch"])
+            global_step = int(phase2_payload["global_step"])
 
             epoch_offset, global_step = _run_ranking_stage(
                 model,
@@ -783,20 +850,49 @@ def train(config_path: str, overwrite_output_dir: bool = False) -> Path:
                 global_step,
             )
 
-            # Save updated checkpoint
+            # Preserve Phase-2 last.pt.  The final ranked model has its own
+            # complete checkpoint directory and matching config sidecars.
             from .checkpoint import save_last_checkpoint
-            from .data import dataset_fingerprint
 
-            limits = config.get("limits", {})
-            manifest = {
-                split: dataset_fingerprint(
-                    data[f"{split}_file"],
-                    int(limits.get(f"max_{split}_examples", 0)),
-                )
-                for split in ("train", "validation", "test")
+            manifest = json.loads((output_dir / "data_manifest.json").read_text(encoding="utf-8"))
+            manifest["ranking_candidates"] = {
+                "path": str(Path(candidates_file).resolve()),
+                "num_examples": int(candidate_stats["generated"]),
+                "sha256": str(candidate_stats["candidate_file_sha256"]),
+                "phase2_epoch": int(candidate_stats["checkpoint_epoch"]),
+                "phase2_global_step": int(candidate_stats["checkpoint_global_step"]),
             }
-            save_last_checkpoint(model, last_path, config, epoch_offset, global_step, manifest)
-            LOGGER.info("Ranking fine-tune complete: last=%s epoch=%d step=%d", last_path, epoch_offset, global_step)
+            ranking_dir = output_dir / "ranking"
+            ranking_dir.mkdir(parents=True, exist_ok=True)
+            ranked_last_path = ranking_dir / "last.pt"
+            save_last_checkpoint(model, ranked_last_path, config, epoch_offset, global_step, manifest)
+            shutil.copy2(output_dir / "resolved_config.yaml", ranking_dir / "resolved_config.yaml")
+            (ranking_dir / "data_manifest.json").write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            parameter_manifest = output_dir / "parameter_manifest.json"
+            if parameter_manifest.is_file():
+                shutil.copy2(parameter_manifest, ranking_dir / parameter_manifest.name)
+            completion = {
+                "checkpoint": str(ranked_last_path),
+                "phase2_checkpoint": str(last_path),
+                "epoch": epoch_offset,
+                "global_step": global_step,
+                "candidate_examples": int(candidate_stats["generated"]),
+                "candidates_per_document": int(ranking["num_candidates"]),
+            }
+            (ranking_dir / "COMPLETE").write_text(json.dumps(completion), encoding="utf-8")
+            phase3_marker.unlink(missing_ok=True)
+            output_complete.write_text(json.dumps(completion), encoding="utf-8")
+            LOGGER.info(
+                "Ranking fine-tune complete: phase2=%s ranked=%s epoch=%d step=%d",
+                last_path,
+                ranked_last_path,
+                epoch_offset,
+                global_step,
+            )
+            return ranked_last_path
 
         return last_path
     finally:

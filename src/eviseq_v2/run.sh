@@ -32,16 +32,42 @@ print(value)
 PY
 }
 
+select_committed_checkpoint() {
+  local output_dir="$1"
+  local split="$2"
+  if [[ ! -f "$output_dir/COMPLETE" ]]; then
+    echo "ERROR: run is not complete: $output_dir (missing COMPLETE)." >&2
+    return 1
+  fi
+
+  local checkpoint_dir="$output_dir"
+  if [[ -f "$output_dir/ranking/COMPLETE" ]]; then
+    checkpoint_dir="$output_dir/ranking"
+  fi
+  local required
+  for required in last.pt resolved_config.yaml data_manifest.json parameter_manifest.json; do
+    if [[ ! -f "$checkpoint_dir/$required" ]]; then
+      echo "ERROR: committed checkpoint is missing $checkpoint_dir/$required" >&2
+      return 1
+    fi
+  done
+
+  SELECTED_CHECKPOINT="$checkpoint_dir/last.pt"
+  SELECTED_RESOLVED="$checkpoint_dir/resolved_config.yaml"
+  SELECTED_PREDICTIONS="$checkpoint_dir/last_${split}_predictions.jsonl"
+}
+
 train_and_validate() {
   local config="$1"
   shift
   local output_dir
   output_dir="$(config_value "$config" experiment.output_dir)"
   "$PYTHON_BIN" -m eviseq_v2.training --config "$config" "$@"
+  select_committed_checkpoint "$output_dir" validation
   "$PYTHON_BIN" -m eviseq_v2.evaluate \
-    --config "$output_dir/resolved_config.yaml" \
-    --checkpoint "$output_dir/last.pt" \
-    --output "$output_dir/last_validation_predictions.jsonl" \
+    --config "$SELECTED_RESOLVED" \
+    --checkpoint "$SELECTED_CHECKPOINT" \
+    --output "$SELECTED_PREDICTIONS" \
     --split validation
 }
 
@@ -49,10 +75,11 @@ paper_test() {
   local config="$1"
   local output_dir
   output_dir="$(config_value "$config" experiment.output_dir)"
+  select_committed_checkpoint "$output_dir" test
   "$PYTHON_BIN" -m eviseq_v2.evaluate \
-    --config "$output_dir/resolved_config.yaml" \
-    --checkpoint "$output_dir/last.pt" \
-    --output "$output_dir/last_test_predictions.jsonl" \
+    --config "$SELECTED_RESOLVED" \
+    --checkpoint "$SELECTED_CHECKPOINT" \
+    --output "$SELECTED_PREDICTIONS" \
     --split test --paper-test
 }
 
@@ -96,7 +123,7 @@ case "$MODE" in
     TEST_PATHS=("$PACKAGE_ROOT/tests")
     if [[ -d "$SRC_ROOT/direct_qwen/tests" ]]; then
       TEST_PATHS+=("$SRC_ROOT/direct_qwen/tests")
-      export PYTHONPATH="$SRC_ROOT/direct_qwen:$SRC_ROOT/llm2seq_v2:$SRC_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+      export PYTHONPATH="$SRC_ROOT/direct_qwen:$SRC_ROOT/llm2seq_v2:$SRC_ROOT/eviseq:$SRC_ROOT${PYTHONPATH:+:$PYTHONPATH}"
     fi
     if [[ -d "$SRC_ROOT/rouge155/tests" ]]; then
       TEST_PATHS+=("$SRC_ROOT/rouge155/tests")
@@ -156,10 +183,11 @@ case "$MODE" in
   eval-validation)
     CONFIG="${CONFIG:-$WIKI_CONFIG}"
     OUTPUT_DIR="$(config_value "$CONFIG" experiment.output_dir)"
+    select_committed_checkpoint "$OUTPUT_DIR" validation
     "$PYTHON_BIN" -m eviseq_v2.evaluate \
-      --config "$OUTPUT_DIR/resolved_config.yaml" \
-      --checkpoint "$OUTPUT_DIR/last.pt" \
-      --output "$OUTPUT_DIR/last_validation_predictions.jsonl" \
+      --config "$SELECTED_RESOLVED" \
+      --checkpoint "$SELECTED_CHECKPOINT" \
+      --output "$SELECTED_PREDICTIONS" \
       --split validation "$@"
     ;;
   paper-test-wiki)

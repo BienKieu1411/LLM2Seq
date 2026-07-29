@@ -77,6 +77,17 @@ def _contrastive_scale(
     return min(1.0, progress / float(warmup_epochs))
 
 
+def _uses_virtual_gradcache(model: EviSeq, accumulation: int) -> bool:
+    """Use the two-pass cache only when it actually joins microbatches.
+
+    With accumulation=1, local InfoNCE already sees the exact same candidate
+    matrix.  Running GradCache in that case adds a redundant no-grad forward
+    without changing the objective.
+    """
+
+    return model.alignment_head is not None and model.contrastive_across_accumulation and int(accumulation) > 1
+
+
 def _capture_optimizer_moments(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
@@ -267,6 +278,7 @@ def _run_stage(
         return epoch_offset, global_step
     model.set_training_stage(stage)
     accumulation = int(training.get("gradient_accumulation_steps", 1))
+    use_virtual_gradcache = _uses_virtual_gradcache(model, accumulation)
     optimizer_steps_per_epoch = math.ceil(len(loader) / accumulation)
     total_steps = max(1, optimizer_steps_per_epoch * stage_epochs)
     optimizer, scheduler = stable.build_optimizer(model, training, stage, total_steps)
@@ -308,7 +320,7 @@ def _run_stage(
             )
             model.set_contrastive_scale(scale)
             cache = None
-            if model.alignment_head is not None and model.contrastive_across_accumulation:
+            if use_virtual_gradcache:
                 cache = _build_virtual_contrastive_cache(model, batches, device, training, scale)
 
             for microbatch_index, batch in enumerate(batches):

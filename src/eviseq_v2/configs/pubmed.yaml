@@ -5,16 +5,22 @@ experiment:
   output_dir: runs/eviseq_v2/pubmed_qwen3_evidence
 
 training:
-  interface_warmup_epochs: 2
-  full_finetune_epochs: 6
-  batch_size: 32
-  gradient_accumulation_steps: 4
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 3
+  ranking_finetune_epochs: 2
+  batch_size: 96
+  gradient_accumulation_steps: 1
+  length_bucketing: true
+  length_bucket_multiplier: 50
+  num_workers: 8
   validation_batch_size: 2
+  ranking_batch_size: 8
+  ranking_gradient_accumulation_steps: 4
 
 data:
-  train_file: eviseq_v2/data/pubmed/train.jsonl
-  validation_file: eviseq_v2/data/pubmed/validation.jsonl
-  test_file: eviseq_v2/data/pubmed/test.jsonl
+  train_file: eviseq/data/pubmed/train.jsonl
+  validation_file: eviseq/data/pubmed/validation.jsonl
+  test_file: eviseq/data/pubmed/test.jsonl
   source_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
   decoder_instruction: "Write a concise, factual abstract of the encoded biomedical article. Preserve the key objective, methods, results, and conclusion; do not add information."
   decoder_prefix: "Abstract:\n"
@@ -22,17 +28,39 @@ data:
   max_source_length: 4096
   max_target_length: 512
   oracle_max_units: 12
-  # PubMed has ~120k long documents. Avoid the silent, single-threaded
-  # full-corpus oracle pass; DataLoader workers compute identical labels lazily.
   precompute_evidence: false
 
 generation:
-  batch_size: 2
+  batch_size: 64
   min_new_tokens: 32
   max_new_tokens: 512
 
-# Preserve the same official PubMed splits used by the T5Gemma baseline.
-# Exact overlaps remain counted in the audit artifact, but do not abort the run.
+ranking:
+  enabled: true
+  candidates_file: runs/eviseq_v2/pubmed_qwen3_evidence/ranking/candidates.jsonl
+  num_candidates: 5
+  # 40k random TRAIN documents x 5 summaries = at most 200k candidates.
+  max_examples: 40000
+  # Under inference_mode this means 8 greedy rows, then 8x4 sampled rows.
+  # The generator halves and retries this batch automatically after CUDA OOM.
+  generation_batch_size: 8
+  candidate_min_new_tokens: 32
+  candidate_max_new_tokens: 384
+  candidate_scoring_chunk_size: 40
+  sampling_temperature: 0.90
+  sampling_top_k: 64
+  sampling_top_p: 0.95
+  sampling_repetition_penalty: 1.0
+  sampling_no_repeat_ngram_size: 0
+  weight: 0.15
+  margin: 0.01
+  minimum_quality_gap: 0.50
+  length_penalty_alpha: 1.0
+  quality_weights:
+    r1: 0.0
+    r2: 0.6
+    rL: 0.4
+
 data_integrity:
   fail_on_cross_split: false
 

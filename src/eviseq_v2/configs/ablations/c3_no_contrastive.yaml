@@ -8,6 +8,5 @@ native_attention:
   variant: evidence
 
 objectives:
-  use_contrastive: false
-  contrastive_weight: 0.0
-  contrastive_across_accumulation: false
+  use_evidence_contrastive: false
+  evidence_contrastive_weight: 0.0

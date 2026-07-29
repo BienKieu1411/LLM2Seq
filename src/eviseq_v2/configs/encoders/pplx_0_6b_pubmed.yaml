@@ -2,7 +2,7 @@ _base_: ../pubmed.yaml
 
 experiment:
   name: eviseq_pubmed_pplx_0_6b_to_qwen3_0_6b
-  output_dir: runs/eviseq/pubmed_pplx_0_6b
+  output_dir: runs/eviseq_v2/pubmed_pplx_0_6b
 
 model:
   encoder_name: perplexity-ai/pplx-embed-v1-0.6b
@@ -23,3 +23,6 @@ objectives:
 # summarization instruction inherited from pubmed.yaml.
 data:
   source_prefix: ""
+
+ranking:
+  candidates_file: runs/eviseq_v2/pubmed_pplx_0_6b/ranking/candidates.jsonl

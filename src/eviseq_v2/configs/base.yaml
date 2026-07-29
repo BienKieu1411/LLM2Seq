@@ -15,7 +15,8 @@ model:
 native_attention:
   backend: qwen_native
   variant: evidence
-  implementation_revision: evidence_key_v1
+  implementation_revision: selective_evidence_v2
+  bidirectional_layer_count: 6
   evidence_key_bias_scale: 1.0
   evidence_view_gate_init: 0.01
 
@@ -35,13 +36,16 @@ decoder:
 
 objectives:
   salience_weight: 0.10
-  use_contrastive: true
-  contrastive_weight: 0.10
-  contrastive_temperature: 0.07
-  contrastive_projection_size: 256
-  contrastive_pooling: mean_last
-  contrastive_warmup_epochs: 2
-  contrastive_across_accumulation: true
+  use_contrastive: false
+  contrastive_weight: 0.0
+  contrastive_across_accumulation: false
+  use_evidence_contrastive: true
+  evidence_contrastive_weight: 0.10
+  evidence_contrastive_temperature: 0.07
+  evidence_contrastive_projection_size: 256
+  evidence_hard_negatives: 4
+  evidence_hard_negative_salience_boost: 0.10
+  evidence_contrastive_warmup_epochs: 1
 
 training:
   interface_warmup_epochs: 2
@@ -58,6 +62,13 @@ training:
   full_decoder_lr: 1.0e-5
   full_adapter_lr: 3.0e-5
   full_cross_attention_lr: 5.0e-5
+  ranking_finetune_epochs: 0
+  ranking_batch_size: 4
+  ranking_gradient_accumulation_steps: 8
+  ranking_encoder_lr: 1.0e-6
+  ranking_decoder_lr: 2.0e-6
+  ranking_adapter_lr: 5.0e-6
+  ranking_cross_attention_lr: 5.0e-6
   warmup_ratio: 0.05
   min_lr_ratio: 0.0
   weight_decay: 0.01
@@ -73,9 +84,9 @@ training:
   log_every_steps: 10
 
 data:
-  train_file: eviseq_v2/data/wikilingua/train.jsonl
-  validation_file: eviseq_v2/data/wikilingua/validation.jsonl
-  test_file: eviseq_v2/data/wikilingua/test.jsonl
+  train_file: eviseq/data/wikilingua/train.jsonl
+  validation_file: eviseq/data/wikilingua/validation.jsonl
+  test_file: eviseq/data/wikilingua/test.jsonl
   source_prefix: "Tóm tắt thành các bước hành động ngắn, đúng thứ tự; không thêm thông tin.\nVăn bản:\n"
   sentence_separator: "\n"
   decoder_instruction: "Hãy tóm tắt văn bản đã mã hóa thành các bước hành động ngắn, đúng thứ tự và không thêm thông tin."
@@ -90,11 +101,34 @@ data:
   precompute_validation_evidence: false
 
 generation:
-  batch_size: 32
+  batch_size: 64
   min_new_tokens: 16
   max_new_tokens: 256
   repetition_penalty: 1.05
   no_repeat_ngram_size: 3
+
+ranking:
+  enabled: false
+  candidates_file: ""
+  num_candidates: 10
+  max_examples: 20000
+  generation_batch_size: 4
+  candidate_min_new_tokens: 16
+  candidate_max_new_tokens: 256
+  candidate_scoring_chunk_size: 20
+  sampling_temperature: 0.90
+  sampling_top_k: 64
+  sampling_top_p: 0.95
+  sampling_repetition_penalty: 1.0
+  sampling_no_repeat_ngram_size: 0
+  weight: 0.15
+  margin: 0.01
+  minimum_quality_gap: 0.50
+  length_penalty_alpha: 1.0
+  quality_weights:
+    r1: 0.0
+    r2: 0.6
+    rL: 0.4
 
 checkpoint:
   save_best: false

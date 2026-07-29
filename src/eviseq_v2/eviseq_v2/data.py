@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections import Counter
 from collections.abc import Mapping
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 
 _WORD = re.compile(r"\w+", flags=re.UNICODE)
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
@@ -242,6 +243,12 @@ class SummarizationDataset(Dataset):
     def __len__(self) -> int:
         return len(self.examples)
 
+    def source_length_estimates(self) -> List[int]:
+        """Cheap source-length proxy for dynamic-padding buckets."""
+
+        cap = max(1, int(self.config.get("max_source_length", 3072)) * 4)
+        return [min(cap, len(clean_text(row["source"], self.clean_metadata))) for row in self.examples]
+
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
         row = self.examples[index]
         source = clean_text(row["source"], self.clean_metadata)
@@ -289,6 +296,51 @@ class SummarizationDataset(Dataset):
             "decoder_attention_mask": torch.ones_like(decoder_input),
             "labels": labels,
         }
+
+
+class LengthBucketBatchSampler(Sampler[List[int]]):
+    """Shuffle random pools and batch examples with similar source lengths."""
+
+    def __init__(
+        self,
+        lengths: Sequence[int],
+        batch_size: int,
+        *,
+        seed: int = 42,
+        bucket_size_multiplier: int = 50,
+        drop_last: bool = False,
+    ):
+        if not lengths:
+            raise ValueError("Length bucketing requires a non-empty dataset")
+        if batch_size <= 0 or bucket_size_multiplier <= 0:
+            raise ValueError("Length-bucket batch and multiplier must be positive")
+        self.lengths = [int(value) for value in lengths]
+        self.batch_size = int(batch_size)
+        self.seed = int(seed)
+        self.bucket_size_multiplier = int(bucket_size_multiplier)
+        self.drop_last = bool(drop_last)
+        self.epoch = 0
+
+    def __len__(self) -> int:
+        if self.drop_last:
+            return len(self.lengths) // self.batch_size
+        return (len(self.lengths) + self.batch_size - 1) // self.batch_size
+
+    def __iter__(self):
+        generator = torch.Generator().manual_seed(self.seed + self.epoch)
+        self.epoch += 1
+        shuffled = torch.randperm(len(self.lengths), generator=generator).tolist()
+        pool_size = self.batch_size * self.bucket_size_multiplier
+        batches: List[List[int]] = []
+        for start in range(0, len(shuffled), pool_size):
+            pool = shuffled[start : start + pool_size]
+            pool.sort(key=self.lengths.__getitem__, reverse=True)
+            for batch_start in range(0, len(pool), self.batch_size):
+                batch = pool[batch_start : batch_start + self.batch_size]
+                if len(batch) == self.batch_size or not self.drop_last:
+                    batches.append(batch)
+        for index in torch.randperm(len(batches), generator=generator).tolist():
+            yield batches[index]
 
 
 class Seq2SeqCollator:
@@ -362,12 +414,45 @@ class CandidateRankingDataset(Dataset):
         decoder_tokenizer: Any,
         data_config: Dict[str, Any],
         max_examples: int = 0,
+        max_candidates: int = 0,
     ):
-        raw = read_jsonl(path, max_examples=max_examples)
-        # Filter: need at least 2 candidates
-        self.examples = [row for row in raw if isinstance(row.get("candidates"), list) and len(row["candidates"]) >= 2]
-        if not self.examples:
+        self.path = Path(path)
+        if not self.path.is_file():
+            raise FileNotFoundError(f"Ranking dataset not found: {self.path}")
+        self.offsets: List[int] = []
+        self.max_candidates = int(max_candidates)
+        with self.path.open("r", encoding="utf-8") as handle:
+            while True:
+                offset = handle.tell()
+                raw = handle.readline()
+                if not raw:
+                    break
+                if not raw.strip():
+                    continue
+                try:
+                    row = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Invalid ranking JSONL at byte {offset} in {self.path}") from exc
+                candidates = row.get("candidates")
+                if "source" not in row or "target" not in row:
+                    raise ValueError(f"Missing source/target at byte {offset} in {self.path}")
+                if not isinstance(candidates, list) or len(candidates) < 2:
+                    continue
+                selected = candidates[: self.max_candidates or None]
+                if len(selected) < 2:
+                    continue
+                for candidate in selected:
+                    if not isinstance(candidate, dict) or not str(candidate.get("text", "")).strip():
+                        raise ValueError(f"Invalid candidate text at byte {offset} in {self.path}")
+                    quality = float(candidate.get("quality", math.nan))
+                    if not math.isfinite(quality):
+                        raise ValueError(f"Non-finite candidate quality at byte {offset} in {self.path}")
+                self.offsets.append(offset)
+                if max_examples > 0 and len(self.offsets) >= max_examples:
+                    break
+        if not self.offsets:
             raise ValueError(f"No valid ranking examples (need ≥2 candidates) in {path}")
+        self._handle = None
         self.encoder_tokenizer = encoder_tokenizer
         self.decoder_tokenizer = decoder_tokenizer
         self.config = data_config
@@ -376,7 +461,18 @@ class CandidateRankingDataset(Dataset):
         self.seed = decoder_seed_ids(decoder_tokenizer, data_config)
 
     def __len__(self) -> int:
-        return len(self.examples)
+        return len(self.offsets)
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        state["_handle"] = None
+        return state
+
+    def _read_row(self, index: int) -> Dict[str, Any]:
+        if self._handle is None:
+            self._handle = self.path.open("r", encoding="utf-8")
+        self._handle.seek(self.offsets[index])
+        return json.loads(self._handle.readline())
 
     def _tokenize_target(self, text: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Tokenize a target text and create decoder inputs + labels."""
@@ -404,7 +500,7 @@ class CandidateRankingDataset(Dataset):
         return decoder_input, attention_mask, labels
 
     def __getitem__(self, index: int) -> Dict[str, Any]:
-        row = self.examples[index]
+        row = self._read_row(index)
         source = clean_text(row["source"], self.clean_metadata)
         target = clean_text(row["target"], self.clean_metadata)
 
@@ -420,7 +516,7 @@ class CandidateRankingDataset(Dataset):
         ref_input, ref_mask, ref_labels = self._tokenize_target(target)
 
         # Candidate decoder tokens
-        candidates = row["candidates"]
+        candidates = row["candidates"][: self.max_candidates or None]
         cand_inputs: List[torch.Tensor] = []
         cand_masks: List[torch.Tensor] = []
         cand_labels: List[torch.Tensor] = []

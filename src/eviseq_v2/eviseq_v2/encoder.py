@@ -72,6 +72,9 @@ class NativeDualMaskQwenEncoder(nn.Module):
         self.num_heads = int(pretrained.num_attention_heads)
         self.variant = str(attention_config.get("variant", "evidence"))
         self.evidence_key_bias_scale = float(attention_config.get("evidence_key_bias_scale", 1.0))
+        requested_future_layers = int(attention_config.get("bidirectional_layer_count", 6))
+        self.bidirectional_layer_count = min(max(0, requested_future_layers), self.num_hidden_layers)
+        self.first_bidirectional_layer = self.num_hidden_layers - self.bidirectional_layer_count
         self.attn_implementation = implementation
         self.gradient_checkpointing = bool(model_config.get("gradient_checkpointing", True))
         layer_types = list(getattr(pretrained, "layer_types", ["full_attention"] * self.num_hidden_layers))
@@ -125,6 +128,7 @@ class NativeDualMaskQwenEncoder(nn.Module):
         hidden_states: torch.Tensor,
         position_embeddings: tuple[torch.Tensor, torch.Tensor],
         attention_mask: torch.Tensor,
+        causal_mask: Optional[torch.Tensor],
         layer_index: int,
         unit_ids: Optional[torch.Tensor],
         unit_count: Optional[int],
@@ -148,7 +152,19 @@ class NativeDualMaskQwenEncoder(nn.Module):
                     raise RuntimeError("Evidence-key routing requires the audited SDPA attention backend")
                 backend_mask = attention_mask if not bool(attention_mask.bool().all()) else None
             elif backend_mask is None:
-                backend_mask = sdpa_mask(attention_mask, is_causal, hidden_states.shape[1])
+                # The causal mask is prepared once per encoder forward.  For
+                # dense (usually 4096-token) batches it is None, allowing
+                # PyTorch SDPA to dispatch through its is_causal Flash kernel.
+                # The old path materialised a BxSxS triangle in every layer.
+                backend_mask = (
+                    causal_mask
+                    if is_causal
+                    else sdpa_mask(
+                        attention_mask,
+                        False,
+                        hidden_states.shape[1],
+                    )
+                )
             if backend_mask is not None and backend_mask.requires_grad:
                 backend_mask = align_trainable_sdpa_bias_heads(backend_mask, query.shape[1])
             backend_query = ensure_sdpa_lse_for_bias_backward(query, key, value, backend_mask)
@@ -165,7 +181,8 @@ class NativeDualMaskQwenEncoder(nn.Module):
             )
             return output
 
-        if self.variant == "causal":
+        future_view_enabled = self.variant != "causal" and layer_index >= getattr(self, "first_bidirectional_layer", 0)
+        if not future_view_enabled:
             mixed = attend(True)
         elif self.variant == "full":
             mixed = attend(False)
@@ -208,6 +225,7 @@ class NativeDualMaskQwenEncoder(nn.Module):
         hidden_states: torch.Tensor,
         position_embeddings: tuple[torch.Tensor, torch.Tensor],
         attention_mask: torch.Tensor,
+        causal_mask: Optional[torch.Tensor],
         unit_ids: Optional[torch.Tensor],
         unit_count: Optional[int],
         layer_index: int,
@@ -219,6 +237,7 @@ class NativeDualMaskQwenEncoder(nn.Module):
             normalized,
             position_embeddings,
             attention_mask,
+            causal_mask,
             layer_index,
             unit_ids,
             unit_count,
@@ -238,6 +257,16 @@ class NativeDualMaskQwenEncoder(nn.Module):
         position_ids.masked_fill_(~attention_mask.bool(), 0)
         position_embeddings = self.core.rotary_emb(hidden_states, position_ids)
         unit_count = int(unit_ids.max().item()) if unit_ids is not None else None
+        all_tokens_valid = bool(attention_mask.bool().all())
+        causal_mask = (
+            None
+            if all_tokens_valid
+            else sdpa_mask(
+                attention_mask,
+                True,
+                hidden_states.shape[1],
+            )
+        )
         for index, layer in enumerate(self.core.layers[: self.num_hidden_layers]):
             if self.gradient_checkpointing and self.training and torch.is_grad_enabled():
 
@@ -247,6 +276,7 @@ class NativeDualMaskQwenEncoder(nn.Module):
                         states,
                         position_embeddings,
                         attention_mask,
+                        causal_mask,
                         unit_ids,
                         unit_count,
                         _index,
@@ -259,6 +289,7 @@ class NativeDualMaskQwenEncoder(nn.Module):
                     hidden_states,
                     position_embeddings,
                     attention_mask,
+                    causal_mask,
                     unit_ids,
                     unit_count,
                     index,
@@ -266,7 +297,15 @@ class NativeDualMaskQwenEncoder(nn.Module):
         memory = self.core.norm(hidden_states)
         memory = memory.masked_fill(~attention_mask.bool().unsqueeze(-1), 0)
         logits, valid = self._unit_logits(memory, unit_ids, unit_count)
-        gate = torch.tanh(self.evidence_view_gate.float()).abs().mean()
+        active_start = getattr(self, "first_bidirectional_layer", 0)
+        active_gates = (
+            self.evidence_view_gate[active_start:] if self.variant != "causal" else self.evidence_view_gate[:0]
+        )
+        gate = (
+            torch.tanh(active_gates.float()).abs().mean()
+            if active_gates.numel() > 0
+            else self.evidence_view_gate.float().new_zeros(())
+        )
         return EncoderOutput(memory, logits, valid, gate)
 
     def set_trainable(self, trainable: bool) -> None:

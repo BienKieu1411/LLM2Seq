@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 
 _WORD = re.compile(r"\w+", flags=re.UNICODE)
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
@@ -242,6 +242,20 @@ class SummarizationDataset(Dataset):
     def __len__(self) -> int:
         return len(self.examples)
 
+    def source_length_estimates(self) -> List[int]:
+        """Return a cheap, tokenizer-independent proxy for source token length.
+
+        Exact tokenization here would duplicate the expensive work performed by
+        DataLoader workers.  Capped character counts preserve the ordering that
+        matters for dynamic padding while treating documents that will be
+        truncated to the same maximum length as equally long.
+        """
+
+        # Four characters per subword is a sufficiently conservative proxy for
+        # the English and Vietnamese checkpoints used by this project.
+        cap = max(1, int(self.config.get("max_source_length", 3072)) * 4)
+        return [min(cap, len(clean_text(row["source"], self.clean_metadata))) for row in self.examples]
+
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
         row = self.examples[index]
         source = clean_text(row["source"], self.clean_metadata)
@@ -289,6 +303,59 @@ class SummarizationDataset(Dataset):
             "decoder_attention_mask": torch.ones_like(decoder_input),
             "labels": labels,
         }
+
+
+class LengthBucketBatchSampler(Sampler[List[int]]):
+    """Shuffle globally, then make locally length-homogeneous mini-batches.
+
+    Sorting the complete corpus would make consecutive epochs nearly
+    deterministic.  Instead, examples are shuffled into large random pools,
+    sorted only inside each pool, split into batches, and the resulting batches
+    are shuffled again.  Every example is emitted exactly once per epoch.
+    """
+
+    def __init__(
+        self,
+        lengths: Sequence[int],
+        batch_size: int,
+        *,
+        seed: int = 42,
+        bucket_size_multiplier: int = 50,
+        drop_last: bool = False,
+    ):
+        if not lengths:
+            raise ValueError("Length bucketing requires a non-empty dataset")
+        if batch_size <= 0 or bucket_size_multiplier <= 0:
+            raise ValueError("Length-bucket batch and multiplier must be positive")
+        self.lengths = [int(value) for value in lengths]
+        self.batch_size = int(batch_size)
+        self.seed = int(seed)
+        self.bucket_size_multiplier = int(bucket_size_multiplier)
+        self.drop_last = bool(drop_last)
+        self.epoch = 0
+
+    def __len__(self) -> int:
+        if self.drop_last:
+            return len(self.lengths) // self.batch_size
+        return (len(self.lengths) + self.batch_size - 1) // self.batch_size
+
+    def __iter__(self):
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + self.epoch)
+        self.epoch += 1
+        shuffled = torch.randperm(len(self.lengths), generator=generator).tolist()
+        pool_size = self.batch_size * self.bucket_size_multiplier
+        batches: List[List[int]] = []
+        for start in range(0, len(shuffled), pool_size):
+            pool = shuffled[start : start + pool_size]
+            pool.sort(key=self.lengths.__getitem__, reverse=True)
+            for batch_start in range(0, len(pool), self.batch_size):
+                batch = pool[batch_start : batch_start + self.batch_size]
+                if len(batch) == self.batch_size or not self.drop_last:
+                    batches.append(batch)
+        order = torch.randperm(len(batches), generator=generator).tolist()
+        for index in order:
+            yield batches[index]
 
 
 class Seq2SeqCollator:

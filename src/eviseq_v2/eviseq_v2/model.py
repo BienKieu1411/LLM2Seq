@@ -7,7 +7,7 @@ EviSeq V2 adds:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -22,7 +22,6 @@ from .contrastive import (
     exact_duplicate_mask,
     info_nce_loss,
     last_prompt_states,
-    length_normalized_log_prob,
     pairwise_ranking_loss,
 )
 from .decoder import PretrainedQwenDecoder
@@ -81,9 +80,12 @@ class EviSeq(nn.Module):
 
         # --- Evidence-focused contrastive (V2 new) ---
         self.use_evidence_contrastive = bool(objectives.get("use_evidence_contrastive", True))
-        self.evidence_contrastive_weight = float(objectives.get("evidence_contrastive_weight", 0.05))
+        self.evidence_contrastive_weight = (
+            float(objectives.get("evidence_contrastive_weight", 0.05)) if self.use_evidence_contrastive else 0.0
+        )
         self.evidence_contrastive_temperature = float(objectives.get("evidence_contrastive_temperature", 0.07))
         self.evidence_hard_negatives = int(objectives.get("evidence_hard_negatives", 4))
+        self.evidence_hard_negative_salience_boost = float(objectives.get("evidence_hard_negative_salience_boost", 0.1))
         self.evidence_contrastive_warmup_epochs = int(objectives.get("evidence_contrastive_warmup_epochs", 2))
         if self.use_evidence_contrastive:
             self.evidence_contrastive_head: Optional[EvidenceContrastiveHead] = EvidenceContrastiveHead(
@@ -101,6 +103,7 @@ class EviSeq(nn.Module):
         self.ranking_margin = float(ranking_config.get("margin", 0.01))
         self.ranking_length_penalty_alpha = float(ranking_config.get("length_penalty_alpha", 1.0))
         self.ranking_minimum_quality_gap = float(ranking_config.get("minimum_quality_gap", 0.5))
+        self.ranking_candidate_chunk_size = int(ranking_config.get("candidate_scoring_chunk_size", 20))
 
         self._contrastive_scale = 1.0
         self._evidence_contrastive_scale = 1.0
@@ -214,7 +217,7 @@ class EviSeq(nn.Module):
         if (
             self.evidence_contrastive_head is not None
             and self.use_evidence_contrastive
-            and self.training
+            and (self.training or compute_source_diagnostics)
             and unit_ids is not None
             and evidence_labels is not None
             and encoded.unit_logits is not None
@@ -240,6 +243,7 @@ class EviSeq(nn.Module):
                     temperature=self.evidence_contrastive_temperature,
                     num_hard_negatives=self.evidence_hard_negatives,
                     salience_logits=encoded.unit_logits,
+                    salience_boost=self.evidence_hard_negative_salience_boost,
                 )
                 loss_evidence_contrastive = evi_results.get("evidence_contrastive_loss", loss_evidence_contrastive)
 
@@ -387,68 +391,68 @@ class EviSeq(nn.Module):
         ref_logits = self.lm_head(ref_states[ref_supervised])
         loss_ce = F.cross_entropy(ref_logits.float(), reference_labels[ref_supervised])
 
-        # Score candidates
+        # Score candidates. Flatten candidate dimension and run reasonably
+        # sized decoder chunks instead of B*N serialized batch-one forwards.
+        # The vocabulary projection is applied only at supervised positions.
         batch_size, num_candidates, cand_len = candidate_decoder_input_ids.shape
-        all_scores: List[torch.Tensor] = []
-        all_quality: List[torch.Tensor] = []
+        flat_input = candidate_decoder_input_ids.reshape(batch_size * num_candidates, cand_len)
+        flat_mask = candidate_decoder_attention_mask.reshape(batch_size * num_candidates, cand_len)
+        flat_labels = candidate_labels.reshape(batch_size * num_candidates, cand_len)
+        candidate_valid = flat_labels.ne(-100).any(dim=1)
+        source_rows = torch.arange(batch_size, device=input_ids.device).repeat_interleave(num_candidates)
+        valid_indices = candidate_valid.nonzero(as_tuple=False).squeeze(1)
+        chunk_size = max(1, self.ranking_candidate_chunk_size)
+        score_chunks = []
+        for start in range(0, valid_indices.numel(), chunk_size):
+            stop = min(valid_indices.numel(), start + chunk_size)
+            selected = valid_indices[start:stop]
+            rows = source_rows.index_select(0, selected)
+            chunk_labels = flat_labels.index_select(0, selected)
+            chunk_states, _ = self.decoder(
+                input_ids=flat_input.index_select(0, selected),
+                attention_mask=flat_mask.index_select(0, selected),
+                encoder_hidden_states=bridge.memory.index_select(0, rows),
+                encoder_attention_mask=bridge.memory_mask.index_select(0, rows),
+                encoder_attention_bias=(
+                    bridge.attention_bias.index_select(0, rows) if bridge.attention_bias is not None else None
+                ),
+                use_cache=False,
+            )
+            supervised = chunk_labels.ne(-100)
+            selected_states = chunk_states[supervised]
+            selected_labels = chunk_labels[supervised]
+            selected_logits = self.lm_head(selected_states).float()
+            token_log_prob = -F.cross_entropy(
+                selected_logits,
+                selected_labels,
+                reduction="none",
+            )
+            sequence_rows = torch.arange(stop - start, device=input_ids.device).unsqueeze(1).expand_as(supervised)
+            sequence_rows = sequence_rows[supervised]
+            total_log_prob = token_log_prob.new_zeros(stop - start).scatter_add_(0, sequence_rows, token_log_prob)
+            lengths = supervised.sum(dim=1).float()
+            score_chunks.append(total_log_prob / lengths.clamp_min(1.0).pow(self.ranking_length_penalty_alpha))
+        valid_scores = torch.cat(score_chunks)
+        candidate_scores = valid_scores.new_zeros(batch_size * num_candidates).index_copy(
+            0,
+            valid_indices,
+            valid_scores,
+        )
+        candidate_scores = candidate_scores.reshape(batch_size, num_candidates)
+        candidate_valid = candidate_valid.reshape(batch_size, num_candidates)
 
-        for b in range(batch_size):
-            scores_b: List[torch.Tensor] = []
-            quality_b: List[torch.Tensor] = []
-
-            for c in range(num_candidates):
-                c_input = candidate_decoder_input_ids[b, c].unsqueeze(0)  # [1, T]
-                c_mask = candidate_decoder_attention_mask[b, c].unsqueeze(0)  # [1, T]
-                c_labels = candidate_labels[b, c]  # [T]
-
-                if not bool(c_labels.ne(-100).any()):
-                    continue
-
-                c_states, _ = self.decoder(
-                    input_ids=c_input,
-                    attention_mask=c_mask,
-                    encoder_hidden_states=bridge.memory[b : b + 1],
-                    encoder_attention_mask=bridge.memory_mask[b : b + 1],
-                    encoder_attention_bias=bridge.attention_bias[b : b + 1]
-                    if bridge.attention_bias is not None
-                    else None,
-                    use_cache=False,
-                )
-                c_logits = self.lm_head(c_states.squeeze(0))  # [T, V]
-                score = length_normalized_log_prob(
-                    c_logits,
-                    c_labels,
-                    alpha=self.ranking_length_penalty_alpha,
-                )
-                scores_b.append(score)
-                quality_b.append(candidate_quality_scores[b, c])
-
-            if len(scores_b) >= 2:
-                all_scores.append(torch.stack(scores_b))
-                all_quality.append(torch.stack(quality_b))
-
-        # Pairwise ranking loss
-        loss_rank = loss_ce.new_tensor(0.0)
-        pair_accuracy = loss_ce.new_tensor(0.0)
-        if all_scores:
-            rank_losses = []
-            accuracies = []
-            for scores, quality in zip(all_scores, all_quality):
-                rl, ra = pairwise_ranking_loss(
-                    scores,
-                    quality,
-                    margin=self.ranking_margin,
-                    minimum_quality_gap=self.ranking_minimum_quality_gap,
-                )
-                rank_losses.append(rl)
-                accuracies.append(ra)
-            loss_rank = torch.stack(rank_losses).mean()
-            pair_accuracy = torch.stack(accuracies).mean()
+        loss_rank, pair_accuracy, pair_count = pairwise_ranking_loss(
+            candidate_scores,
+            candidate_quality_scores,
+            margin=self.ranking_margin,
+            minimum_quality_gap=self.ranking_minimum_quality_gap,
+            valid_mask=candidate_valid,
+        )
 
         weighted_rank = self.ranking_weight * loss_rank
         loss = loss_ce + weighted_rank
 
-        # Salience loss contribution (lower weight in phase 3)
+        # Retain the configured salience supervision during ranking.
         weighted_salience = self.salience_weight * bridge.loss_salience.float()
         loss = loss + weighted_salience
 
@@ -460,6 +464,7 @@ class EviSeq(nn.Module):
             "loss_salience": bridge.loss_salience,
             "weighted_salience": weighted_salience.detach(),
             "candidate_pair_accuracy": pair_accuracy,
+            "candidate_pair_count": pair_count,
             "ranking_to_ce_ratio": (weighted_rank.detach() / loss_ce.detach().float().clamp_min(1e-8)),
             "cross_gate_mean": self.decoder.cross_gate_mean().detach(),
             "cross_residual_ratio": self.decoder.cross_residual_ratio_mean().detach(),

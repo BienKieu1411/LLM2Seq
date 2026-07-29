@@ -7,14 +7,14 @@ model.
 
 | Component | LLM2Seq-v2 | LLM2Seq-v3 main | EviSeq |
 |---|---|---|---|
-| Bidirectional conversion | Fuses selected encoder depths, then applies 4 newly initialized full-attention Transformer blocks | Keeps the post-encoder conversion and expands the main HiRoute profile to 8 blocks | Reuses Q/K/V, Q/K norms, RoPE, GQA, MLP, and output projection inside every pretrained Qwen encoder layer; no scratch Transformer stack |
+| Bidirectional conversion | Fuses selected encoder depths, then applies 4 newly initialized full-attention Transformer blocks | Keeps the post-encoder conversion and expands the main HiRoute profile to 8 blocks | Reuses native Q/K/V, norms, RoPE, GQA, MLP, and output projection; only the top 6 Qwen blocks add an evidence-aware noncausal view |
 | Noncausal view | Unrestricted full attention in the adapter | Unrestricted full attention in the summary adapter; other banks receive projected/context-broadcast states | Evidence-conditioned noncausal attention over source keys, mixed with the causal view through per-layer, per-head gates |
 | Content selection | Salience predicts an auxiliary decoder cross-attention bias | Salience plus three routed memory banks and source-utilization objectives | One predicted evidence distribution controls both encoder noncausal key bias and decoder cross-attention bias |
 | Decoder memory | One full token memory in the base model | Three full-length banks in the canonical HiRoute model | One full token memory |
 | Cross-attention | Copied from decoder self-attention in every decoder layer | Same, plus per-layer/query bank routing | Same copied cross-attention, directly biased by the shared predicted evidence |
-| Contrastive coupling | None | Target-free prompt/source InfoNCE over each physical microbatch, plus source-swap ranking | Target-free prompt/source InfoNCE over the complete physical-batch × accumulation window with exact two-pass GradCache |
+| Contrastive coupling | None | Target-free prompt/source InfoNCE over each physical microbatch, plus source-swap ranking | Multi-positive evidence/summary InfoNCE with four hard negatives mined inside the same document; no virtual-batch GradCache |
 | Main loss | CE + 0.10 salience | CE + 0.10 salience + 0.05 InfoNCE + 0.10 source-swap + label smoothing; HiRoute also uses routing balance | CE + 0.10 salience + 0.10 InfoNCE |
-| Initialization | New adapter blocks and cross-attention must warm up | More new adapter/routing capacity must warm up | Native attention correction gates start at zero, preserving the causal computation while evidence/cross-attention interfaces warm up |
+| Initialization | New adapter blocks and cross-attention must warm up | More new adapter/routing capacity must warm up | Selective native attention gates start at 0.01 and cross-attention is copied from decoder self-attention before interface warm-up |
 | Deployed graph | One encoder, adapter, decoder | One encoder, multi-bank adapter/router, decoder | Exactly one encoder, a small evidence interface, and one decoder; contrastive heads are training-only |
 | Core ablations | Five registered adapter ablations | Many interacting HiRoute/objective ablations | Three decisive controls: causal+CL, generic dual-mask+CL, evidence dual-mask without CL |
 
@@ -23,7 +23,7 @@ model.
 1. **It changes the encoder itself instead of repairing only its final hidden
    states.** V2/V3 add newly initialized bidirectional blocks after the
    pretrained encoder. EviSeq computes causal and evidence-conditioned views
-   inside every native layer and reuses the pretrained projections and MLP.
+   in six selected top layers and reuses the pretrained projections and MLP.
    This is the central architectural novelty.
 
 2. **Evidence is causally connected to generation through two paths.** The
@@ -37,12 +37,13 @@ model.
    The decoder cannot bypass the evidence-conditioned encoder by selecting a
    raw causal bank. This also makes the ablation story much easier to defend.
 
-4. **Contrastive learning uses the requested virtual batch.** V3 computes
-   InfoNCE on the current physical microbatch. EviSeq caches normalized source
-   and target-free prompt representations across an optimizer window, computes
-   one exact virtual-batch InfoNCE, then replays the microbatches with matching
-   dropout RNG to propagate its gradient. With WikiLingua batch 32 ×
-   accumulation 4, each retrieval matrix contains 128 candidates.
+4. **Contrastive learning is summarization-specific.** The old document
+   retrieval task used other documents as easy negatives and could reach
+   perfect accuracy without improving evidence selection. EviSeq V2 instead
+   contrasts the teacher-forced summary representation with all oracle evidence
+   sentences and the hardest non-evidence sentences from the same document.
+   Hard mining is detached, while the selected similarities remain fully
+   differentiable through the encoder and decoder.
 
 5. **The paper claim is narrower and testable.** The main experiment has one
    architecture and three controlled ablations, uses one memory bank across
@@ -54,9 +55,9 @@ model.
 
 - EviSeq has not yet demonstrated higher ROUGE than V2, V3, or T5Gemma. Its
   improvement is currently architectural and experimental, not empirical.
-- Native dual-view attention evaluates two attention paths in converted Qwen
-  layers, so eliminating HiRoute memory banks does not make the encoder
-  computationally free.
+- Native dual-view attention still evaluates two attention paths in six Qwen
+  layers. It is cheaper than converting every layer, but not computationally
+  free.
 - Against the recorded V2 Perl ROUGE result (58.392/27.645/54.292), matching
   the T5Gemma target (62.013/32.654/58.143) still requires approximately
   +3.621 ROUGE-1, +5.009 ROUGE-2, and +3.851 ROUGE-L.

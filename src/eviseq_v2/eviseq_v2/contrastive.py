@@ -252,6 +252,62 @@ class EvidenceContrastiveHead(nn.Module):
         return q, keys
 
 
+def _evidence_masks_and_hard_negatives(
+    query: torch.Tensor,
+    keys: torch.Tensor,
+    evidence_labels: torch.Tensor,
+    valid_units: torch.Tensor,
+    num_hard_negatives: int = 4,
+    salience_logits: Optional[torch.Tensor] = None,
+    salience_boost: float = 0.1,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return positive and hard-negative masks without per-example CPU syncs.
+
+    Mining is deliberately detached: Top-K chooses the competing sentences,
+    while the final contrastive similarities remain differentiable.  A
+    continuous salience boost prioritises current false positives instead of
+    the old thresholded Python loop.
+    """
+
+    if query.ndim != 2 or keys.ndim != 3 or query.shape[0] != keys.shape[0]:
+        raise ValueError("query must be [B,P] and keys must be [B,U,P]")
+    if evidence_labels.ndim != 2 or valid_units.ndim != 2:
+        raise ValueError("evidence labels and valid units must be [B,U]")
+    if num_hard_negatives <= 0:
+        raise ValueError("num_hard_negatives must be positive")
+    if salience_boost < 0.0:
+        raise ValueError("salience_boost must be non-negative")
+
+    width = min(keys.shape[1], evidence_labels.shape[1], valid_units.shape[1])
+    labels = evidence_labels[:, :width]
+    valid = valid_units[:, :width].bool()
+    positive_mask = valid & labels.gt(0.5)
+    negative_mask = valid & labels.ge(0.0) & labels.le(0.5)
+
+    detached_similarity = torch.einsum(
+        "bup,bp->bu",
+        keys[:, :width].detach(),
+        query.detach(),
+    )
+    hard_score = detached_similarity
+    if salience_logits is not None and salience_boost > 0.0:
+        salience_width = min(width, salience_logits.shape[1])
+        salience_probability = torch.zeros_like(hard_score)
+        salience_probability[:, :salience_width] = torch.sigmoid(
+            salience_logits[:, :salience_width].detach().float()
+        ).to(hard_score.dtype)
+        hard_score = hard_score + float(salience_boost) * salience_probability
+
+    hard_score = hard_score.masked_fill(~negative_mask, -torch.inf)
+    hard_negative_mask = torch.zeros_like(negative_mask)
+    if width > 0:
+        k = min(int(num_hard_negatives), width)
+        top_values, top_indices = hard_score.topk(k, dim=1)
+        selected_is_valid = torch.isfinite(top_values)
+        hard_negative_mask.scatter_(1, top_indices, selected_is_valid)
+    return positive_mask, hard_negative_mask, detached_similarity
+
+
 def mine_hard_negatives(
     query: torch.Tensor,
     keys: torch.Tensor,
@@ -259,6 +315,7 @@ def mine_hard_negatives(
     valid_units: torch.Tensor,
     num_hard_negatives: int = 4,
     salience_logits: Optional[torch.Tensor] = None,
+    salience_boost: float = 0.1,
 ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
     """Mine hard negatives within each document independently.
 
@@ -275,63 +332,23 @@ def mine_hard_negatives(
         valid_units: [B, U] boolean mask for valid units
         num_hard_negatives: number of hard negatives to mine per example
         salience_logits: [B, U] optional salience predictions for false-positive mining
+        salience_boost: continuous boost assigned to predicted-salient negatives
 
     Returns:
         hard_neg_indices: list of [K_i] tensors, one per batch item
         positive_indices: list of [P_i] tensors, one per batch item
     """
-    batch_size = query.shape[0]
-    unit_count = keys.shape[1]
-
-    # Detach everything for mining — no gradient through TopK selection
-    q_det = query.detach()  # [B, P]
-    k_det = keys.detach()  # [B, U, P]
-
-    # Similarity: [B, U]
-    similarity = torch.bmm(k_det, q_det.unsqueeze(-1)).squeeze(-1)  # [B, U]
-
-    hard_neg_indices: List[torch.Tensor] = []
-    positive_indices: List[torch.Tensor] = []
-
-    for b in range(batch_size):
-        width = min(unit_count, evidence_labels.shape[1])
-        v = valid_units[b, :width]
-        el = evidence_labels[b, :width]
-
-        # Positive: valid & label > 0.5
-        pos_mask = v & el.gt(0.5)
-        # Negative: valid & label == 0 (not invalid -1)
-        neg_mask = v & el.ge(0) & el.le(0.5)
-
-        pos_idx = pos_mask.nonzero(as_tuple=False).squeeze(-1)
-        neg_idx = neg_mask.nonzero(as_tuple=False).squeeze(-1)
-
-        positive_indices.append(pos_idx)
-
-        if neg_idx.numel() == 0 or pos_idx.numel() == 0:
-            # No valid negatives or positives — return empty
-            hard_neg_indices.append(neg_idx[:0])
-            continue
-
-        # Similarity scores for negatives
-        neg_sims = similarity[b, neg_idx]
-
-        # False-positive mining boost: if salience predicts high but gold=0
-        if salience_logits is not None:
-            sal_width = min(salience_logits.shape[1], width)
-            if sal_width > 0:
-                sal = torch.sigmoid(salience_logits[b, :sal_width].float())
-                # Boost score for false positives (high salience + negative gold)
-                for i, nidx in enumerate(neg_idx):
-                    if nidx.item() < sal_width and sal[nidx].item() > 0.5:
-                        # Add small boost to make false positives more likely selected
-                        neg_sims[i] = neg_sims[i] + 0.1
-
-        # Select top-K hardest negatives
-        k = min(num_hard_negatives, neg_idx.numel())
-        _, topk_local = neg_sims.topk(k, dim=0)
-        hard_neg_indices.append(neg_idx[topk_local])
-
+    positive_mask, hard_negative_mask, _ = _evidence_masks_and_hard_negatives(
+        query,
+        keys,
+        evidence_labels,
+        valid_units,
+        num_hard_negatives=num_hard_negatives,
+        salience_logits=salience_logits,
+        salience_boost=salience_boost,
+    )
+    hard_neg_indices = [row.nonzero(as_tuple=False).squeeze(-1) for row in hard_negative_mask]
+    positive_indices = [row.nonzero(as_tuple=False).squeeze(-1) for row in positive_mask]
     return hard_neg_indices, positive_indices
 
 
@@ -343,14 +360,17 @@ def evidence_info_nce_loss(
     temperature: float = 0.07,
     num_hard_negatives: int = 4,
     salience_logits: Optional[torch.Tensor] = None,
+    salience_boost: float = 0.1,
 ) -> Dict[str, torch.Tensor]:
-    """Within-document evidence InfoNCE loss.
+    """Vectorised multi-positive, within-document hard evidence InfoNCE.
 
     For each document:
-    - Positive: mean of evidence sentence key representations
+    - Positives: every oracle-evidence sentence, kept as a separate positive
     - Negatives: hard-mined non-evidence sentence representations
 
-    L_evi = -log [ exp(sim(q, k+)/τ) / (exp(sim(q, k+)/τ) + Σ exp(sim(q, k_j-)/τ)) ]
+    Each positive is contrasted against the same within-document hard-negative
+    set, then losses are averaged.  Keeping positives separate avoids the
+    cancellation and single-evidence shortcut caused by mean-pooling them.
 
     Args:
         query: [B, P] normalized summary query
@@ -360,6 +380,7 @@ def evidence_info_nce_loss(
         temperature: contrastive temperature
         num_hard_negatives: number of hard negatives per example
         salience_logits: [B, U] optional for false-positive mining
+        salience_boost: continuous hard-mining boost for predicted false positives
 
     Returns:
         Dict with: loss, top1_accuracy, positive_similarity, hard_negative_similarity,
@@ -368,82 +389,57 @@ def evidence_info_nce_loss(
     if temperature <= 0.0:
         raise ValueError("evidence contrastive temperature must be positive")
 
-    device = query.device
     zero = query.sum() * 0.0
-
-    # Mine hard negatives
-    hard_neg_idx, pos_idx = mine_hard_negatives(
+    positive_mask, hard_negative_mask, _ = _evidence_masks_and_hard_negatives(
         query,
         keys,
         evidence_labels,
         valid_units,
         num_hard_negatives=num_hard_negatives,
         salience_logits=salience_logits,
+        salience_boost=salience_boost,
     )
 
-    losses: List[torch.Tensor] = []
-    pos_sims: List[float] = []
-    neg_sims: List[float] = []
-    correct_count = 0
-    valid_count = 0
+    width = positive_mask.shape[1]
+    similarity = torch.einsum("bup,bp->bu", keys[:, :width], query)
+    logits = similarity / float(temperature)
+    negative_logits = logits.masked_fill(~hard_negative_mask, -torch.inf)
+    negative_logsumexp = torch.logsumexp(negative_logits, dim=1)
 
-    for b in range(query.shape[0]):
-        p_idx = pos_idx[b]
-        n_idx = hard_neg_idx[b]
+    positive_count = positive_mask.sum(dim=1)
+    negative_count = hard_negative_mask.sum(dim=1)
+    valid_examples = positive_count.gt(0) & negative_count.gt(0)
+    safe_negative_logsumexp = torch.where(valid_examples, negative_logsumexp, torch.zeros_like(negative_logsumexp))
 
-        if p_idx.numel() == 0 or n_idx.numel() == 0:
-            continue
+    # One-vs-hard-negative-set NCE for every positive. Unlike putting all
+    # positives in one softmax denominator, positives never compete with one
+    # another and the optimum remains zero regardless of evidence count.
+    positive_losses = F.softplus(safe_negative_logsumexp.unsqueeze(1) - logits)
+    loss_per_example = (positive_losses * positive_mask).sum(dim=1) / positive_count.clamp_min(1)
+    valid_float = valid_examples.to(loss_per_example.dtype)
+    valid_count = valid_float.sum()
+    loss = (loss_per_example * valid_float).sum() / valid_count.clamp_min(1.0)
+    loss = loss + zero
 
-        valid_count += 1
-
-        # k+ = norm(mean(k_i for i in E+))
-        k_pos = keys[b, p_idx]  # [|E+|, P]
-        k_pos_pooled = F.normalize(k_pos.mean(dim=0, keepdim=True), dim=-1)  # [1, P]
-
-        # k_j- for j in E-_hard
-        k_neg = keys[b, n_idx]  # [K, P]
-
-        # Similarities
-        q_b = query[b].unsqueeze(0)  # [1, P]
-        sim_pos = (q_b * k_pos_pooled).sum(dim=-1) / temperature  # [1]
-        sim_neg = (q_b * k_neg).sum(dim=-1) / temperature  # [K]
-
-        # InfoNCE: -log(exp(sim_pos) / (exp(sim_pos) + sum(exp(sim_neg))))
-        logits = torch.cat([sim_pos, sim_neg], dim=0)  # [1 + K]
-        target = torch.zeros(1, dtype=torch.long, device=device)
-        loss_b = F.cross_entropy(logits.unsqueeze(0), target)
-        losses.append(loss_b)
-
-        # Diagnostics (detached)
-        with torch.no_grad():
-            raw_sim_pos = (q_b * k_pos_pooled).sum(dim=-1).item()
-            raw_sim_neg = (q_b * k_neg).sum(dim=-1).mean().item()
-            pos_sims.append(raw_sim_pos)
-            neg_sims.append(raw_sim_neg)
-            if logits.argmax().item() == 0:
-                correct_count += 1
-
-    if not losses:
-        return {
-            "evidence_contrastive_loss": zero,
-            "evidence_top1_accuracy": zero.detach(),
-            "positive_similarity": zero.detach(),
-            "hard_negative_similarity": zero.detach(),
-            "evidence_similarity_gap": zero.detach(),
-            "evidence_valid_examples": zero.detach(),
-        }
-
-    loss = torch.stack(losses).mean()
-    mean_pos_sim = sum(pos_sims) / len(pos_sims) if pos_sims else 0.0
-    mean_neg_sim = sum(neg_sims) / len(neg_sims) if neg_sims else 0.0
+    with torch.no_grad():
+        positive_float = positive_mask.to(similarity.dtype)
+        negative_float = hard_negative_mask.to(similarity.dtype)
+        positive_similarity_per_example = (similarity * positive_float).sum(dim=1) / positive_count.clamp_min(1)
+        negative_similarity_per_example = (similarity * negative_float).sum(dim=1) / negative_count.clamp_min(1)
+        mean_pos_sim = (positive_similarity_per_example * valid_float).sum() / valid_count.clamp_min(1.0)
+        mean_neg_sim = (negative_similarity_per_example * valid_float).sum() / valid_count.clamp_min(1.0)
+        hardest_negative = negative_logits.max(dim=1).values
+        positive_beats_hardest = positive_mask & logits.gt(hardest_negative.unsqueeze(1))
+        accuracy_per_example = positive_beats_hardest.sum(dim=1).float() / positive_count.clamp_min(1)
+        accuracy = (accuracy_per_example * valid_float).sum() / valid_count.clamp_min(1.0)
 
     return {
         "evidence_contrastive_loss": loss,
-        "evidence_top1_accuracy": loss.new_tensor(correct_count / max(1, valid_count)).detach(),
-        "positive_similarity": loss.new_tensor(mean_pos_sim).detach(),
-        "hard_negative_similarity": loss.new_tensor(mean_neg_sim).detach(),
-        "evidence_similarity_gap": loss.new_tensor(mean_pos_sim - mean_neg_sim).detach(),
-        "evidence_valid_examples": loss.new_tensor(valid_count).detach(),
+        "evidence_top1_accuracy": accuracy.detach(),
+        "positive_similarity": mean_pos_sim.detach(),
+        "hard_negative_similarity": mean_neg_sim.detach(),
+        "evidence_similarity_gap": (mean_pos_sim - mean_neg_sim).detach(),
+        "evidence_valid_examples": valid_count.detach(),
     }
 
 
@@ -487,7 +483,8 @@ def pairwise_ranking_loss(
     quality_scores: torch.Tensor,
     margin: float = 0.01,
     minimum_quality_gap: float = 0.5,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+    valid_mask: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Pairwise margin ranking loss over candidate summaries.
 
     For each pair (i, j) where Q(y_i) > Q(y_j):
@@ -495,51 +492,69 @@ def pairwise_ranking_loss(
     where m_ij = (rank_j - rank_i) * margin
 
     Args:
-        scores: [N] length-normalized log probabilities from model
-        quality_scores: [N] external quality scores (e.g. weighted ROUGE)
+        scores: [N] or [B, N] length-normalized model log probabilities
+        quality_scores: same shape, external quality (e.g. weighted ROUGE)
         margin: base margin per rank distance
         minimum_quality_gap: skip pairs with quality difference below this
 
     Returns:
-        loss: scalar pairwise ranking loss
-        pair_accuracy: fraction of correctly ordered pairs
+        loss, pair_accuracy, valid_pair_count
     """
-    n = scores.shape[0]
-    if n < 2:
+    if scores.shape != quality_scores.shape or scores.ndim not in {1, 2}:
+        raise ValueError("scores and quality_scores must be matching [N] or [B,N] tensors")
+    squeeze = scores.ndim == 1
+    if squeeze:
+        scores = scores.unsqueeze(0)
+        quality_scores = quality_scores.unsqueeze(0)
+        if valid_mask is not None:
+            valid_mask = valid_mask.unsqueeze(0)
+    if valid_mask is None:
+        valid_mask = torch.ones_like(scores, dtype=torch.bool)
+    elif valid_mask.shape != scores.shape:
+        raise ValueError("valid_mask must match scores")
+    valid_mask = valid_mask.bool() & torch.isfinite(scores) & torch.isfinite(quality_scores)
+
+    batch_size, count = scores.shape
+    if count < 2:
         zero = scores.sum() * 0.0
-        return zero, zero.detach()
+        return zero, zero.detach(), zero.detach()
 
-    # Sort by quality (descending) and get rank ordering
-    sorted_indices = quality_scores.argsort(descending=True)
-    sorted_scores = scores[sorted_indices]
-    sorted_quality = quality_scores[sorted_indices]
+    # Invalid/padded candidates sort to the end and are masked from all pairs.
+    sortable_quality = quality_scores.masked_fill(~valid_mask, -torch.inf)
+    order = sortable_quality.argsort(dim=1, descending=True)
+    sorted_scores = scores.gather(1, order)
+    sorted_quality = quality_scores.gather(1, order)
+    sorted_valid = valid_mask.gather(1, order)
 
-    losses: List[torch.Tensor] = []
-    correct = 0
-    total = 0
+    upper = torch.triu(
+        torch.ones((count, count), device=scores.device, dtype=torch.bool),
+        diagonal=1,
+    )
+    quality_gap = sorted_quality[:, :, None] - sorted_quality[:, None, :]
+    pair_mask = (
+        upper.unsqueeze(0)
+        & sorted_valid[:, :, None]
+        & sorted_valid[:, None, :]
+        & quality_gap.ge(float(minimum_quality_gap))
+    )
+    ranks = torch.arange(count, device=scores.device, dtype=scores.dtype)
+    rank_distance = ranks[None, :] - ranks[:, None]
+    margins = float(margin) * rank_distance.clamp_min(0)
+    pair_losses = F.relu(sorted_scores[:, None, :] - sorted_scores[:, :, None] + margins.unsqueeze(0))
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            # quality[i] >= quality[j] by sort order
-            quality_gap = (sorted_quality[i] - sorted_quality[j]).item()
-            if quality_gap < minimum_quality_gap:
-                continue
+    # Give every document equal weight, while excluding documents without a
+    # usable quality-separated pair instead of diluting the objective with 0.
+    pairs_per_document = pair_mask.sum(dim=(1, 2))
+    valid_documents = pairs_per_document.gt(0)
+    loss_per_document = (pair_losses * pair_mask).sum(dim=(1, 2)) / pairs_per_document.clamp_min(1)
+    valid_float = valid_documents.to(loss_per_document.dtype)
+    valid_document_count = valid_float.sum()
+    loss = (loss_per_document * valid_float).sum() / valid_document_count.clamp_min(1.0)
+    loss = loss + scores.sum() * 0.0
 
-            rank_distance = j - i
-            m_ij = float(rank_distance) * margin
-            # f(y_i) should be > f(y_j), so loss = max(0, f(y_j) - f(y_i) + m)
-            pair_loss = F.relu(sorted_scores[j] - sorted_scores[i] + m_ij)
-            losses.append(pair_loss)
-            total += 1
-
-            with torch.no_grad():
-                if sorted_scores[i].item() > sorted_scores[j].item():
-                    correct += 1
-
-    if not losses:
-        zero = scores.sum() * 0.0
-        return zero, zero.new_tensor(0.0).detach()
-
-    loss = torch.stack(losses).mean()
-    accuracy = loss.new_tensor(correct / max(1, total)).detach()
-    return loss, accuracy
+    with torch.no_grad():
+        correct = (sorted_scores[:, :, None] > sorted_scores[:, None, :]) & pair_mask
+        correct_per_document = correct.sum(dim=(1, 2)).float() / pairs_per_document.clamp_min(1)
+        accuracy = (correct_per_document * valid_float).sum() / valid_document_count.clamp_min(1.0)
+        pair_count = pairs_per_document.sum().to(loss.dtype)
+    return loss, accuracy.detach(), pair_count.detach()

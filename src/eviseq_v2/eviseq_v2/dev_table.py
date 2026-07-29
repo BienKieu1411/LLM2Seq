@@ -21,7 +21,7 @@ from .paper_compare import (
 _SPECS: Dict[str, tuple[str, bool, str]] = {
     "c0": ("causal", True, "Causal encoder control"),
     "c2": ("dec2enc", True, "Generic dual-mask conversion"),
-    "c3-no-cl": ("evidence", False, "Evidence conversion w/o InfoNCE"),
+    "c3-no-cl": ("evidence", False, "Evidence conversion w/o hard evidence InfoNCE"),
     "c3": ("evidence", True, "EviSeq"),
 }
 
@@ -51,9 +51,8 @@ def _matched_config_contract(config: Dict[str, Any]) -> Dict[str, Any]:
     """Everything that must match the main run, excluding tested factors."""
 
     objectives = dict(config["objectives"])
-    objectives.pop("use_contrastive", None)
-    objectives.pop("contrastive_weight", None)
-    objectives.pop("contrastive_across_accumulation", None)
+    objectives.pop("use_evidence_contrastive", None)
+    objectives.pop("evidence_contrastive_weight", None)
     attention = dict(config["native_attention"])
     attention.pop("variant", None)
     return {
@@ -79,18 +78,14 @@ def _validate_config(name: str, config: Dict[str, Any], main: Dict[str, Any]) ->
         f"{name} has the wrong attention variant",
     )
     _require(
-        bool(config["objectives"]["use_contrastive"]) is expected_contrastive,
+        bool(config["objectives"]["use_evidence_contrastive"]) is expected_contrastive,
         f"{name} has the wrong contrastive switch",
     )
-    expected_weight = float(main["objectives"]["contrastive_weight"])
-    actual_weight = float(config["objectives"]["contrastive_weight"])
+    expected_weight = float(main["objectives"]["evidence_contrastive_weight"])
+    actual_weight = float(config["objectives"]["evidence_contrastive_weight"])
     _require(
         actual_weight == (expected_weight if expected_contrastive else 0.0),
         f"{name} has the wrong contrastive weight",
-    )
-    _require(
-        bool(config["objectives"]["contrastive_across_accumulation"]) is expected_contrastive,
-        f"{name} has the wrong virtual-batch contrastive switch",
     )
     _require(
         _matched_config_contract(config) == _matched_config_contract(main),
@@ -164,7 +159,7 @@ def _entry(
         "display_name": _SPECS[name][2],
         "attention_variant": config["native_attention"]["variant"],
         "evidence_conditioned_encoder_view": config["native_attention"]["variant"] == "evidence",
-        "contrastive": bool(config["objectives"]["use_contrastive"]),
+        "contrastive": bool(config["objectives"]["use_evidence_contrastive"]),
         "scores": _finite_scores(rouge, f"{name} ROUGE"),
         "resident_parameters": parameters,
         "deployable_parameters": deployable,

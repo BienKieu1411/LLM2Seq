@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
@@ -57,7 +58,6 @@ def architecture_contract(config: Dict[str, Any]) -> Dict[str, Any]:
         "bridge": copy.deepcopy(config.get("bridge", {})),
         "decoder": copy.deepcopy(config.get("decoder", {})),
         "objectives": copy.deepcopy(config.get("objectives", {})),
-        "ranking": copy.deepcopy(config.get("ranking", {})),
     }
 
 
@@ -152,8 +152,13 @@ def validate_config(config: Dict[str, Any]) -> None:
         raise ValueError("qwen_native requires causal/full/dec2enc/evidence")
     if backend == "pretrained_native" and variant != "pretrained":
         raise ValueError("pretrained_native requires variant=pretrained")
-    if backend == "qwen_native" and str(attention.get("implementation_revision", "")) != "evidence_key_v1":
-        raise ValueError("qwen_native requires native_attention.implementation_revision=evidence_key_v1")
+    if backend == "qwen_native" and str(attention.get("implementation_revision", "")) != "selective_evidence_v2":
+        raise ValueError("qwen_native requires native_attention.implementation_revision=selective_evidence_v2")
+    bidirectional_layers = int(attention.get("bidirectional_layer_count", 0))
+    if backend == "qwen_native" and variant != "causal" and bidirectional_layers <= 0:
+        raise ValueError("Non-causal qwen_native variants require native_attention.bidirectional_layer_count > 0")
+    if backend == "qwen_native" and bidirectional_layers < 0:
+        raise ValueError("native_attention.bidirectional_layer_count must be non-negative")
     implementation = str(model.get("encoder_attn_implementation", "sdpa"))
     if implementation not in {"sdpa", "flash_attention_2"}:
         raise ValueError("Only sdpa and flash_attention_2 are audited for the EviSeq encoder")
@@ -203,19 +208,23 @@ def validate_config(config: Dict[str, Any]) -> None:
 
     # --- Evidence-focused contrastive (V2 new) ---
     use_evidence_contrastive = bool(objectives.get("use_evidence_contrastive", True))
+    evi_weight = float(objectives.get("evidence_contrastive_weight", 0.05))
     if use_evidence_contrastive:
-        evi_weight = float(objectives.get("evidence_contrastive_weight", 0.05))
         if evi_weight <= 0.0:
             raise ValueError("Enabled evidence contrastive requires a positive weight")
         if float(objectives.get("evidence_contrastive_temperature", 0.07)) <= 0.0:
             raise ValueError("objectives.evidence_contrastive_temperature must be positive")
         if int(objectives.get("evidence_hard_negatives", 2)) <= 0:
             raise ValueError("objectives.evidence_hard_negatives must be positive")
+        if float(objectives.get("evidence_hard_negative_salience_boost", 0.1)) < 0.0:
+            raise ValueError("objectives.evidence_hard_negative_salience_boost must be non-negative")
         if int(objectives.get("evidence_contrastive_projection_size", 128)) <= 0:
             raise ValueError("objectives.evidence_contrastive_projection_size must be positive")
         evi_warmup = int(objectives.get("evidence_contrastive_warmup_epochs", 0))
         if evi_warmup < 0:
             raise ValueError("objectives.evidence_contrastive_warmup_epochs must be non-negative")
+    elif evi_weight != 0.0:
+        raise ValueError("Disabled evidence contrastive requires evidence_contrastive_weight=0")
 
     forbidden = (
         "source_swap_weight",
@@ -230,6 +239,8 @@ def validate_config(config: Dict[str, Any]) -> None:
     ranking = config.get("ranking", {})
     ranking_enabled = bool(ranking.get("enabled", False))
     if ranking_enabled:
+        if not str(ranking.get("candidates_file", "")).strip():
+            raise ValueError("ranking.candidates_file is required when ranking is enabled")
         if float(ranking.get("weight", 0.0)) <= 0.0:
             raise ValueError("ranking.weight must be positive when ranking is enabled")
         if float(ranking.get("margin", 0.0)) <= 0.0:
@@ -239,8 +250,45 @@ def validate_config(config: Dict[str, Any]) -> None:
         qw = ranking.get("quality_weights", {})
         if not isinstance(qw, dict) or not all(name in qw for name in ("r1", "r2", "rL")):
             raise ValueError("ranking.quality_weights must contain r1, r2, rL")
+        quality_values = [float(qw[name]) for name in ("r1", "r2", "rL")]
+        if not all(math.isfinite(value) and value >= 0.0 for value in quality_values):
+            raise ValueError("ranking quality weights must be finite and non-negative")
+        if not math.isclose(sum(quality_values), 1.0, rel_tol=0.0, abs_tol=1.0e-6):
+            raise ValueError("ranking quality weights must sum to 1")
+        if float(ranking.get("minimum_quality_gap", -1.0)) < 0.0:
+            raise ValueError("ranking.minimum_quality_gap must be non-negative")
+        if int(ranking.get("num_candidates", 0)) < 2:
+            raise ValueError("ranking.num_candidates must be at least 2")
+        if int(ranking.get("max_examples", -1)) < 0:
+            raise ValueError("ranking.max_examples must be non-negative")
+        for name in (
+            "generation_batch_size",
+            "candidate_scoring_chunk_size",
+            "candidate_min_new_tokens",
+            "candidate_max_new_tokens",
+        ):
+            if int(ranking.get(name, 0)) <= 0:
+                raise ValueError(f"ranking.{name} must be positive")
+        if int(ranking["candidate_min_new_tokens"]) > int(ranking["candidate_max_new_tokens"]):
+            raise ValueError("ranking.candidate_min_new_tokens must not exceed candidate_max_new_tokens")
+        if int(ranking["candidate_max_new_tokens"]) > int(config["data"]["max_target_length"]):
+            raise ValueError("ranking.candidate_max_new_tokens must not exceed data.max_target_length")
+        if int(ranking.get("sampling_top_k", -1)) < 0:
+            raise ValueError("ranking.sampling_top_k must be non-negative")
+        for name in ("sampling_temperature", "sampling_top_p"):
+            if float(ranking.get(name, 0.0)) <= 0.0:
+                raise ValueError(f"ranking.{name} must be positive")
+        if float(ranking.get("sampling_top_p", 1.0)) > 1.0:
+            raise ValueError("ranking.sampling_top_p must not exceed 1")
+        if float(ranking.get("sampling_repetition_penalty", 0.0)) <= 0.0:
+            raise ValueError("ranking.sampling_repetition_penalty must be positive")
+        if int(ranking.get("sampling_no_repeat_ngram_size", -1)) < 0:
+            raise ValueError("ranking.sampling_no_repeat_ngram_size must be non-negative")
         if int(training.get("ranking_finetune_epochs", 0)) <= 0:
             raise ValueError("ranking.enabled requires training.ranking_finetune_epochs > 0")
+        for name in ("ranking_batch_size", "ranking_gradient_accumulation_steps"):
+            if int(training.get(name, 0)) <= 0:
+                raise ValueError(f"training.{name} must be positive when ranking is enabled")
 
     if int(training.get("interface_warmup_epochs", -1)) < 0:
         raise ValueError("training.interface_warmup_epochs must be non-negative")
@@ -257,6 +305,10 @@ def validate_config(config: Dict[str, Any]) -> None:
         training.get("interface_warmup_epochs", 0)
     ):
         raise ValueError("contrastive_warmup_epochs must finish within interface_warmup_epochs")
+    if use_evidence_contrastive and int(objectives.get("evidence_contrastive_warmup_epochs", 0)) > int(
+        training.get("interface_warmup_epochs", 0)
+    ):
+        raise ValueError("evidence_contrastive_warmup_epochs must finish within interface_warmup_epochs")
 
     for field in ("train_file", "validation_file", "test_file"):
         if not str(data.get(field, "")).strip():

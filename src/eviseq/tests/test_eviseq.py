@@ -36,10 +36,13 @@ from eviseq.training import (
     _restore_rng_state,
     _salience_ranking_accuracy,
     _salience_scores,
+    _uses_virtual_gradcache,
     _virtual_duplicate_mask,
 )
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 from transformers.models.qwen3.modeling_qwen3 import Qwen3Model
+
+from eviseq.data import LengthBucketBatchSampler
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -776,11 +779,38 @@ def test_pplx_pubmed_changes_only_the_encoder_specific_contract() -> None:
     }
     assert config["training"]["interface_warmup_epochs"] == 2
     assert config["training"]["full_finetune_epochs"] == 6
-    assert config["training"]["batch_size"] == 32
-    assert config["training"]["gradient_accumulation_steps"] == 4
+    assert config["training"]["batch_size"] == 96
+    assert config["training"]["gradient_accumulation_steps"] == 1
+    assert config["training"]["length_bucketing"] is True
     assert config["data"]["max_source_length"] == 4096
     assert config["data"]["max_target_length"] == 512
     assert config["data"]["source_prefix"] == ""
+
+
+def test_length_bucket_sampler_preserves_examples_and_groups_lengths() -> None:
+    lengths = list(range(1, 17))
+    sampler = LengthBucketBatchSampler(
+        lengths,
+        batch_size=4,
+        seed=7,
+        bucket_size_multiplier=4,
+    )
+    batches = list(sampler)
+    assert sorted(index for batch in batches for index in batch) == list(range(16))
+    assert all(len(batch) == 4 for batch in batches)
+    assert all(
+        max(lengths[index] for index in batch) - min(lengths[index] for index in batch) <= 3 for batch in batches
+    )
+
+
+def test_single_microbatch_skips_redundant_virtual_gradcache() -> None:
+    class Objective:
+        alignment_head = object()
+        contrastive_across_accumulation = True
+
+    model = Objective()
+    assert _uses_virtual_gradcache(model, 1) is False
+    assert _uses_virtual_gradcache(model, 2) is True
 
 
 def test_run_script_has_no_upload_or_push_operation() -> None:

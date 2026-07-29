@@ -23,6 +23,7 @@ from torch.utils.data import DataLoader
 from .checkpoint import save_last_checkpoint
 from .config import load_config
 from .data import (
+    LengthBucketBatchSampler,
     Seq2SeqCollator,
     SummarizationDataset,
     dataset_fingerprint,
@@ -361,16 +362,33 @@ def train(config_path: str, overwrite_output_dir: bool = False) -> Path:
         assert train_dataset is not None
         model.to(device)
         collator = _collator(config, encoder_tokenizer, decoder_tokenizer)
-        loader = DataLoader(
-            train_dataset,
-            batch_size=int(training.get("batch_size", 32)),
-            shuffle=True,
-            collate_fn=collator,
-            num_workers=int(training.get("num_workers", 4)),
-            pin_memory=device.type == "cuda",
-            persistent_workers=int(training.get("num_workers", 4)) > 0,
-            drop_last=False,
-        )
+        batch_size = int(training.get("batch_size", 32))
+        loader_kwargs = {
+            "collate_fn": collator,
+            "num_workers": int(training.get("num_workers", 4)),
+            "pin_memory": device.type == "cuda",
+            "persistent_workers": int(training.get("num_workers", 4)) > 0,
+        }
+        length_bucketing = bool(training.get("length_bucketing", False))
+        if length_bucketing:
+            loader = DataLoader(
+                train_dataset,
+                batch_sampler=LengthBucketBatchSampler(
+                    train_dataset.source_length_estimates(),
+                    batch_size,
+                    seed=int(training.get("seed", 42)),
+                    bucket_size_multiplier=int(training.get("length_bucket_multiplier", 50)),
+                ),
+                **loader_kwargs,
+            )
+        else:
+            loader = DataLoader(
+                train_dataset,
+                batch_size=batch_size,
+                shuffle=True,
+                drop_last=False,
+                **loader_kwargs,
+            )
         validation_loader = DataLoader(
             validation_dataset,
             batch_size=int(training.get("validation_batch_size", 32)),
@@ -399,11 +417,12 @@ def train(config_path: str, overwrite_output_dir: bool = False) -> Path:
         )
         LOGGER.info("device=%s model=%s", device, json.dumps(model.parameter_summary()))
         LOGGER.info(
-            "data train=%d validation=%d batch=%d accumulation=%d",
+            "data train=%d validation=%d batch=%d accumulation=%d length_bucketing=%s",
             len(train_dataset),
             len(validation_dataset),
             int(training.get("batch_size", 32)),
             int(training.get("gradient_accumulation_steps", 1)),
+            length_bucketing,
         )
         epoch, global_step = 0, 0
         epoch, global_step = _run_stage(

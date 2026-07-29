@@ -8,17 +8,21 @@ import pytest
 import torch
 import torch.nn as nn
 import yaml
-from eviseq_v2.bridge import EvidenceBridge, balanced_salience_loss
+from eviseq_v2.bridge import BridgeOutput, EvidenceBridge, balanced_salience_loss
 from eviseq_v2.config import architecture_contract, load_config, validate_config
 from eviseq_v2.contrastive import (
     SourcePromptAlignmentHead,
+    evidence_info_nce_loss,
     exact_duplicate_mask,
     info_nce_loss,
     last_prompt_states,
     masked_mean_pool,
+    mine_hard_negatives,
+    pairwise_ranking_loss,
 )
 from eviseq_v2.data_integrity import audit
 from eviseq_v2.encoder import EncoderOutput, NativeDualMaskQwenEncoder
+from eviseq_v2.generation import generate_sampled_from_memory
 from eviseq_v2.model import EviSeq
 from eviseq_v2.native_attention import (
     align_trainable_sdpa_bias_heads,
@@ -36,10 +40,13 @@ from eviseq_v2.training import (
     _restore_rng_state,
     _salience_ranking_accuracy,
     _salience_scores,
+    _uses_virtual_gradcache,
     _virtual_duplicate_mask,
 )
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 from transformers.models.qwen3.modeling_qwen3 import Qwen3Model
+
+from eviseq_v2.data import LengthBucketBatchSampler
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,6 +72,8 @@ def _tiny_native_encoder(variant: str) -> NativeDualMaskQwenEncoder:
     encoder.hidden_size = 32
     encoder.num_hidden_layers = 2
     encoder.num_heads = 4
+    encoder.bidirectional_layer_count = 1
+    encoder.first_bidirectional_layer = 1
     encoder.variant = variant
     encoder.evidence_key_bias_scale = 1.0
     encoder.attn_implementation = "sdpa"
@@ -192,7 +201,9 @@ def test_one_architecture_and_objective_across_datasets() -> None:
 def test_every_dataset_completes_contrastive_ramp_inside_warmup() -> None:
     for name in ("wikilingua.yaml", "cnndm.yaml", "pubmed.yaml"):
         config = load_config(ROOT / "configs" / name)
-        assert config["objectives"]["contrastive_warmup_epochs"] <= config["training"]["interface_warmup_epochs"]
+        assert (
+            config["objectives"]["evidence_contrastive_warmup_epochs"] <= config["training"]["interface_warmup_epochs"]
+        )
 
 
 def test_adam_moments_survive_the_stage_boundary() -> None:
@@ -302,9 +313,37 @@ def test_zero_initialized_dual_mask_is_exactly_causal() -> None:
     torch.testing.assert_close(actual_generic, causal, rtol=0, atol=0)
 
 
+def test_selective_encoder_ignores_lower_gates_and_uses_top_gate() -> None:
+    torch.manual_seed(5)
+    causal = _tiny_native_encoder("causal")
+    selective = copy.deepcopy(causal)
+    selective.variant = "evidence"
+    input_ids = torch.tensor([[1, 2, 3, 4]])
+    attention_mask = torch.ones_like(input_ids)
+    unit_ids = torch.tensor([[1, 1, 2, 2]])
+
+    with torch.no_grad():
+        selective.evidence_view_gate.zero_()
+        selective.evidence_view_gate[0].fill_(0.8)
+        causal_memory = causal(input_ids, attention_mask, unit_ids).memory
+        inactive_lower_memory = selective(input_ids, attention_mask, unit_ids).memory
+        torch.testing.assert_close(inactive_lower_memory, causal_memory, rtol=0, atol=0)
+
+        selective.evidence_view_gate[1].fill_(0.8)
+        active_top_memory = selective(input_ids, attention_mask, unit_ids).memory
+        assert not torch.equal(active_top_memory, causal_memory)
+
+
 def test_main_uses_conservative_nonzero_evidence_gate_initialization() -> None:
     config = load_config(ROOT / "configs" / "wikilingua.yaml")
     assert config["native_attention"]["evidence_view_gate_init"] == 0.01
+
+
+def test_main_uses_only_six_top_bidirectional_layers() -> None:
+    config = load_config(ROOT / "configs" / "wikilingua.yaml")
+    attention = config["native_attention"]
+    assert attention["implementation_revision"] == "selective_evidence_v2"
+    assert attention["bidirectional_layer_count"] == 6
 
 
 def test_pairwise_salience_term_rewards_positive_unit_ranking() -> None:
@@ -541,25 +580,27 @@ def test_forbidden_objectives_fail_closed() -> None:
             validate_config(broken)
 
 
-def test_main_contrastive_uses_the_audited_minimal_objective() -> None:
+def test_main_v2_uses_hard_evidence_instead_of_saturated_document_retrieval() -> None:
     config = load_config(ROOT / "configs" / "wikilingua.yaml")
     assert config["bridge"]["salience_ranking_weight"] == 0.25
     objectives = config["objectives"]
-    assert objectives["use_contrastive"] is True
-    assert objectives["contrastive_weight"] == 0.10
-    assert objectives["contrastive_temperature"] == 0.07
-    assert objectives["contrastive_projection_size"] == 256
-    assert objectives["contrastive_pooling"] == "mean_last"
-    assert objectives["contrastive_warmup_epochs"] == 2
-    assert objectives["contrastive_across_accumulation"] is True
+    assert objectives["use_contrastive"] is False
+    assert objectives["contrastive_weight"] == 0.0
+    assert objectives["contrastive_across_accumulation"] is False
+    assert objectives["use_evidence_contrastive"] is True
+    assert objectives["evidence_contrastive_weight"] == 0.10
+    assert objectives["evidence_contrastive_temperature"] == 0.07
+    assert objectives["evidence_contrastive_projection_size"] == 256
+    assert objectives["evidence_hard_negatives"] == 4
+    assert objectives["evidence_hard_negative_salience_boost"] == 0.10
+    assert objectives["evidence_contrastive_warmup_epochs"] == 1
     assert "source_swap_weight" not in objectives
     assert "response_alignment_weight" not in objectives
     assert "phrase_mixture_weight" not in objectives
     no_contrastive = load_config(ROOT / "configs" / "ablations" / "c3_no_contrastive.yaml")
     assert no_contrastive["native_attention"]["variant"] == "evidence"
-    assert no_contrastive["objectives"]["use_contrastive"] is False
-    assert no_contrastive["objectives"]["contrastive_weight"] == 0.0
-    assert no_contrastive["objectives"]["contrastive_across_accumulation"] is False
+    assert no_contrastive["objectives"]["use_evidence_contrastive"] is False
+    assert no_contrastive["objectives"]["evidence_contrastive_weight"] == 0.0
 
 
 def test_prompt_state_precedes_all_teacher_forced_summary_tokens() -> None:
@@ -579,6 +620,49 @@ def test_prompt_source_info_nce_prefers_matching_pairs_and_backpropagates() -> N
     assert float(accuracy) == 1.0
     matched_loss.backward()
     assert source.grad is not None and torch.isfinite(source.grad).all()
+
+
+def test_evidence_contrastive_keeps_multiple_positives_and_backpropagates() -> None:
+    query = torch.tensor([[1.0, 0.0]], requires_grad=True)
+    keys = torch.tensor(
+        [[[1.0, 0.0], [0.8, 0.2], [0.0, 1.0], [-1.0, 0.0]]],
+        requires_grad=True,
+    )
+    labels = torch.tensor([[1.0, 1.0, 0.0, 0.0]])
+    valid = torch.ones_like(labels, dtype=torch.bool)
+    good = evidence_info_nce_loss(query, torch.nn.functional.normalize(keys, dim=-1), labels, valid)
+    bad_keys = keys.detach().clone()
+    bad_keys[:, :2] = torch.tensor([[[0.0, 1.0], [0.0, 1.0]]])
+    bad = evidence_info_nce_loss(
+        query.detach(),
+        torch.nn.functional.normalize(bad_keys, dim=-1),
+        labels,
+        valid,
+    )
+    assert good["evidence_contrastive_loss"] < bad["evidence_contrastive_loss"]
+    good["evidence_contrastive_loss"].backward()
+    assert query.grad is not None and torch.isfinite(query.grad).all()
+    assert keys.grad is not None and torch.isfinite(keys.grad).all()
+    assert torch.count_nonzero(keys.grad[:, :2]).item() > 0
+
+
+def test_salience_boost_prioritises_false_positive_hard_negative() -> None:
+    query = torch.tensor([[1.0, 0.0]])
+    keys = torch.tensor([[[1.0, 0.0], [0.9, 0.0], [0.85, 0.0]]])
+    labels = torch.tensor([[1.0, 0.0, 0.0]])
+    valid = torch.ones_like(labels, dtype=torch.bool)
+    salience = torch.tensor([[0.0, -10.0, 10.0]])
+    negatives, positives = mine_hard_negatives(
+        query,
+        keys,
+        labels,
+        valid,
+        num_hard_negatives=1,
+        salience_logits=salience,
+        salience_boost=0.1,
+    )
+    assert positives[0].tolist() == [0]
+    assert negatives[0].tolist() == [2]
 
 
 def test_total_objective_backpropagates_ce_salience_and_contrastive_once() -> None:
@@ -785,13 +869,229 @@ def test_pplx_pubmed_changes_only_the_encoder_specific_contract() -> None:
         "backend": "pretrained_native",
         "variant": "pretrained",
     }
-    assert config["training"]["interface_warmup_epochs"] == 2
-    assert config["training"]["full_finetune_epochs"] == 6
-    assert config["training"]["batch_size"] == 32
-    assert config["training"]["gradient_accumulation_steps"] == 4
+    assert config["training"]["interface_warmup_epochs"] == 1
+    assert config["training"]["full_finetune_epochs"] == 3
+    assert config["training"]["batch_size"] == 96
+    assert config["training"]["gradient_accumulation_steps"] == 1
+    assert config["training"]["length_bucketing"] is True
     assert config["data"]["max_source_length"] == 4096
     assert config["data"]["max_target_length"] == 512
     assert config["data"]["source_prefix"] == ""
+
+
+def test_pubmed_uses_one_plus_three_plus_two_and_five_candidates() -> None:
+    config = load_config(ROOT / "configs" / "pubmed.yaml")
+    training = config["training"]
+    ranking = config["ranking"]
+    assert training["interface_warmup_epochs"] == 1
+    assert training["full_finetune_epochs"] == 3
+    assert training["ranking_finetune_epochs"] == 2
+    assert training["ranking_batch_size"] == 8
+    assert training["ranking_gradient_accumulation_steps"] == 4
+    assert ranking["enabled"] is True
+    assert ranking["num_candidates"] == 5
+    assert ranking["max_examples"] == 40_000
+    assert ranking["generation_batch_size"] == 8
+    assert ranking["candidate_min_new_tokens"] == 32
+    assert ranking["candidate_max_new_tokens"] == 384
+    assert ranking["candidate_scoring_chunk_size"] == 40
+    assert ranking["sampling_top_k"] == 64
+    assert ranking["quality_weights"] == {"r1": 0.0, "r2": 0.6, "rL": 0.4}
+
+
+def test_regular_and_ranking_stages_use_their_own_accumulation_settings() -> None:
+    source = (ROOT / "eviseq_v2" / "training.py").read_text(encoding="utf-8")
+    regular_stage = source.split("def _run_stage(", 1)[1].split("def _run_ranking_stage(", 1)[0]
+    ranking_stage = source.split("def _run_ranking_stage(", 1)[1].split("def _parameter_component(", 1)[0]
+    assert 'training.get("gradient_accumulation_steps", 1)' in regular_stage
+    assert "ranking_gradient_accumulation_steps" not in regular_stage
+    assert 'training.get("ranking_gradient_accumulation_steps", 1)' in ranking_stage
+
+
+def test_ranked_checkpoint_reuses_phase2_resolved_manifest() -> None:
+    source = (ROOT / "eviseq_v2" / "training.py").read_text(encoding="utf-8")
+    phase3 = source.split("last_path = stable.train", 1)[1]
+    reload_position = phase3.index("config = load_config(phase2_config_path)")
+    save_position = phase3.index("save_last_checkpoint(model, ranked_last_path, config")
+    assert reload_position < save_position
+    assert "generate_candidates(\n                str(phase2_config_path)," in phase3
+
+
+def test_ranking_training_fields_do_not_change_deployed_architecture_contract() -> None:
+    config = load_config(ROOT / "configs" / "wikilingua.yaml")
+    changed = copy.deepcopy(config)
+    changed["ranking"]["enabled"] = True
+    changed["ranking"]["candidates_file"] = "/different/training/artifact.jsonl"
+    assert architecture_contract(changed) == architecture_contract(config)
+
+
+def test_vectorized_pairwise_ranking_masks_padding_and_backpropagates() -> None:
+    scores = torch.tensor(
+        [[0.9, 0.4, 99.0], [0.1, 0.2, 0.3]],
+        requires_grad=True,
+    )
+    quality = torch.tensor([[30.0, 20.0, 999.0], [30.0, 20.0, 10.0]])
+    valid = torch.tensor([[True, True, False], [True, True, True]])
+    loss, accuracy, pair_count = pairwise_ranking_loss(
+        scores,
+        quality,
+        margin=0.01,
+        minimum_quality_gap=0.5,
+        valid_mask=valid,
+    )
+    assert pair_count.item() == 4
+    assert accuracy.item() == pytest.approx(0.5)
+    assert loss.item() > 0.0
+    loss.backward()
+    assert scores.grad is not None
+    assert scores.grad[0, 2].item() == 0.0
+    assert torch.isfinite(scores.grad).all()
+
+
+def test_vectorized_pairwise_ranking_excludes_documents_without_quality_gap() -> None:
+    scores = torch.tensor([[0.1, 0.2], [0.8, 0.1]], requires_grad=True)
+    quality = torch.tensor([[10.0, 10.0], [20.0, 10.0]])
+    loss, accuracy, pair_count = pairwise_ranking_loss(
+        scores,
+        quality,
+        minimum_quality_gap=0.5,
+    )
+    assert pair_count.item() == 1
+    assert accuracy.item() == 1.0
+    assert loss.item() == 0.0
+    loss.backward()
+    assert scores.grad is not None
+
+
+def test_phase3_forward_scores_candidate_chunks_and_reaches_encoder_gradient() -> None:
+    torch.manual_seed(29)
+    model = _toy_objective_model()
+    model.ranking_weight = 0.15
+    model.ranking_margin = 0.01
+    model.ranking_length_penalty_alpha = 1.0
+    model.ranking_minimum_quality_gap = 0.5
+    model.ranking_candidate_chunk_size = 2
+    input_ids = torch.tensor([[1, 2, 3, 4], [4, 3, 2, 1]])
+    attention = torch.ones_like(input_ids)
+    unit_ids = torch.tensor([[1, 1, 2, 2], [1, 1, 2, 2]])
+    evidence = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+    reference_input = torch.tensor([[1, 5, 6, 7], [1, 7, 6, 5]])
+    reference_labels = torch.tensor([[-100, 5, 6, 7], [-100, 7, 6, 5]])
+    candidates = torch.tensor(
+        [
+            [[1, 5, 6, 7], [1, 5, 7, 6], [1, 7, 6, 5]],
+            [[1, 7, 6, 5], [1, 7, 5, 6], [0, 0, 0, 0]],
+        ]
+    )
+    candidate_labels = candidates.clone()
+    candidate_labels[:, :, 0] = -100
+    candidate_labels[1, 2] = -100
+    candidate_mask = candidates.ne(0).long()
+    outputs = model.forward_ranking(
+        input_ids=input_ids,
+        attention_mask=attention,
+        unit_ids=unit_ids,
+        evidence_labels=evidence,
+        reference_decoder_input_ids=reference_input,
+        reference_decoder_attention_mask=torch.ones_like(reference_input),
+        reference_labels=reference_labels,
+        candidate_decoder_input_ids=candidates,
+        candidate_decoder_attention_mask=candidate_mask,
+        candidate_labels=candidate_labels,
+        candidate_quality_scores=torch.tensor([[30.0, 20.0, 10.0], [25.0, 15.0, 0.0]]),
+    )
+    assert outputs["candidate_pair_count"].item() == 4
+    assert torch.isfinite(outputs["loss"])
+    outputs["loss"].backward()
+    assert model.encoder.embedding.weight.grad is not None
+    assert model.decoder.memory_projection.weight.grad is not None
+    assert torch.isfinite(model.encoder.embedding.weight.grad).all()
+
+
+def test_candidate_sampling_reuses_memory_and_returns_requested_count() -> None:
+    class Decoder(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.prepared = 0
+            self.cleared = 0
+
+        def prepare_cross_attention_cache(self, memory: torch.Tensor) -> None:
+            self.prepared += 1
+            self.cached_rows = memory.shape[0]
+
+        def clear_cross_attention_cache(self) -> None:
+            self.cleared += 1
+
+        def forward(self, input_ids: torch.Tensor, **kwargs):
+            del kwargs
+            return torch.nn.functional.one_hot(input_ids.remainder(4), num_classes=4).float(), ()
+
+    class Model(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.decoder = Decoder()
+            self.output = nn.Linear(4, 8, bias=False)
+
+        @property
+        def lm_head(self):
+            return self.output
+
+    model = Model()
+    bridge = BridgeOutput(
+        memory=torch.randn(2, 3, 4),
+        memory_mask=torch.ones(2, 3, dtype=torch.long),
+        attention_bias=None,
+        salience_logits=None,
+        loss_salience=torch.tensor(0.0),
+    )
+    sampled = generate_sampled_from_memory(
+        model,
+        bridge,
+        [1],
+        max_new_tokens=2,
+        min_new_tokens=0,
+        pad_token_id=0,
+        temperature=0.9,
+        top_k=2,
+        top_p=0.95,
+        repetition_penalty=1.0,
+        no_repeat_ngram_size=0,
+        num_return_sequences=3,
+    )
+    assert sampled.shape == (2, 3, 2)
+    assert model.decoder.cached_rows == 6
+    assert model.decoder.prepared == model.decoder.cleared == 1
+
+
+def test_offline_candidate_generation_disables_autograd_and_retries_cuda_oom() -> None:
+    source = (ROOT / "eviseq_v2" / "generate_candidates.py").read_text(encoding="utf-8")
+    assert "@torch.inference_mode()\ndef generate_candidates(" in source
+    assert "except torch.cuda.OutOfMemoryError:" in source
+    assert "active_batch_size = max(1, active_batch_size // 2)" in source
+
+
+def test_length_bucket_sampler_and_single_batch_cache_shortcut() -> None:
+    lengths = list(range(1, 17))
+    batches = list(
+        LengthBucketBatchSampler(
+            lengths,
+            batch_size=4,
+            seed=7,
+            bucket_size_multiplier=4,
+        )
+    )
+    assert sorted(index for batch in batches for index in batch) == list(range(16))
+    assert all(
+        max(lengths[index] for index in batch) - min(lengths[index] for index in batch) <= 3 for batch in batches
+    )
+
+    class Objective:
+        alignment_head = object()
+        contrastive_across_accumulation = True
+
+    model = Objective()
+    assert _uses_virtual_gradcache(model, 1) is False
+    assert _uses_virtual_gradcache(model, 2) is True
 
 
 def test_run_script_has_no_upload_or_push_operation() -> None:
@@ -800,6 +1100,9 @@ def test_run_script_has_no_upload_or_push_operation() -> None:
     assert "huggingface-cli upload" not in script
     assert "git push" not in script
     assert "--paper-test" in script
+    assert '[[ ! -f "$output_dir/complete" ]]' in script
+    assert '[[ -f "$output_dir/ranking/complete" ]]' in script
+    assert "for required in last.pt resolved_config.yaml data_manifest.json parameter_manifest.json" in script
 
 
 def _write(path: Path, rows: list[dict]) -> None:
