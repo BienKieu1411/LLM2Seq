@@ -859,6 +859,7 @@ def test_pretrained_encoder_controls_keep_one_decoder_and_one_memory() -> None:
     assert pplx["decoder"]["cross_attention_every"] == nemo["decoder"]["cross_attention_every"] == 1
     assert pplx["decoder"]["memory_bank_count"] == nemo["decoder"]["memory_bank_count"] == 1
     assert pplx["model"]["decoder_name"] == nemo["model"]["decoder_name"] == "Qwen/Qwen3-0.6B"
+    assert pplx["experiment"]["output_dir"] == "runs/eviseq_v2/encoders/pplx_0_6b"
 
 
 def test_pplx_pubmed_changes_only_the_encoder_specific_contract() -> None:

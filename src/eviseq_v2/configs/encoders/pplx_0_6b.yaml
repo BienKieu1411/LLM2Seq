@@ -1,8 +1,8 @@
 _base_: ../wikilingua.yaml
 
 experiment:
-  name: eviseq_pplx_0_6b_to_qwen3_0_6b
-  output_dir: runs/eviseq/encoders/pplx_0_6b
+  name: eviseq_v2_pplx_0_6b_to_qwen3_0_6b
+  output_dir: runs/eviseq_v2/encoders/pplx_0_6b
 
 model:
   encoder_name: perplexity-ai/pplx-embed-v1-0.6b

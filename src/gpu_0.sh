@@ -2,8 +2,8 @@
 set -Eeuo pipefail
 
 # GPU 0 queue:
-#   1. EviSeq on PubMed
-#   2. EviSeq on WikiLingua
+#   1. EviSeq-v2 on PubMed
+#   2. EviSeq-v2 PPLX-Embed 0.6B on WikiLingua
 #
 # Run from anywhere:
 #   CUDA_VISIBLE_DEVICES=0 bash gpu_0.sh
@@ -36,17 +36,17 @@ ensure_pubmed() {
   if [[ -s "${data_dir}/train.jsonl" \
     && -s "${data_dir}/validation.jsonl" \
     && -s "${data_dir}/test.jsonl" ]]; then
-    echo "=== EviSeq PubMed data already prepared; skipping copy ==="
+    echo "=== EviSeq-v2 PubMed data already prepared; skipping copy ==="
     return
   fi
-  echo "=== Prepare EviSeq PubMed from ${PUBMED_SOURCE_DIR} ==="
-  bash eviseq/run.sh prepare-pubmed "${PUBMED_SOURCE_DIR}"
+  echo "=== Prepare EviSeq-v2 PubMed from ${PUBMED_SOURCE_DIR} ==="
+  bash eviseq_v2/run.sh prepare-pubmed "${PUBMED_SOURCE_DIR}"
 }
 
 run_rouge155_if_available() {
   local predictions="$1"
   if [[ -n "${PYROUGE_HOME_DIR:-}" ]]; then
-    bash eviseq/run.sh rouge155 "${predictions}" --details
+    bash eviseq_v2/run.sh rouge155 "${predictions}" --details
   else
     echo "=== Perl ROUGE-1.5.5 skipped: PYROUGE_HOME_DIR is not set ==="
   fi
@@ -57,16 +57,17 @@ echo "=== Log: ${LOG_FILE} ==="
 
 ensure_pubmed
 
-echo "=== [GPU 0 / 1 of 2] Train EviSeq on PubMed ==="
-bash eviseq/run.sh pubmed "${overwrite_args[@]}"
-bash eviseq/run.sh paper-test-pubmed
+echo "=== [GPU 0 / 1 of 2] Train EviSeq-v2 on PubMed ==="
+bash eviseq_v2/run.sh pubmed "${overwrite_args[@]}"
+bash eviseq_v2/run.sh paper-test-pubmed
 run_rouge155_if_available \
-  "runs/eviseq/pubmed_qwen3_evidence/last_test_predictions.jsonl"
+  "runs/eviseq_v2/pubmed_qwen3_evidence/ranking/last_test_predictions.jsonl"
 
-echo "=== [GPU 0 / 2 of 2] Train EviSeq on WikiLingua ==="
-bash eviseq/run.sh wiki "${overwrite_args[@]}"
-bash eviseq/run.sh paper-test-wiki
+echo "=== [GPU 0 / 2 of 2] Train EviSeq-v2 PPLX-Embed 0.6B on WikiLingua ==="
+bash eviseq_v2/run.sh pplx "${overwrite_args[@]}"
+bash eviseq_v2/run.sh paper-test \
+  eviseq_v2/configs/encoders/pplx_0_6b.yaml
 run_rouge155_if_available \
-  "runs/eviseq/wikilingua_qwen3_evidence/last_test_predictions.jsonl"
+  "runs/eviseq_v2/encoders/pplx_0_6b/last_test_predictions.jsonl"
 
 echo "=== GPU 0 queue completed successfully ==="
