@@ -2,10 +2,11 @@
 set -Eeuo pipefail
 
 # GPU 1 queue:
-#   1. Resume Phase 3 for EviSeq-v2 PPLX-Embed on PubMed.
+#   1. Evaluate the completed Phase-2 PPLX-Embed PubMed checkpoint.
 #   2. Train EviSeq-v2 PPLX-Embed on WikiLingua, including Phase 3 ranking.
 #
-# Phase-2 last.pt is preserved. Do NOT pass --overwrite-output-dir.
+# The incomplete PubMed Phase 3 is intentionally discarded. Phase-2 last.pt
+# is preserved. Do NOT pass --overwrite-output-dir.
 # Run:
 #   CUDA_VISIBLE_DEVICES=1 bash gpu_1.sh
 
@@ -31,10 +32,10 @@ PHASE2_CHECKPOINT="${RUN_DIR}/last.pt"
 RANKING_DIR="${RUN_DIR}/ranking"
 
 mkdir -p logs/gpu_queues
-LOG_FILE="logs/gpu_queues/gpu_1_phase3_pplx_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="logs/gpu_queues/gpu_1_phase2_eval_then_wiki_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "${LOG_FILE}") 2>&1
 
-echo "=== GPU 1: resume EviSeq-v2 PPLX PubMed Phase 3 ==="
+echo "=== GPU 1: evaluate PPLX PubMed Phase 2, then train PPLX WikiLingua ==="
 echo "=== CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ==="
 echo "=== Log: ${LOG_FILE} ==="
 
@@ -47,52 +48,24 @@ echo "=== Log: ${LOG_FILE} ==="
   exit 1
 }
 
-if [[ -f "${RANKING_DIR}/COMPLETE" && -f "${RANKING_DIR}/last.pt" ]]; then
-  echo "=== Phase 3 is already complete; skipping ranking training ==="
-else
-  # A failed Phase 3 leaves PHASE2_COMPLETE and RUNNING behind. Restore the
-  # Phase-2 completion marker expected by the atomic Phase-3 pipeline.
-  rm -f "${RUN_DIR}/RUNNING"
-  if [[ -f "${RUN_DIR}/PHASE2_COMPLETE" ]]; then
-    mv -f "${RUN_DIR}/PHASE2_COMPLETE" "${RUN_DIR}/COMPLETE"
-  fi
-  [[ -f "${RUN_DIR}/COMPLETE" ]] || {
-    echo "ERROR: neither ${RUN_DIR}/COMPLETE nor PHASE2_COMPLETE exists." >&2
-    exit 1
-  }
-
-  # Remove only an incomplete Phase-3 directory. Never touch Phase-2 last.pt.
-  rm -rf "${RANKING_DIR}"
-
-  RUN_DIR="${RUN_DIR}" "${PYTHON_BIN}" - <<'PY'
-import os
-from pathlib import Path
-
-import eviseq_v2.training as training
-
-run_dir = Path(os.environ["RUN_DIR"])
-config_path = run_dir / "resolved_config.yaml"
-phase2_checkpoint = run_dir / "last.pt"
-
-assert config_path.is_file(), config_path
-assert phase2_checkpoint.is_file(), phase2_checkpoint
-
-# Skip Phase 1-2 and hand the existing canonical checkpoint to the unchanged
-# Phase-3 implementation.
-training.stable.train = lambda config, overwrite: phase2_checkpoint
-
-ranked_checkpoint = training.train(
-    str(config_path),
-    overwrite_output_dir=False,
-)
-print(f"PHASE 3 COMPLETE: {ranked_checkpoint}", flush=True)
-PY
+# A killed/failed Phase 3 leaves PHASE2_COMPLETE and RUNNING behind. Restore
+# the committed Phase-2 state so the standard evaluator selects root/last.pt.
+rm -f "${RUN_DIR}/RUNNING"
+if [[ -f "${RUN_DIR}/PHASE2_COMPLETE" ]]; then
+  mv -f "${RUN_DIR}/PHASE2_COMPLETE" "${RUN_DIR}/COMPLETE"
 fi
+[[ -f "${RUN_DIR}/COMPLETE" ]] || {
+  echo "ERROR: neither ${RUN_DIR}/COMPLETE nor PHASE2_COMPLETE exists." >&2
+  exit 1
+}
 
-echo "=== Evaluate ranked PPLX PubMed checkpoint on the test split ==="
+# Delete only incomplete/generated ranking artifacts, never Phase-2 last.pt.
+rm -rf "${RANKING_DIR}"
+
+echo "=== Evaluate PPLX PubMed Phase-2 last.pt on the test split ==="
 bash eviseq_v2/run.sh paper-test-pplx-pubmed
 
-PREDICTIONS="${RANKING_DIR}/last_test_predictions.jsonl"
+PREDICTIONS="${RUN_DIR}/last_test_predictions.jsonl"
 if [[ -n "${PYROUGE_HOME_DIR:-}" ]]; then
   bash eviseq_v2/run.sh rouge155 "${PREDICTIONS}" --details
 else
