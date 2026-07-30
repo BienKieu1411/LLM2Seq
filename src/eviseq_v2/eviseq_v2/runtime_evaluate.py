@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
+import logging
+import os
 import statistics
 import time
 from collections import Counter
@@ -20,6 +23,8 @@ from .generation import generate
 from .metrics import rouge_scores
 from .model import EviSeq as LLM2SeqV2
 from .runtime import _device, _tokenizers
+
+LOGGER = logging.getLogger("eviseq.runtime_evaluate")
 
 
 def _diagnostics(predictions: List[str], references: List[str], sources: List[str]) -> Dict[str, float]:
@@ -109,7 +114,9 @@ def evaluate(
     effective_limit = int(max_samples) if int(max_samples) > 0 else configured_limit
     rows = read_jsonl(data["test_file"], max_examples=effective_limit)
     generation = config.get("generation", {})
-    batch_size = int(generation.get("batch_size", 64))
+    batch_size = int(os.environ.get("EVISEQ_EVAL_BATCH_SIZE", generation.get("batch_size", 64)))
+    if batch_size <= 0:
+        raise ValueError("Evaluation batch size must be positive")
     decoder_seed = decoder_seed_ids(decoder_tokenizer, data)
     predictions: List[str] = []
     references: List[str] = []
@@ -123,34 +130,56 @@ def evaluate(
             return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
         return nullcontext()
 
-    for start in range(0, len(rows), batch_size):
-        batch_rows = rows[start : start + batch_size]
-        input_ids, attention_mask, unit_ids, batch_sources, batch_references = _pad_source(
-            batch_rows,
-            encoder_tokenizer,
-            data,
-            device,
-        )
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-        began = time.perf_counter()
-        with autocast():
-            generated = generate(
-                model,
-                input_ids,
-                attention_mask,
-                decoder_seed,
-                unit_ids=unit_ids,
-                max_new_tokens=int(generation.get("max_new_tokens", 256)),
-                min_new_tokens=int(generation.get("min_new_tokens", 16)),
-                eos_token_id=decoder_tokenizer.eos_token_id,
-                pad_token_id=decoder_tokenizer.pad_token_id,
-                repetition_penalty=float(generation.get("repetition_penalty", 1.05)),
-                no_repeat_ngram_size=int(generation.get("no_repeat_ngram_size", 3)),
+    cursor = 0
+    active_batch_size = batch_size
+    while cursor < len(rows):
+        batch_rows = rows[cursor : cursor + active_batch_size]
+        input_ids = attention_mask = unit_ids = generated = None
+        try:
+            input_ids, attention_mask, unit_ids, batch_sources, batch_references = _pad_source(
+                batch_rows,
+                encoder_tokenizer,
+                data,
+                device,
             )
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-        elapsed = time.perf_counter() - began
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            began = time.perf_counter()
+            with autocast():
+                generated = generate(
+                    model,
+                    input_ids,
+                    attention_mask,
+                    decoder_seed,
+                    unit_ids=unit_ids,
+                    max_new_tokens=int(generation.get("max_new_tokens", 256)),
+                    min_new_tokens=int(generation.get("min_new_tokens", 16)),
+                    eos_token_id=decoder_tokenizer.eos_token_id,
+                    pad_token_id=decoder_tokenizer.pad_token_id,
+                    repetition_penalty=float(generation.get("repetition_penalty", 1.05)),
+                    no_repeat_ngram_size=int(generation.get("no_repeat_ngram_size", 3)),
+                )
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            elapsed = time.perf_counter() - began
+        except torch.cuda.OutOfMemoryError:
+            del input_ids, attention_mask, unit_ids, generated
+            gc.collect()
+            torch.cuda.empty_cache()
+            if active_batch_size <= 1:
+                raise
+            previous_batch_size = active_batch_size
+            active_batch_size = max(1, active_batch_size // 2)
+            LOGGER.warning(
+                "CUDA OOM at evaluation example %d; retrying with batch=%d (was %d)",
+                cursor,
+                active_batch_size,
+                previous_batch_size,
+            )
+            continue
+
+        if generated is None:
+            raise RuntimeError("Evaluation generation returned no token sequences")
         decoded = decoder_tokenizer.batch_decode(generated, skip_special_tokens=True)
         predictions.extend(value.strip() for value in decoded)
         references.extend(batch_references)
@@ -164,6 +193,7 @@ def evaluate(
                     "reference": reference,
                 }
             )
+        cursor += len(batch_rows)
     metrics: Dict[str, Any] = {
         **rouge_scores(predictions, references),
         **_diagnostics(predictions, references, sources),
