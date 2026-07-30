@@ -17,6 +17,9 @@ export HF_HUB_DISABLE_TELEMETRY=1
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
+PUBMED_EVAL_BATCH_SIZE="${PUBMED_EVAL_BATCH_SIZE:-1}"
+WIKI_EVAL_BATCH_SIZE="${WIKI_EVAL_BATCH_SIZE:-8}"
+
 RUN_DIR="runs/eviseq_v2/pubmed_qwen3_evidence"
 CONFIG="${RUN_DIR}/resolved_config.yaml"
 PHASE2_CHECKPOINT="${RUN_DIR}/last.pt"
@@ -54,7 +57,8 @@ fi
 rm -rf "${RANKING_DIR}"
 
 echo "=== Evaluate Qwen PubMed Phase-2 last.pt on the test split ==="
-bash eviseq_v2/run.sh paper-test-pubmed
+EVISEQ_EVAL_BATCH_SIZE="${PUBMED_EVAL_BATCH_SIZE}" \
+  bash eviseq_v2/run.sh paper-test-pubmed
 
 PUBMED_PREDICTIONS="${RUN_DIR}/last_test_predictions.jsonl"
 if [[ -n "${PYROUGE_HOME_DIR:-}" ]]; then
@@ -67,7 +71,8 @@ echo "=== Train PPLX-Embed EviSeq-v2 on WikiLingua (Phase 1-2 only) ==="
 bash eviseq_v2/run.sh pplx
 
 echo "=== Evaluate PPLX WikiLingua Phase-2 last.pt on the test split ==="
-bash eviseq_v2/run.sh paper-test \
+EVISEQ_EVAL_BATCH_SIZE="${WIKI_EVAL_BATCH_SIZE}" \
+  bash eviseq_v2/run.sh paper-test \
   eviseq_v2/configs/encoders/pplx_0_6b.yaml
 
 WIKI_PREDICTIONS="runs/eviseq_v2/encoders/pplx_0_6b/last_test_predictions.jsonl"
