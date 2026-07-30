@@ -21,3 +21,7 @@ objectives:
 
 data:
   source_prefix: ""
+
+ranking:
+  # Never share candidate artifacts with the Qwen-Embedding WikiLingua run.
+  candidates_file: runs/eviseq_v2/encoders/pplx_0_6b/ranking/candidates.jsonl

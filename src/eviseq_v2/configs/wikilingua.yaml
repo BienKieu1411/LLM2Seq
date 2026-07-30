@@ -7,3 +7,16 @@ experiment:
 training:
   interface_warmup_epochs: 2
   full_finetune_epochs: 12
+  ranking_finetune_epochs: 2
+  ranking_batch_size: 8
+  ranking_gradient_accumulation_steps: 4
+
+ranking:
+  enabled: true
+  candidates_file: runs/eviseq_v2/wikilingua_qwen3_evidence/ranking/candidates.jsonl
+  num_candidates: 5
+  # WikiLingua is small enough to rank on the complete training split.
+  max_examples: 0
+  # Candidate generation automatically halves and retries this batch on OOM.
+  generation_batch_size: 32
+  candidate_scoring_chunk_size: 40
