@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # GPU 1 queue:
 #   1. Evaluate the completed Phase-2 PPLX-Embed PubMed checkpoint.
-#   2. Train EviSeq-v2 Qwen3-Embedding on WikiLingua, including Phase 3 ranking.
+#   2. Train EviSeq-v2 Qwen3-Embedding on WikiLingua (Phase 1-2 only).
 #
 # The incomplete PubMed Phase 3 is intentionally discarded. Phase-2 last.pt
 # is preserved. Do NOT pass --overwrite-output-dir.
@@ -72,13 +72,13 @@ else
   echo "Perl ROUGE skipped: PYROUGE_HOME_DIR is not set." >&2
 fi
 
-echo "=== Train Qwen3-Embedding EviSeq-v2 on WikiLingua, including Phase 3 ==="
+echo "=== Train Qwen3-Embedding EviSeq-v2 on WikiLingua (Phase 1-2 only) ==="
 bash eviseq_v2/run.sh wiki
 
-echo "=== Evaluate ranked Qwen3-Embedding WikiLingua checkpoint on the test split ==="
+echo "=== Evaluate Qwen3-Embedding WikiLingua Phase-2 last.pt on the test split ==="
 bash eviseq_v2/run.sh paper-test-wiki
 
-WIKI_PREDICTIONS="runs/eviseq_v2/wikilingua_qwen3_evidence/ranking/last_test_predictions.jsonl"
+WIKI_PREDICTIONS="runs/eviseq_v2/wikilingua_qwen3_evidence/last_test_predictions.jsonl"
 if [[ -n "${PYROUGE_HOME_DIR:-}" ]]; then
   bash eviseq_v2/run.sh rouge155 "${WIKI_PREDICTIONS}" --details
 else
