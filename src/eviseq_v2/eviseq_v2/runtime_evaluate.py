@@ -117,6 +117,12 @@ def evaluate(
     batch_size = int(os.environ.get("EVISEQ_EVAL_BATCH_SIZE", generation.get("batch_size", 64)))
     if batch_size <= 0:
         raise ValueError("Evaluation batch size must be positive")
+    LOGGER.warning(
+        "Evaluation generation batch=%d (resolved_config=%d, runtime_override=%s)",
+        batch_size,
+        int(generation.get("batch_size", 64)),
+        os.environ.get("EVISEQ_EVAL_BATCH_SIZE", "<none>"),
+    )
     decoder_seed = decoder_seed_ids(decoder_tokenizer, data)
     predictions: List[str] = []
     references: List[str] = []

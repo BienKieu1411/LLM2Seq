@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -191,6 +192,7 @@ def evaluate(
     split: str = "validation",
     max_samples: int = 0,
     paper_test: bool = False,
+    batch_size: int = 0,
 ) -> Dict[str, Any]:
     if split not in {"validation", "test"}:
         raise ValueError("split must be validation or test")
@@ -232,9 +234,16 @@ def evaluate(
     stable.LLM2SeqV2 = EviSeq
     stable.load_config = lambda _: _evaluation_config(config_path, split)
     stable.load_last_checkpoint = load_verified_checkpoint
+    previous_batch_override = os.environ.get("EVISEQ_EVAL_BATCH_SIZE")
+    if int(batch_size) > 0:
+        os.environ["EVISEQ_EVAL_BATCH_SIZE"] = str(int(batch_size))
     try:
         metrics = stable.evaluate(config_path, checkpoint_path, output_path, max_samples)
     finally:
+        if previous_batch_override is None:
+            os.environ.pop("EVISEQ_EVAL_BATCH_SIZE", None)
+        else:
+            os.environ["EVISEQ_EVAL_BATCH_SIZE"] = previous_batch_override
         stable.LLM2SeqV2 = original_class
         stable.load_config = original_loader
         stable.load_last_checkpoint = original_checkpoint_loader
@@ -305,6 +314,7 @@ def main() -> None:
     parser.add_argument("--split", choices=("validation", "test"), default="validation")
     parser.add_argument("--max-samples", type=int, default=0)
     parser.add_argument("--paper-test", action="store_true")
+    parser.add_argument("--batch-size", type=int, default=0)
     args = parser.parse_args()
     evaluate(
         args.config,
@@ -313,6 +323,7 @@ def main() -> None:
         split=args.split,
         max_samples=args.max_samples,
         paper_test=args.paper_test,
+        batch_size=args.batch_size,
     )
 
 

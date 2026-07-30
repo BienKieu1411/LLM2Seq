@@ -73,6 +73,7 @@ train_and_validate() {
 
 paper_test() {
   local config="$1"
+  shift
   local output_dir
   output_dir="$(config_value "$config" experiment.output_dir)"
   select_committed_checkpoint "$output_dir" test
@@ -80,7 +81,7 @@ paper_test() {
     --config "$SELECTED_RESOLVED" \
     --checkpoint "$SELECTED_CHECKPOINT" \
     --output "$SELECTED_PREDICTIONS" \
-    --split test --paper-test
+    --split test --paper-test "$@"
 }
 
 wiki_dev_table() {
@@ -191,19 +192,21 @@ case "$MODE" in
       --split validation "$@"
     ;;
   paper-test-wiki)
-    paper_test "$WIKI_CONFIG"
+    paper_test "$WIKI_CONFIG" "$@"
     ;;
   paper-test-cnndm)
-    paper_test "$CNN_CONFIG"
+    paper_test "$CNN_CONFIG" "$@"
     ;;
   paper-test-pubmed)
-    paper_test "$PUBMED_CONFIG"
+    paper_test "$PUBMED_CONFIG" "$@"
     ;;
   paper-test-pplx-pubmed)
-    paper_test "$PPLX_PUBMED_CONFIG"
+    paper_test "$PPLX_PUBMED_CONFIG" "$@"
     ;;
   paper-test)
-    paper_test "${1:-$WIKI_CONFIG}"
+    CONFIG="${1:-$WIKI_CONFIG}"
+    if [[ $# -gt 0 ]]; then shift; fi
+    paper_test "$CONFIG" "$@"
     ;;
   rouge155)
     PREDICTIONS="${1:?Pass a full-test predictions.jsonl file}"

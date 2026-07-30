@@ -66,8 +66,8 @@ fi
 rm -rf "${RANKING_DIR}"
 
 echo "=== Evaluate PPLX PubMed Phase-2 last.pt on the test split ==="
-EVISEQ_EVAL_BATCH_SIZE="${PUBMED_EVAL_BATCH_SIZE}" \
-  bash eviseq_v2/run.sh paper-test-pplx-pubmed
+bash eviseq_v2/run.sh paper-test-pplx-pubmed \
+  --batch-size "${PUBMED_EVAL_BATCH_SIZE}"
 
 PREDICTIONS="${RUN_DIR}/last_test_predictions.jsonl"
 if [[ -n "${PYROUGE_HOME_DIR:-}" ]]; then
@@ -80,8 +80,8 @@ echo "=== Train Qwen3-Embedding EviSeq-v2 on WikiLingua (Phase 1-2 only) ==="
 bash eviseq_v2/run.sh wiki
 
 echo "=== Evaluate Qwen3-Embedding WikiLingua Phase-2 last.pt on the test split ==="
-EVISEQ_EVAL_BATCH_SIZE="${WIKI_EVAL_BATCH_SIZE}" \
-  bash eviseq_v2/run.sh paper-test-wiki
+bash eviseq_v2/run.sh paper-test-wiki \
+  --batch-size "${WIKI_EVAL_BATCH_SIZE}"
 
 WIKI_PREDICTIONS="runs/eviseq_v2/wikilingua_qwen3_evidence/last_test_predictions.jsonl"
 if [[ -n "${PYROUGE_HOME_DIR:-}" ]]; then
