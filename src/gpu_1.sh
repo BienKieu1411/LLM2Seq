@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Resume only Phase 3 (candidate generation + ranking fine-tune) for:
-#   EviSeq-v2 PPLX-Embed 0.6B -> Qwen3-0.6B on PubMed
+# GPU 1 queue:
+#   1. Resume Phase 3 for EviSeq-v2 PPLX-Embed on PubMed.
+#   2. Train EviSeq-v2 PPLX-Embed on WikiLingua, including Phase 3 ranking.
 #
 # Phase-2 last.pt is preserved. Do NOT pass --overwrite-output-dir.
 # Run:
@@ -98,4 +99,18 @@ else
   echo "Perl ROUGE skipped: PYROUGE_HOME_DIR is not set." >&2
 fi
 
-echo "=== GPU 1 PPLX PubMed Phase 3 queue completed successfully ==="
+echo "=== Train PPLX-Embed EviSeq-v2 on WikiLingua, including Phase 3 ==="
+bash eviseq_v2/run.sh pplx
+
+echo "=== Evaluate ranked PPLX WikiLingua checkpoint on the test split ==="
+bash eviseq_v2/run.sh paper-test \
+  eviseq_v2/configs/encoders/pplx_0_6b.yaml
+
+WIKI_PREDICTIONS="runs/eviseq_v2/encoders/pplx_0_6b/ranking/last_test_predictions.jsonl"
+if [[ -n "${PYROUGE_HOME_DIR:-}" ]]; then
+  bash eviseq_v2/run.sh rouge155 "${WIKI_PREDICTIONS}" --details
+else
+  echo "Perl ROUGE skipped for PPLX WikiLingua: PYROUGE_HOME_DIR is not set." >&2
+fi
+
+echo "=== GPU 1 queue completed successfully ==="
