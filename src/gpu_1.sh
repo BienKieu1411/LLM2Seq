@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # GPU 1 queue:
 #   1. Evaluate the completed Phase-2 PPLX-Embed PubMed checkpoint.
-#   2. Train EviSeq-v2 PPLX-Embed on WikiLingua, including Phase 3 ranking.
+#   2. Train EviSeq-v2 Qwen3-Embedding on WikiLingua, including Phase 3 ranking.
 #
 # The incomplete PubMed Phase 3 is intentionally discarded. Phase-2 last.pt
 # is preserved. Do NOT pass --overwrite-output-dir.
@@ -32,10 +32,10 @@ PHASE2_CHECKPOINT="${RUN_DIR}/last.pt"
 RANKING_DIR="${RUN_DIR}/ranking"
 
 mkdir -p logs/gpu_queues
-LOG_FILE="logs/gpu_queues/gpu_1_phase2_eval_then_wiki_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="logs/gpu_queues/gpu_1_phase2_eval_then_qwen_wiki_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "${LOG_FILE}") 2>&1
 
-echo "=== GPU 1: evaluate PPLX PubMed Phase 2, then train PPLX WikiLingua ==="
+echo "=== GPU 1: evaluate PPLX PubMed Phase 2, then train Qwen3-Embedding WikiLingua ==="
 echo "=== CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ==="
 echo "=== Log: ${LOG_FILE} ==="
 
@@ -72,18 +72,17 @@ else
   echo "Perl ROUGE skipped: PYROUGE_HOME_DIR is not set." >&2
 fi
 
-echo "=== Train PPLX-Embed EviSeq-v2 on WikiLingua, including Phase 3 ==="
-bash eviseq_v2/run.sh pplx
+echo "=== Train Qwen3-Embedding EviSeq-v2 on WikiLingua, including Phase 3 ==="
+bash eviseq_v2/run.sh wiki
 
-echo "=== Evaluate ranked PPLX WikiLingua checkpoint on the test split ==="
-bash eviseq_v2/run.sh paper-test \
-  eviseq_v2/configs/encoders/pplx_0_6b.yaml
+echo "=== Evaluate ranked Qwen3-Embedding WikiLingua checkpoint on the test split ==="
+bash eviseq_v2/run.sh paper-test-wiki
 
-WIKI_PREDICTIONS="runs/eviseq_v2/encoders/pplx_0_6b/ranking/last_test_predictions.jsonl"
+WIKI_PREDICTIONS="runs/eviseq_v2/wikilingua_qwen3_evidence/ranking/last_test_predictions.jsonl"
 if [[ -n "${PYROUGE_HOME_DIR:-}" ]]; then
   bash eviseq_v2/run.sh rouge155 "${WIKI_PREDICTIONS}" --details
 else
-  echo "Perl ROUGE skipped for PPLX WikiLingua: PYROUGE_HOME_DIR is not set." >&2
+  echo "Perl ROUGE skipped for Qwen3-Embedding WikiLingua: PYROUGE_HOME_DIR is not set." >&2
 fi
 
 echo "=== GPU 1 queue completed successfully ==="
