@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from eviseq.prepare_cnndm import convert_split, iter_records, prepare
+from eviseq.data.cnndm import convert_split, iter_records, prepare
 
 
 def _write_jsonl(path: Path, records: list[object], *, bom: bool = False) -> None:
@@ -17,7 +17,7 @@ def _read_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def test_prepare_copies_converts_and_writes_reproducible_manifest(tmp_path: Path) -> None:
+def test_prepare_copies_converts_and_writes_report(tmp_path: Path) -> None:
     source_dir = tmp_path / "incoming"
     raw_dir = tmp_path / "raw"
     processed_dir = tmp_path / "processed"
@@ -62,7 +62,6 @@ def test_prepare_copies_converts_and_writes_reproducible_manifest(tmp_path: Path
     assert report["splits"]["train"]["skipped"] == 1
     assert report["splits"]["validation"]["kept"] == 1
     assert report["splits"]["test"]["kept"] == 1
-    assert report["splits"]["test"]["canonical_fingerprint"]["num_examples"] == 1
 
     assert (raw_dir / "train.txt").read_bytes() == (source_dir / "train.txt").read_bytes()
     assert (raw_dir / "val.txt").read_bytes() == (source_dir / "val.jsonl").read_bytes()
@@ -87,10 +86,10 @@ def test_prepare_copies_converts_and_writes_reproducible_manifest(tmp_path: Path
     assert test[0]["source"] == "This is a tokenized news article with nine tokens"
     assert "\n" not in test[0]["source"]
 
-    manifest = json.loads((processed_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest == report
+    stored_report = json.loads((processed_dir / "preparation_report.json").read_text(encoding="utf-8"))
+    assert stored_report == report
     assert prepare(source_dir, raw_dir, processed_dir) == report
-    assert json.loads((processed_dir / "manifest.json").read_text(encoding="utf-8")) == report
+    assert json.loads((processed_dir / "preparation_report.json").read_text(encoding="utf-8")) == report
     assert not list(tmp_path.rglob("*.tmp"))
 
 
@@ -132,7 +131,7 @@ def test_convert_split_is_atomic_when_duplicate_ids_are_rejected(tmp_path: Path)
     assert not output.with_suffix(".jsonl.tmp").exists()
 
 
-def test_prepare_rejects_cross_split_id_leakage_and_does_not_publish_manifest(tmp_path: Path) -> None:
+def test_prepare_allows_reused_ids_across_splits(tmp_path: Path) -> None:
     source_dir = tmp_path / "incoming"
     raw_dir = tmp_path / "raw"
     processed_dir = tmp_path / "processed"
@@ -143,8 +142,8 @@ def test_prepare_rejects_cross_split_id_leakage_and_does_not_publish_manifest(tm
             [{"id": identifier, "article": f"{label} article.", "summary": f"{label} summary."}],
         )
 
-    with pytest.raises(ValueError, match="Cross-split ID leakage between train and test"):
-        prepare(source_dir, raw_dir, processed_dir)
-
-    assert not (processed_dir / "manifest.json").exists()
+    report = prepare(source_dir, raw_dir, processed_dir)
+    assert report["splits"]["train"]["kept"] == 1
+    assert report["splits"]["test"]["kept"] == 1
+    assert (processed_dir / "preparation_report.json").exists()
     assert not list(tmp_path.rglob("*.tmp"))

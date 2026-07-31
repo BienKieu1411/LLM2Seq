@@ -1,0 +1,49 @@
+_base_: ../base.yaml
+
+experiment:
+  name: my_question_answering_task
+  output_dir: runs/eviseq/my_question_answering_task
+
+task:
+  format: text_to_text
+  metrics: [exact_match, token_f1]
+
+objectives:
+  salience_weight: 0.0
+  use_contrastive: false
+  contrastive_weight: 0.0
+  contrastive_across_accumulation: false
+  use_evidence_contrastive: false
+  evidence_contrastive_weight: 0.0
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 3
+
+data:
+  train_file: /absolute/path/to/train.jsonl
+  validation_file: /absolute/path/to/validation.jsonl
+  test_file: /absolute/path/to/test.jsonl
+  # Example: {"uid":"1","question":"...","context":"...","answer":"..."}
+  id_field: uid
+  source_template: "Question: {question}\nContext: {context}"
+  target_field: answer
+  source_prefix: "Answer the question using only the supplied context.\n"
+  decoder_instruction: "Return only the answer supported by the encoded context."
+  decoder_prefix: ""
+  clean_wikihow_metadata: false
+  max_source_length: 4096
+  max_target_length: 256
+  supervise_evidence: false
+  precompute_evidence: false
+  precompute_validation_evidence: false
+
+generation:
+  batch_size: 16
+  min_new_tokens: 1
+  max_new_tokens: 256
+  repetition_penalty: 1.0
+  no_repeat_ngram_size: 0
+
+benchmark:
+  _replace_: true

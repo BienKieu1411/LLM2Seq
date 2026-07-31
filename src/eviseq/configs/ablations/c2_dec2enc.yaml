@@ -1,4 +1,4 @@
-_base_: ../wikilingua.yaml
+_base_: ../tasks/wikilingua.yaml
 
 experiment:
   name: eviseq_c2_dec2enc

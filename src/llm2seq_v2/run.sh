@@ -26,7 +26,7 @@ HIROUTE_SMOKE_CONFIG="configs/smoke_hiroute_100.yaml"
 DECODER_HEAVY_CONFIG="configs/qwen3_embedding_0_6b_decoder_1_7b.yaml"
 DECODER_HEAVY_SMOKE_CONFIG="configs/smoke_decoder_1_7b_100.yaml"
 PUBMED_CONFIG="configs/pubmed.yaml"
-PUBMED_DATA_DIR="../eviseq/data/pubmed"
+PUBMED_DATA_DIR="../eviseq/datasets/pubmed"
 
 run_pipeline() {
   local config="$1"
@@ -58,7 +58,7 @@ prepare_pubmed() {
     echo "Expected train.label.jsonl, val.label.jsonl, and test.label.jsonl." >&2
     exit 2
   fi
-  bash ../eviseq/run.sh prepare-pubmed "$source_dir"
+  bash ../eviseq/scripts/run.sh prepare-pubmed "$source_dir"
 }
 
 ensure_pubmed() {

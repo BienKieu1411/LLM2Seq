@@ -1,0 +1,38 @@
+_base_: ../base.yaml
+
+experiment:
+  name: my_summarization_task
+  output_dir: runs/eviseq/my_summarization_task
+
+task:
+  format: text_to_text
+  metrics: [rouge]
+
+training:
+  interface_warmup_epochs: 2
+  full_finetune_epochs: 6
+
+data:
+  train_file: /absolute/path/to/train.jsonl
+  validation_file: /absolute/path/to/validation.jsonl
+  test_file: /absolute/path/to/test.jsonl
+  source_field: document
+  target_field: summary
+  id_field: id
+  source_prefix: "Summarize the following document faithfully and concisely.\nDocument:\n"
+  decoder_instruction: "Write a faithful and concise summary of the encoded document."
+  decoder_prefix: "Summary:\n"
+  clean_wikihow_metadata: false
+  max_source_length: 4096
+  max_target_length: 512
+  supervise_evidence: true
+  precompute_evidence: true
+
+generation:
+  batch_size: 8
+  min_new_tokens: 8
+  max_new_tokens: 512
+
+benchmark:
+  _replace_: true
+

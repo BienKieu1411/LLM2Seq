@@ -14,9 +14,9 @@ training:
   validation_batch_size: 2
 
 data:
-  train_file: ../eviseq/data/pubmed/train.jsonl
-  validation_file: ../eviseq/data/pubmed/validation.jsonl
-  test_file: ../eviseq/data/pubmed/test.jsonl
+  train_file: ../eviseq/datasets/pubmed/train.jsonl
+  validation_file: ../eviseq/datasets/pubmed/validation.jsonl
+  test_file: ../eviseq/datasets/pubmed/test.jsonl
   source_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
   decoder_instruction: "Write a concise, factual abstract of the encoded biomedical article. Preserve the key objective, methods, results, and conclusion; do not add information."
   decoder_prefix: "Abstract:\n"

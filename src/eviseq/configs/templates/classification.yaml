@@ -1,0 +1,50 @@
+_base_: ../base.yaml
+
+experiment:
+  name: my_label_generation_task
+  output_dir: runs/eviseq/my_label_generation_task
+
+task:
+  format: text_to_text
+  metrics: [exact_match]
+
+objectives:
+  salience_weight: 0.0
+  use_contrastive: false
+  contrastive_weight: 0.0
+  contrastive_across_accumulation: false
+  use_evidence_contrastive: false
+  evidence_contrastive_weight: 0.0
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 3
+
+data:
+  train_file: /absolute/path/to/train.jsonl
+  validation_file: /absolute/path/to/validation.jsonl
+  # test_file is optional until a held-out split is available.
+  test_file: ""
+  # Example: {"uid":"1","text":"...","label":"positive"}
+  id_field: uid
+  source_field: text
+  target_field: label
+  source_prefix: "Classify the input. Return exactly one valid label.\nInput:\n"
+  decoder_instruction: "Return only the class label for the encoded input."
+  decoder_prefix: ""
+  clean_wikihow_metadata: false
+  max_source_length: 2048
+  max_target_length: 32
+  supervise_evidence: false
+  precompute_evidence: false
+  precompute_validation_evidence: false
+
+generation:
+  batch_size: 32
+  min_new_tokens: 1
+  max_new_tokens: 32
+  repetition_penalty: 1.0
+  no_repeat_ngram_size: 0
+
+benchmark:
+  _replace_: true

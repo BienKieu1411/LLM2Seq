@@ -1,0 +1,60 @@
+_base_: ../base.yaml
+
+# Generic text-to-text example. The raw JSONL may use arbitrary field names.
+experiment:
+  name: my_text_to_text_task
+  output_dir: runs/eviseq/my_text_to_text_task
+
+task:
+  format: text_to_text
+  metrics: [exact_match, token_f1]
+
+objectives:
+  # Use CE only when the task has no sentence-level evidence supervision.
+  salience_weight: 0.0
+  use_contrastive: false
+  contrastive_weight: 0.0
+  contrastive_across_accumulation: false
+  use_evidence_contrastive: false
+  evidence_contrastive_weight: 0.0
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 3
+  batch_size: 16
+  gradient_accumulation_steps: 2
+
+data:
+  train_file: /absolute/path/to/train.jsonl
+  validation_file: /absolute/path/to/validation.jsonl
+  test_file: /absolute/path/to/test.jsonl
+
+  # Example raw row:
+  # {"uid":"42","question":"...","context":"...","answer":"..."}
+  id_field: uid
+  source_template: "Question: {question}\nContext: {context}"
+  target_field: answer
+  list_separator: "\n"
+
+  source_prefix: "Complete the following task accurately.\n"
+  decoder_instruction: "Produce only the requested answer from the encoded input."
+  decoder_prefix: ""
+  use_decoder_chat_template: true
+  enable_thinking: false
+  clean_wikihow_metadata: false
+  max_source_length: 2048
+  max_target_length: 256
+  supervise_evidence: false
+  precompute_evidence: false
+  precompute_validation_evidence: false
+
+generation:
+  batch_size: 16
+  min_new_tokens: 1
+  max_new_tokens: 256
+  repetition_penalty: 1.0
+  no_repeat_ngram_size: 0
+
+benchmark:
+  _replace_: true
+

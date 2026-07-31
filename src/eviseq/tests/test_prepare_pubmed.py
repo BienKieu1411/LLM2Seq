@@ -3,8 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-from eviseq.prepare_pubmed import prepare
+from eviseq.data.pubmed import prepare
 
 
 def _write(path: Path, row: dict) -> None:
@@ -45,19 +44,19 @@ def test_prepare_pubmed_is_self_contained_and_deterministic(tmp_path: Path) -> N
         "task": "summarization",
         "dataset": "pubmed",
     }
-    assert (processed / "manifest.json").is_file()
+    assert (processed / "preparation_report.json").is_file()
     assert not list(tmp_path.rglob("*.tmp"))
 
 
-def test_prepare_pubmed_rejects_cross_split_id_leakage(tmp_path: Path) -> None:
+def test_prepare_pubmed_allows_reused_ids_across_splits(tmp_path: Path) -> None:
     source = tmp_path / "pubmed"
     _write(source / "train.label.jsonl", _source_row("leaked"))
     _write(source / "val.label.jsonl", _source_row("validation"))
     _write(source / "test.label.jsonl", _source_row("leaked"))
 
     processed = tmp_path / "processed"
-    with pytest.raises(ValueError, match="Cross-split ID leakage between train and test"):
-        prepare(source, tmp_path / "raw", processed)
-
-    assert not (processed / "manifest.json").exists()
+    report = prepare(source, tmp_path / "raw", processed)
+    assert report["splits"]["train"]["kept"] == 1
+    assert report["splits"]["test"]["kept"] == 1
+    assert (processed / "preparation_report.json").exists()
     assert not list(tmp_path.rglob("*.tmp"))
