@@ -160,7 +160,10 @@ eviseq evaluate \
 
 Training has two stages: interface warm-up and full fine-tuning. Set
 `training.interface_warmup_epochs: 0` to start directly with full fine-tuning.
-Only `last.pt` is saved.
+The canonical recipe saves `epoch_XXX.pt` after every epoch, selects `best.pt`
+by minimum validation CE loss, and always writes `last.pt` at completion.
+Evaluation accepts any of these complete checkpoints; test data is never used
+for checkpoint selection.
 
 ## Continue from an existing EviSeq model
 

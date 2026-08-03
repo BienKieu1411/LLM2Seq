@@ -20,7 +20,8 @@ export PYROUGE_HOME_DIR="${PYROUGE_HOME_DIR:-/workspace/storage-shared/nlp/dungd
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-8}"
 PUBMED_SOURCE_DIR="${PUBMED_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/datasets/pubmed}"
 RUN_DIR="runs/eviseq/pubmed_qwen3_evidence"
-PREDICTIONS="${RUN_DIR}/last_test_predictions.jsonl"
+LAST_PREDICTIONS="${RUN_DIR}/last_test_predictions.jsonl"
+BEST_PREDICTIONS="${RUN_DIR}/best_test_predictions.jsonl"
 PROCESSED_DATA_DIR="datasets/pubmed"
 
 if [[ ! -f "${PYROUGE_HOME_DIR}/ROUGE-1.5.5.pl" ]]; then
@@ -59,7 +60,22 @@ bash scripts/run.sh evaluate-pubmed-test \
   --batch-size "${EVAL_BATCH_SIZE}"
 
 bash scripts/run.sh rouge155 \
-  "${PROJECT_ROOT}/${PREDICTIONS}" \
+  "${PROJECT_ROOT}/${LAST_PREDICTIONS}" \
   --details
+
+if [[ -f "${RUN_DIR}/best.pt" ]]; then
+  bash scripts/run.sh evaluate \
+    "${RUN_DIR}/resolved_config.yaml" \
+    "${RUN_DIR}/best.pt" \
+    "${BEST_PREDICTIONS}" \
+    --split test \
+    --batch-size "${EVAL_BATCH_SIZE}"
+
+  bash scripts/run.sh rouge155 \
+    "${PROJECT_ROOT}/${BEST_PREDICTIONS}" \
+    --details
+else
+  echo "=== best.pt is disabled or absent; skipping best-checkpoint evaluation ==="
+fi
 
 echo "=== GPU 0 PubMed queue completed successfully ==="

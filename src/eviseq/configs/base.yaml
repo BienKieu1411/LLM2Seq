@@ -116,8 +116,10 @@ generation:
   no_repeat_ngram_size: 3
 
 checkpoint:
-  save_best: false
-  save_each_epoch: false
+  save_best: true
+  save_each_epoch: true
+  best_metric: eval_loss_ce
+  best_mode: min
   save_last: true
 
 benchmark:

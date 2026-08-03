@@ -19,6 +19,7 @@ from ..data.dataset import (
 )
 from ..modeling.architecture import EviSeq
 from . import engine as stable
+from .checkpoint import save_configured_epoch_checkpoints
 from .objectives import exact_duplicate_mask, info_nce_loss
 
 LOGGER = logging.getLogger("eviseq")
@@ -298,6 +299,8 @@ def _run_stage(
     stage_epochs: int,
     epoch_offset: int,
     global_step: int,
+    checkpoint_dir: Path | None = None,
+    checkpoint_config: Dict[str, Any] | None = None,
 ) -> Tuple[int, int]:
     """Train evidence contrastive with optional document-level InfoNCE."""
 
@@ -461,7 +464,12 @@ def _run_stage(
                 examples_since_log = 0
         absolute_epoch = epoch_offset + stage_epoch
         LOGGER.info("completed epoch=%d stage=%s", absolute_epoch, stage)
-        if validation_every > 0 and (absolute_epoch % validation_every == 0 or stage_epoch == stage_epochs):
+        save_best = bool((checkpoint_config or {}).get("checkpoint", {}).get("save_best", False))
+        scheduled_validation = validation_every > 0 and (
+            absolute_epoch % validation_every == 0 or stage_epoch == stage_epochs
+        )
+        metrics = None
+        if save_best or scheduled_validation:
             metrics = validation_loss(model, validation_loader, device, training)
             payload = {
                 "epoch": absolute_epoch,
@@ -479,6 +487,17 @@ def _run_stage(
             if model.alignment_head is not None:
                 payload["doc_cl_acc"] = _rounded(metrics["eval_prompt_retrieval_accuracy"])
             LOGGER.info("validation %s", json.dumps(payload, separators=(",", ":")))
+        if checkpoint_dir is not None and checkpoint_config is not None:
+            saved = save_configured_epoch_checkpoints(
+                model,
+                checkpoint_dir,
+                checkpoint_config,
+                absolute_epoch,
+                global_step,
+                metrics,
+            )
+            if saved:
+                LOGGER.info("checkpoint %s", json.dumps(saved, separators=(",", ":")))
     model._carried_optimizer_moments = (  # type: ignore[attr-defined]
         _capture_optimizer_moments(model, optimizer) if stage == "interface_warmup" else {}
     )

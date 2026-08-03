@@ -1,4 +1,4 @@
-"""Stable two-stage EviSeq runtime; saves last.pt exactly once."""
+"""Stable two-stage EviSeq runtime with atomic epoch and final checkpoints."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from ..data.dataset import (
     decoder_seed_ids,
 )
 from ..modeling.architecture import EviSeq as RuntimeModel
-from .checkpoint import initialize_from_checkpoint, save_last_checkpoint
+from .checkpoint import initialize_from_checkpoint, save_configured_epoch_checkpoints, save_last_checkpoint
 
 LOGGER = logging.getLogger("eviseq.training.engine")
 
@@ -234,6 +234,8 @@ def _run_stage(
     stage_epochs: int,
     epoch_offset: int,
     global_step: int,
+    checkpoint_dir: Path | None = None,
+    checkpoint_config: Dict[str, Any] | None = None,
 ) -> Tuple[int, int]:
     if stage_epochs <= 0:
         return epoch_offset, global_step
@@ -307,9 +309,25 @@ def _run_stage(
                 metric_count = 0
         absolute_epoch = epoch_offset + stage_epoch
         LOGGER.info("completed epoch=%d stage=%s", absolute_epoch, stage)
-        if validation_every > 0 and (absolute_epoch % validation_every == 0 or stage_epoch == stage_epochs):
+        save_best = bool((checkpoint_config or {}).get("checkpoint", {}).get("save_best", False))
+        scheduled_validation = validation_every > 0 and (
+            absolute_epoch % validation_every == 0 or stage_epoch == stage_epochs
+        )
+        metrics = None
+        if save_best or scheduled_validation:
             metrics = validation_loss(model, validation_loader, device, training)
             LOGGER.info("validation %s", json.dumps({"epoch": absolute_epoch, **metrics}))
+        if checkpoint_dir is not None and checkpoint_config is not None:
+            saved = save_configured_epoch_checkpoints(
+                model,
+                checkpoint_dir,
+                checkpoint_config,
+                absolute_epoch,
+                global_step,
+                metrics,
+            )
+            if saved:
+                LOGGER.info("checkpoint %s", json.dumps(saved))
     return epoch_offset + stage_epochs, global_step
 
 
@@ -436,6 +454,8 @@ def train(
             int(training.get("interface_warmup_epochs", 3)),
             epoch,
             global_step,
+            output_dir,
+            config,
         )
         epoch, global_step = _run_stage(
             model,
@@ -447,6 +467,8 @@ def train(
             int(training.get("full_finetune_epochs", 12)),
             epoch,
             global_step,
+            output_dir,
+            config,
         )
         last_path = output_dir / "last.pt"
         save_last_checkpoint(model, last_path, config, epoch, global_step)

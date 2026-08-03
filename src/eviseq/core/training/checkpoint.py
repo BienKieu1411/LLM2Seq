@@ -1,12 +1,39 @@
-"""One complete, atomic last.pt checkpoint; no best/epoch checkpoint paths."""
+"""Complete atomic EviSeq model checkpoints."""
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any, Dict
 
 import torch
 import torch.nn as nn
+
+
+def _save_checkpoint(
+    model: nn.Module,
+    path: str | Path,
+    config: Dict[str, Any],
+    epoch: int,
+    global_step: int,
+    *,
+    role: str,
+) -> None:
+    path = Path(path)
+    if role not in {"last", "epoch", "best"}:
+        raise ValueError(f"Unsupported checkpoint role: {role!r}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state = {name: value.detach().cpu() for name, value in model.state_dict().items()}
+    payload = {
+        "model_state_dict": state,
+        "checkpoint_role": role,
+        "epoch": int(epoch),
+        "global_step": int(global_step),
+        "config": config,
+    }
+    temporary = path.with_suffix(".pt.tmp")
+    torch.save(payload, temporary)
+    temporary.replace(path)
 
 
 def save_last_checkpoint(
@@ -18,26 +45,89 @@ def save_last_checkpoint(
 ) -> None:
     path = Path(path)
     if path.name != "last.pt":
-        raise ValueError("EviSeq only writes the canonical last.pt checkpoint")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    state = {name: value.detach().cpu() for name, value in model.state_dict().items()}
-    payload = {
-        "model_state_dict": state,
-        "checkpoint_role": "last",
-        "epoch": int(epoch),
-        "global_step": int(global_step),
-        "config": config,
-    }
-    temporary = path.with_suffix(".pt.tmp")
-    torch.save(payload, temporary)
-    temporary.replace(path)
+        raise ValueError("The canonical final checkpoint must be named last.pt")
+    _save_checkpoint(model, path, config, epoch, global_step, role="last")
 
 
-def load_last_checkpoint(model: nn.Module, path: str | Path) -> Dict[str, Any]:
+def save_epoch_checkpoint(
+    model: nn.Module,
+    path: str | Path,
+    config: Dict[str, Any],
+    epoch: int,
+    global_step: int,
+) -> None:
+    path = Path(path)
+    expected_name = f"epoch_{int(epoch):03d}.pt"
+    if path.name != expected_name:
+        raise ValueError(f"Epoch {epoch} checkpoint must be named {expected_name}")
+    _save_checkpoint(model, path, config, epoch, global_step, role="epoch")
+
+
+def save_best_checkpoint(
+    model: nn.Module,
+    path: str | Path,
+    config: Dict[str, Any],
+    epoch: int,
+    global_step: int,
+) -> None:
+    path = Path(path)
+    if path.name != "best.pt":
+        raise ValueError("The validation-selected checkpoint must be named best.pt")
+    _save_checkpoint(model, path, config, epoch, global_step, role="best")
+
+
+def save_configured_epoch_checkpoints(
+    model: nn.Module,
+    directory: str | Path,
+    config: Dict[str, Any],
+    epoch: int,
+    global_step: int,
+    validation_metrics: Dict[str, float] | None,
+) -> Dict[str, Any]:
+    """Save requested epoch artifacts and update validation-selected best.pt."""
+
+    directory = Path(directory)
+    checkpoint = config.get("checkpoint", {})
+    result: Dict[str, Any] = {}
+    if bool(checkpoint.get("save_each_epoch", False)):
+        epoch_path = directory / f"epoch_{int(epoch):03d}.pt"
+        save_epoch_checkpoint(model, epoch_path, config, epoch, global_step)
+        result["epoch_path"] = str(epoch_path)
+
+    if not bool(checkpoint.get("save_best", False)):
+        return result
+    if validation_metrics is None:
+        raise RuntimeError("save_best=true requires validation metrics at every epoch")
+    metric_name = str(checkpoint.get("best_metric", "eval_loss_ce"))
+    if metric_name not in validation_metrics:
+        raise KeyError(f"Best-checkpoint metric {metric_name!r} is absent from validation metrics")
+    current = float(validation_metrics[metric_name])
+    if not math.isfinite(current):
+        raise RuntimeError(f"Best-checkpoint metric {metric_name!r} is non-finite: {current}")
+    mode = str(checkpoint.get("best_mode", "min"))
+    previous = getattr(model, "_best_checkpoint_value", None)
+    improved = previous is None or (current < float(previous) if mode == "min" else current > float(previous))
+    if improved:
+        best_path = directory / "best.pt"
+        save_best_checkpoint(model, best_path, config, epoch, global_step)
+        model._best_checkpoint_value = current  # type: ignore[attr-defined]
+        model._best_checkpoint_epoch = int(epoch)  # type: ignore[attr-defined]
+        result.update(
+            {
+                "best_path": str(best_path),
+                "best_metric": metric_name,
+                "best_value": current,
+            }
+        )
+    return result
+
+
+def load_checkpoint(model: nn.Module, path: str | Path) -> Dict[str, Any]:
     path = Path(path)
     payload = torch.load(path, map_location="cpu", weights_only=False)
-    if payload.get("checkpoint_role") != "last":
-        raise RuntimeError(f"Expected a last checkpoint, found {payload.get('checkpoint_role')!r}")
+    role = payload.get("checkpoint_role")
+    if role not in {"last", "epoch", "best"}:
+        raise RuntimeError(f"Expected a complete EviSeq checkpoint, found role={role!r}")
     state = payload.get("model_state_dict")
     if not isinstance(state, dict):
         raise RuntimeError("Checkpoint has no model_state_dict")
@@ -48,6 +138,13 @@ def load_last_checkpoint(model: nn.Module, path: str | Path) -> Dict[str, Any]:
         unknown = sorted(present - expected)
         raise RuntimeError(f"Incompatible full checkpoint; missing={missing[:10]}, unknown={unknown[:10]}")
     model.load_state_dict(state, strict=True)
+    return payload
+
+
+def load_last_checkpoint(model: nn.Module, path: str | Path) -> Dict[str, Any]:
+    payload = load_checkpoint(model, path)
+    if payload.get("checkpoint_role") != "last":
+        raise RuntimeError(f"Expected a last checkpoint, found {payload.get('checkpoint_role')!r}")
     return payload
 
 

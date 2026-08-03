@@ -218,5 +218,9 @@ def validate_config(config: Dict[str, Any]) -> None:
         raise ValueError("data.record_mapper must use module:function syntax")
 
     checkpoint = config.get("checkpoint", {})
-    if bool(checkpoint.get("save_best", False)) or bool(checkpoint.get("save_each_epoch", False)):
-        raise ValueError("EviSeq saves last.pt only; best/epoch checkpoint selection is forbidden")
+    if bool(checkpoint.get("save_best", False)):
+        best_metric = str(checkpoint.get("best_metric", "eval_loss_ce"))
+        if not best_metric.startswith("eval_"):
+            raise ValueError("checkpoint.best_metric must name a validation metric beginning with eval_")
+        if str(checkpoint.get("best_mode", "min")) not in {"min", "max"}:
+            raise ValueError("checkpoint.best_mode must be min or max")

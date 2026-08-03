@@ -13,7 +13,12 @@ from eviseq.data.dataset import LengthBucketBatchSampler, read_jsonl
 from eviseq.evaluation.metrics import exact_match_score, token_f1_score
 from eviseq.modeling.attention import mix_attention_outputs
 from eviseq.modeling.bridge import balanced_salience_loss
-from eviseq.training.checkpoint import initialize_from_checkpoint, save_last_checkpoint
+from eviseq.training.checkpoint import (
+    initialize_from_checkpoint,
+    load_checkpoint,
+    save_configured_epoch_checkpoints,
+    save_last_checkpoint,
+)
 from eviseq.training.objectives import evidence_info_nce_loss
 from eviseq.training.trainer import _capture_optimizer_moments, _restore_optimizer_moments
 
@@ -153,6 +158,44 @@ def test_checkpoint_can_initialize_a_new_task_strictly_or_partially(tmp_path: Pa
     report = initialize_from_checkpoint(changed, path, strict=False)
     assert report["loaded_tensors"] == 2
     assert report["skipped_tensors"]
+
+
+def test_epoch_and_best_checkpoints_are_complete_and_loadable(tmp_path: Path) -> None:
+    model = nn.Linear(3, 2)
+    config = {
+        "checkpoint": {
+            "save_each_epoch": True,
+            "save_best": True,
+            "best_metric": "eval_loss_ce",
+            "best_mode": "min",
+        }
+    }
+    first = save_configured_epoch_checkpoints(
+        model,
+        tmp_path,
+        config,
+        epoch=1,
+        global_step=10,
+        validation_metrics={"eval_loss_ce": 2.0},
+    )
+    assert (tmp_path / "epoch_001.pt").is_file()
+    assert (tmp_path / "best.pt").is_file()
+    assert first["best_value"] == 2.0
+
+    second = save_configured_epoch_checkpoints(
+        model,
+        tmp_path,
+        config,
+        epoch=2,
+        global_step=20,
+        validation_metrics={"eval_loss_ce": 3.0},
+    )
+    assert (tmp_path / "epoch_002.pt").is_file()
+    assert "best_path" not in second
+
+    restored = nn.Linear(3, 2)
+    assert load_checkpoint(restored, tmp_path / "epoch_002.pt")["checkpoint_role"] == "epoch"
+    assert load_checkpoint(restored, tmp_path / "best.pt")["epoch"] == 1
 
 
 def test_adam_moments_survive_the_stage_boundary() -> None:

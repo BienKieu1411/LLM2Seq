@@ -45,7 +45,8 @@ Matched validation and test runs determine whether it is a stronger model.
 
 5. **The paper claim is narrower and testable.** The main experiment has one
    architecture and three controlled ablations, uses one memory bank across
-   WikiLingua, CNN/DailyMail, and PubMed, and saves only `last.pt`. This separates encoder conversion, evidence guidance,
+   WikiLingua, CNN/DailyMail, and PubMed, and selects checkpoints only from
+   validation data. This separates encoder conversion, evidence guidance,
    and contrastive coupling without a large grid of coupled mechanisms.
 
 ## What is not yet proven

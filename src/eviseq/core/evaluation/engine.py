@@ -1,4 +1,4 @@
-"""Stable EviSeq last.pt evaluation runtime."""
+"""Stable EviSeq evaluation runtime for complete epoch, best, and last checkpoints."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import torch
 from ..configuration import load_config
 from ..data.dataset import clean_text, decoder_seed_ids, encode_source, read_jsonl
 from ..modeling.architecture import EviSeq as RuntimeModel
-from ..training.checkpoint import load_last_checkpoint
+from ..training.checkpoint import load_checkpoint
 from ..training.engine import _device, _tokenizers
 from .generation import generate
 from .metrics import task_scores
@@ -101,13 +101,11 @@ def evaluate(
     max_samples: int = 0,
 ) -> Dict[str, Any]:
     checkpoint = Path(checkpoint_path)
-    if checkpoint.name != "last.pt":
-        raise ValueError("EviSeq evaluates last.pt only")
     config = load_config(config_path)
     device = _device()
     encoder_tokenizer, decoder_tokenizer = _tokenizers(config)
     model = RuntimeModel(config)
-    payload = load_last_checkpoint(model, checkpoint)
+    payload = load_checkpoint(model, checkpoint)
     model.to(device).eval()
     data = config["data"]
     configured_limit = int(config.get("limits", {}).get("max_test_examples", 0))
