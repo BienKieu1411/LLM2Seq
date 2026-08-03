@@ -10,6 +10,14 @@ L = L_gold_CE + salience + evidence_InfoNCE + 0.30 * L_pseudo_CE
 
 `L_pseudo_CE` trains the EviSeq decoder on text generated offline by Qwen3-4B, then retokenizes that text with the student tokenizer. Gold evidence labels remain attached only to the gold branch. This follows Kim & Rush (2016), [Sequence-Level Knowledge Distillation](https://aclanthology.org/D16-1139/). No tokenizer compatibility check is needed for this text-only KD path.
 
+The KD configs retain the full EviSeq task/model/bridge/objective/training/data,
+generation, checkpoint, benchmark, reporting, and limit settings. They add an
+explicit `training.distillation` block for the teacher model, cache split and
+limits, teacher generation controls, sequence-KD weight, optional logit-KD
+weight, and temperature. The inherited EviSeq objective settings are kept as
+configured: document-level InfoNCE is disabled by default while evidence
+contrastive learning remains enabled.
+
 ## Run directly from source
 
 No editable installation is required. Run the source launcher directly:

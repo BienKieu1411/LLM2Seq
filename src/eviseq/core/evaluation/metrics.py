@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import unicodedata
 import re
-from importlib import import_module
+import unicodedata
 from collections import Counter
+from importlib import import_module
 from typing import Any, Dict, List, Sequence
 
 

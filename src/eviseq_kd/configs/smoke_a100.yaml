@@ -18,9 +18,14 @@ training:
   fp16: false
   tf32: true
   distillation:
+    enabled: true
+    teacher_model: Qwen/Qwen3-4B
     cache_path: runs/eviseq_kd/cache/smoke_a100_train_qwen3_4b.jsonl
+    cache_split: train
+    cache_max_examples: 100
     teacher_device: cuda
     teacher_batch_size: 1
+    teacher_max_input_length: 4096
     teacher_max_new_tokens: 64
     teacher_num_beams: 1
 

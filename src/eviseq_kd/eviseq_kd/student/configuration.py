@@ -205,6 +205,40 @@ def validate_config(config: Dict[str, Any]) -> None:
     ):
         raise ValueError("evidence_contrastive_warmup_epochs must finish within interface_warmup_epochs")
 
+    distillation = training.get("distillation", {})
+    if not isinstance(distillation, dict):
+        raise ValueError("training.distillation must be a mapping")
+    distillation_enabled = bool(distillation.get("enabled", False))
+    teacher_model = str(distillation.get("teacher_model", "")).strip()
+    cache_path = str(distillation.get("cache_path", "")).strip()
+    cache_split = str(distillation.get("cache_split", "train")).strip()
+    if cache_split not in {"train", "validation", "test"}:
+        raise ValueError("training.distillation.cache_split must be train, validation, or test")
+    if distillation_enabled and not teacher_model:
+        raise ValueError("Enabled KD requires training.distillation.teacher_model")
+    if distillation_enabled and not cache_path:
+        raise ValueError("Enabled KD requires training.distillation.cache_path")
+    if bool(distillation.get("sequence_enabled", True)) and distillation_enabled:
+        if float(distillation.get("sequence_weight", 0.0)) <= 0.0:
+            raise ValueError("Enabled sequence KD requires a positive sequence_weight")
+    if bool(distillation.get("logit_enabled", False)):
+        if not bool(distillation.get("sequence_enabled", True)):
+            raise ValueError("Logit KD requires sequence_enabled=true")
+        if float(distillation.get("logit_weight", 0.0)) <= 0.0:
+            raise ValueError("Enabled logit KD requires a positive logit_weight")
+    if float(distillation.get("temperature", 2.0)) <= 0.0:
+        raise ValueError("training.distillation.temperature must be positive")
+    if int(distillation.get("cache_max_examples", 0)) < 0:
+        raise ValueError("training.distillation.cache_max_examples must be non-negative")
+    if int(distillation.get("teacher_batch_size", 1)) <= 0:
+        raise ValueError("training.distillation.teacher_batch_size must be positive")
+    if int(distillation.get("teacher_max_input_length", 4096)) <= 0:
+        raise ValueError("training.distillation.teacher_max_input_length must be positive")
+    if int(distillation.get("teacher_max_new_tokens", 384)) <= 0:
+        raise ValueError("training.distillation.teacher_max_new_tokens must be positive")
+    if int(distillation.get("teacher_num_beams", 4)) <= 0:
+        raise ValueError("training.distillation.teacher_num_beams must be positive")
+
     for field in ("train_file", "validation_file"):
         if not str(data.get(field, "")).strip():
             raise ValueError(f"data.{field} is required")

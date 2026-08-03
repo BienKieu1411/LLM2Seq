@@ -18,9 +18,12 @@ jobs:
     - name: Install Ruff
       run: pip install ruff
     - name: Run Ruff Linter
-      run: ruff check .
+      # Use the repository-level policy explicitly. There are independent
+      # package metadata files under src/, so implicit config discovery can
+      # otherwise lint the two pipelines with different rule sets.
+      run: ruff check . --config pyproject.toml
     - name: Run Ruff Formatter Check
-      run: ruff format --check .
+      run: ruff format --check . --config pyproject.toml
 
   lint-frontend:
     runs-on: ubuntu-latest

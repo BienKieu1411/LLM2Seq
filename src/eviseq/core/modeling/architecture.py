@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .bridge import BridgeOutput, EvidenceBridge
 from ..training.objectives import (
     EvidenceContrastiveHead,
     SourcePromptAlignmentHead,
@@ -18,9 +17,10 @@ from ..training.objectives import (
     info_nce_loss,
     last_prompt_states,
 )
+from .attention import pool_units
+from .bridge import BridgeOutput, EvidenceBridge
 from .decoder import PretrainedQwenDecoder
 from .encoder import build_encoder
-from .attention import pool_units
 
 
 def torch_dtype(name: str) -> torch.dtype:

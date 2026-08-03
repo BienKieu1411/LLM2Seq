@@ -16,6 +16,7 @@ from typing import Any, Dict, List
 
 import torch
 
+from ...trainer import _resolve_path as resolve_data_path
 from ..configuration import load_config
 from ..data.dataset import clean_text, decoder_seed_ids, encode_source, read_jsonl
 from ..modeling.architecture import EviSeq as RuntimeModel
@@ -23,7 +24,6 @@ from ..training.checkpoint import load_checkpoint
 from ..training.engine import _device, _tokenizers
 from .generation import generate
 from .metrics import task_scores
-from ...trainer import _resolve_path as resolve_data_path
 
 LOGGER = logging.getLogger("eviseq.evaluation.engine")
 

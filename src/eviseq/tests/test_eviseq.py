@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 import torch
 import torch.nn as nn
-
 from eviseq.configuration import load_config, resolve_data_path, validate_config
 from eviseq.data.dataset import LengthBucketBatchSampler, read_jsonl
 from eviseq.evaluation.metrics import exact_match_score, token_f1_score

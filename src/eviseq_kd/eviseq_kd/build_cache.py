@@ -9,10 +9,9 @@ from typing import Any, Dict, List
 
 import torch
 
+from .cache import TeacherRecord, source_hash, write_cache
 from .student.configuration import load_config
 from .student.data.dataset import clean_text, read_jsonl
-
-from .cache import TeacherRecord, source_hash, write_cache
 
 LOGGER = logging.getLogger("eviseq_kd.cache")
 

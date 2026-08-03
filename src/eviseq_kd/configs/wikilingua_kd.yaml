@@ -11,6 +11,13 @@ training:
     enabled: true
     teacher_model: Qwen/Qwen3-4B
     cache_path: runs/eviseq_kd/cache/wikilingua_train_qwen3_4b.jsonl
+    cache_split: train
+    cache_max_examples: 0
+    teacher_device: auto
+    teacher_batch_size: 1
+    teacher_max_input_length: 4096
+    teacher_max_new_tokens: 384
+    teacher_num_beams: 4
     sequence_enabled: true
     sequence_weight: 0.30
     logit_enabled: false

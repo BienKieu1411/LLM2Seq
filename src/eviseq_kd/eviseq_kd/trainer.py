@@ -14,15 +14,14 @@ from typing import Any, Dict
 
 import torch
 
-from .cache import TeacherCache, load_cache
 from .build_cache import build_cache as build_teacher_cache
+from .cache import TeacherCache, load_cache
 from .dataset import KDCollator, KDText2TextDataset
 from .model import EviSeqKD
 from .student.configuration import load_config
 from .student.data.dataset import Text2TextDataset, decoder_seed_ids
 from .student.training import engine as stable
 from .student.training import trainer as legacy_trainer
-
 
 _ORIGINAL_COLLATOR = stable._collator
 LOGGER = logging.getLogger("eviseq_kd.trainer")

@@ -3,11 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import torch
-
-from eviseq_kd.build_cache import _resolve_path
 from eviseq_kd.cache import TeacherRecord, load_cache, write_cache
 from eviseq_kd.kd import top1_agreement, topk_distillation_loss
 from eviseq_kd.student.configuration import load_config
+
+from eviseq_kd.build_cache import _resolve_path
 
 
 def test_topk_loss_matches_renormalized_reference() -> None:
@@ -97,8 +97,9 @@ def test_cache_rejects_duplicate_ids(tmp_path) -> None:
 
 
 def test_import_isolation() -> None:
-    import eviseq_kd
     import sys
+
+    import eviseq_kd
 
     assert "eviseq" not in sys.modules
     assert eviseq_kd.__file__ is not None
