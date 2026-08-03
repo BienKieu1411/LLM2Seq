@@ -192,5 +192,5 @@ bash eviseq/scripts/run.sh pubmed --overwrite-output-dir
 bash eviseq/scripts/run.sh test
 ```
 
-Long GPU queues are isolated in `scripts/gpu_0.sh` and `scripts/gpu_1.sh`
-instead of being mixed with the Python package.
+The ready-to-run PubMed GPU queue is isolated in `scripts/gpu_0.sh` instead
+of being mixed with the Python package.
