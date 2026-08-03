@@ -1,0 +1,29 @@
+_base_: base_kd.yaml
+
+experiment:
+  name: eviseq_kd_wikilingua_qwen3_4b_teacher
+  output_dir: runs/eviseq_kd/wikilingua_qwen3_4b_teacher
+
+training:
+  interface_warmup_epochs: 2
+  full_finetune_epochs: 12
+  distillation:
+    enabled: true
+    teacher_model: Qwen/Qwen3-4B
+    cache_path: runs/eviseq_kd/cache/wikilingua_train_qwen3_4b.jsonl
+    sequence_enabled: true
+    sequence_weight: 0.30
+    logit_enabled: false
+    logit_weight: 0.0
+    temperature: 2.0
+
+data:
+  train_file: ../datasets/wikilingua/train.jsonl
+  validation_file: ../datasets/wikilingua/validation.jsonl
+  test_file: ../datasets/wikilingua/test.jsonl
+  use_teacher_chat_template: true
+
+limits:
+  max_train_examples: 0
+  max_validation_examples: 0
+  max_test_examples: 0

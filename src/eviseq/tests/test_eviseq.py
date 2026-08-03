@@ -8,7 +8,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from eviseq.configuration import load_config, validate_config
+from eviseq.configuration import load_config, resolve_data_path, validate_config
 from eviseq.data.dataset import LengthBucketBatchSampler, read_jsonl
 from eviseq.evaluation.metrics import exact_match_score, token_f1_score
 from eviseq.modeling.attention import mix_attention_outputs
@@ -51,6 +51,14 @@ def test_dataset_recipes_share_the_same_model_graph() -> None:
         load_config(ROOT / "configs" / "tasks" / name) for name in ("wikilingua.yaml", "cnndm.yaml", "pubmed.yaml")
     ]
     assert all(_architecture(config) == _architecture(configs[0]) for config in configs[1:])
+
+
+def test_configured_dataset_paths_resolve_from_repo_or_flattened_package() -> None:
+    config = load_config(ROOT / "configs" / "tasks" / "wikilingua.yaml")
+    path = resolve_data_path(config["data"]["train_file"], config)
+    assert path == ROOT / "datasets" / "wikilingua" / "train.jsonl"
+    stale_layout_path = resolve_data_path("src/eviseq/datasets/wikilingua/train.jsonl", config)
+    assert stale_layout_path == path
 
 
 def test_generic_task_template_disables_summary_only_losses() -> None:

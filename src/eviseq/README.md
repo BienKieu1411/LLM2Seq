@@ -10,14 +10,20 @@ rewriting, instruction generation, and label-as-text classification use the
 same pipeline. Continual fine-tuning is only one optional checkpoint
 initialization mode.
 
-## Install
+## Run directly
 
-Activate your environment, then install the local package:
+No local package installation is required. From this directory, pass the YAML
+and other arguments directly to `run.py`:
 
 ```bash
-cd src/eviseq
-pip install -e .
+python3 run.py validate-data --config configs/tasks/wikilingua.yaml
+python3 run.py train \
+  --config configs/tasks/wikilingua.yaml \
+  --overwrite-output-dir
 ```
+
+`pyproject.toml` is optional packaging metadata for users who prefer an
+installed console command.
 
 No command in this project uploads a model or dataset.
 
@@ -38,6 +44,7 @@ eviseq/
 │   ├── ablations/
 │   └── templates/      # reusable task templates
 ├── datasets/
+├── run.py             # direct source launcher; no install required
 ├── docs/
 ├── scripts/
 ├── tests/
@@ -137,13 +144,13 @@ new user can start experimentation before a held-out test set exists.
 Validate data mapping without loading a model:
 
 ```bash
-eviseq validate-data --config configs/my_task.yaml
+python3 run.py validate-data --config configs/my_task.yaml
 ```
 
 Train:
 
 ```bash
-eviseq train \
+python3 run.py train \
   --config configs/my_task.yaml \
   --overwrite-output-dir
 ```
@@ -151,7 +158,7 @@ eviseq train \
 Evaluate:
 
 ```bash
-eviseq evaluate \
+python3 run.py evaluate \
   --config runs/eviseq/my_task/resolved_config.yaml \
   --checkpoint runs/eviseq/my_task/last.pt \
   --output runs/eviseq/my_task/test_predictions.jsonl \

@@ -1,0 +1,4 @@
+{
+  "tests/test_kd_primitives.py::test_import_isolation": true,
+  "tests/test_kd_primitives.py::test_config_resolves_bundled_dataset_relative_to_config": true
+}

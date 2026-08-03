@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 from typing import Any, Dict
 
-from .configuration import load_config
+from .configuration import load_config, resolve_data_path
 from .data.dataset import read_jsonl
 
 
@@ -37,7 +36,7 @@ def _dataset_summary(config: Dict[str, Any]) -> Dict[str, Any]:
         configured_path = str(data.get(f"{split}_file", "")).strip()
         if not configured_path:
             continue
-        path = Path(configured_path)
+        path = resolve_data_path(configured_path, config)
         rows = read_jsonl(path, data_config=data)
         result[split] = {
             "path": str(path),

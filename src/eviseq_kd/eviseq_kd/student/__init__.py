@@ -2,9 +2,9 @@
 
 from typing import Any
 
-from .configuration import load_config, resolve_data_path
+from .configuration import load_config
 
-__all__ = ["EviSeq", "load_config", "resolve_data_path"]
+__all__ = ["EviSeq", "load_config"]
 
 
 def __getattr__(name: str) -> Any:

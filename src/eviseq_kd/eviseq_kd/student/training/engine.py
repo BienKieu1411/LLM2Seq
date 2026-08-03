@@ -19,7 +19,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
-from ..configuration import load_config, resolve_data_path
+from ..configuration import load_config
 from ..data.dataset import (
     LengthBucketBatchSampler,
     Seq2SeqCollator,
@@ -29,7 +29,7 @@ from ..data.dataset import (
 from ..modeling.architecture import EviSeq as RuntimeModel
 from .checkpoint import initialize_from_checkpoint, save_configured_epoch_checkpoints, save_last_checkpoint
 
-LOGGER = logging.getLogger("eviseq.training.engine")
+LOGGER = logging.getLogger("eviseq_kd.student.training.engine")
 
 
 def _set_seed(seed: int) -> None:
@@ -75,7 +75,7 @@ def build_experiment(
     train_dataset = None
     if include_train:
         train_dataset = Text2TextDataset(
-            resolve_data_path(data["train_file"], config),
+            data["train_file"],
             encoder_tokenizer,
             decoder_tokenizer,
             data,
@@ -83,7 +83,7 @@ def build_experiment(
             precompute_evidence=bool(data.get("precompute_evidence", True)),
         )
     validation_dataset = Text2TextDataset(
-        resolve_data_path(data["validation_file"], config),
+        data["validation_file"],
         encoder_tokenizer,
         decoder_tokenizer,
         data,

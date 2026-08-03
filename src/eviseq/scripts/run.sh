@@ -5,6 +5,7 @@ CALLER_CWD="$(pwd -P)"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKSPACE_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 cd "$PROJECT_ROOT"
+RUNNER="$PROJECT_ROOT/run.py"
 
 if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
   PYTHON_BIN="${PYTHON_BIN:-$VIRTUAL_ENV/bin/python}"
@@ -14,12 +15,7 @@ fi
 export HF_HUB_DISABLE_TELEMETRY=1
 export TOKENIZERS_PARALLELISM=false
 export PYTHONUNBUFFERED=1
-
-if ! "$PYTHON_BIN" -c "import eviseq" >/dev/null 2>&1; then
-  echo "ERROR: EviSeq is not installed in the active environment." >&2
-  echo "Run: $PYTHON_BIN -m pip install -e $PROJECT_ROOT" >&2
-  exit 1
-fi
+export PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 WIKI_CONFIG="$PROJECT_ROOT/configs/tasks/wikilingua.yaml"
 CNN_CONFIG="$PROJECT_ROOT/configs/tasks/cnndm.yaml"
@@ -38,7 +34,7 @@ absolute_path() {
 config_value() {
   "$PYTHON_BIN" - "$1" "$2" <<'PY'
 import sys
-from eviseq.configuration import load_config
+from core.configuration import load_config
 value = load_config(sys.argv[1])
 for key in sys.argv[2].split('.'):
     value = value[key]
@@ -67,9 +63,9 @@ train_and_validate() {
   shift
   local output_dir
   output_dir="$(config_value "$config" experiment.output_dir)"
-  "$PYTHON_BIN" -m eviseq.training.trainer --config "$config" "$@"
+  "$PYTHON_BIN" "$RUNNER" train --config "$config" "$@"
   select_committed_checkpoint "$output_dir" validation
-  "$PYTHON_BIN" -m eviseq.evaluation.evaluator \
+  "$PYTHON_BIN" "$RUNNER" evaluate \
     --config "$SELECTED_RESOLVED" \
     --checkpoint "$SELECTED_CHECKPOINT" \
     --output "$SELECTED_PREDICTIONS" \
@@ -82,7 +78,7 @@ evaluate_test() {
   local output_dir
   output_dir="$(config_value "$config" experiment.output_dir)"
   select_committed_checkpoint "$output_dir" test
-  "$PYTHON_BIN" -m eviseq.evaluation.evaluator \
+  "$PYTHON_BIN" "$RUNNER" evaluate \
     --config "$SELECTED_RESOLVED" \
     --checkpoint "$SELECTED_CHECKPOINT" \
     --output "$SELECTED_PREDICTIONS" \
@@ -96,26 +92,26 @@ case "$MODE" in
   train)
     CONFIG="$(absolute_path "${1:?Pass a task config YAML}")"
     shift
-    "$PYTHON_BIN" -m eviseq.training.trainer --config "$CONFIG" "$@"
+    "$PYTHON_BIN" "$RUNNER" train --config "$CONFIG" "$@"
     ;;
   evaluate)
     CONFIG="$(absolute_path "${1:?Pass a resolved config YAML}")"
     CHECKPOINT="$(absolute_path "${2:?Pass a checkpoint}")"
     OUTPUT="$(absolute_path "${3:?Pass an output JSONL path}")"
     shift 3
-    "$PYTHON_BIN" -m eviseq.evaluation.evaluator \
+    "$PYTHON_BIN" "$RUNNER" evaluate \
       --config "$CONFIG" --checkpoint "$CHECKPOINT" --output "$OUTPUT" "$@"
     ;;
   validate-data)
     CONFIG="$(absolute_path "${1:?Pass a task config YAML}")"
-    "$PYTHON_BIN" -m eviseq.cli validate-data --config "$CONFIG"
+    "$PYTHON_BIN" "$RUNNER" validate-data --config "$CONFIG"
     ;;
   test)
     HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 "$PYTHON_BIN" -m pytest -q "$PROJECT_ROOT/tests"
     ;;
   inspect)
     CONFIG="${1:-$WIKI_CONFIG}"
-    "$PYTHON_BIN" -m eviseq.cli inspect --config "$(absolute_path "$CONFIG")"
+    "$PYTHON_BIN" "$RUNNER" inspect --config "$(absolute_path "$CONFIG")"
     ;;
   smoke)
     train_and_validate "$SMOKE_CONFIG" "$@"
@@ -161,7 +157,7 @@ case "$MODE" in
     CONFIG="${CONFIG:-$WIKI_CONFIG}"
     OUTPUT_DIR="$(config_value "$CONFIG" experiment.output_dir)"
     select_committed_checkpoint "$OUTPUT_DIR" validation
-    "$PYTHON_BIN" -m eviseq.evaluation.evaluator \
+    "$PYTHON_BIN" "$RUNNER" evaluate \
       --config "$SELECTED_RESOLVED" \
       --checkpoint "$SELECTED_CHECKPOINT" \
       --output "$SELECTED_PREDICTIONS" \
@@ -198,21 +194,21 @@ case "$MODE" in
     ;;
   prepare-cnndm)
     SOURCE_DIR="$(absolute_path "${1:?Pass the local CNN/DM directory}")"
-    "$PYTHON_BIN" -m eviseq.data.cnndm \
+    "$PYTHON_BIN" -m core.data.cnndm \
       --input-dir "$SOURCE_DIR" \
       --raw-copy-dir "$PROJECT_ROOT/datasets/raw/cnndm" \
       --output-dir "$PROJECT_ROOT/datasets/cnndm"
     ;;
   prepare-pubmed)
     SOURCE_DIR="$(absolute_path "${1:?Pass the local PubMed directory}")"
-    "$PYTHON_BIN" -m eviseq.data.pubmed \
+    "$PYTHON_BIN" -m core.data.pubmed \
       --input-dir "$SOURCE_DIR" \
       --raw-copy-dir "$PROJECT_ROOT/datasets/raw/pubmed" \
       --output-dir "$PROJECT_ROOT/datasets/pubmed"
     ;;
   *)
     cat <<'EOF'
-EviSeq (from the project root, install once with: python -m pip install -e .)
+EviSeq (runs directly from source; no local package install required)
 
   bash eviseq/scripts/run.sh train CONFIG.yaml --overwrite-output-dir
   bash eviseq/scripts/run.sh evaluate RESOLVED.yaml last.pt predictions.jsonl --split test

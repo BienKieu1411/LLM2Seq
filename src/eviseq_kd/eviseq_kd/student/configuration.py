@@ -55,31 +55,6 @@ def load_config(path: str | Path) -> Dict[str, Any]:
     return config
 
 
-def resolve_data_path(value: str | Path, config: Dict[str, Any]) -> Path:
-    """Resolve configured JSONL paths across repo and flattened Colab layouts."""
-
-    path = Path(value)
-    if path.is_absolute():
-        return path
-
-    candidates: list[Path] = []
-    config_path = config.get("_meta", {}).get("config_path")
-    if config_path:
-        candidates.append(Path(str(config_path)).resolve().parent / path)
-
-    package_root = Path(__file__).resolve().parents[1]
-    if path.parts[:2] == ("src", "eviseq"):
-        candidates.append(package_root.joinpath(*path.parts[2:]))
-    elif path.parts[:1] == ("eviseq",):
-        candidates.append(package_root.joinpath(*path.parts[1:]))
-
-    candidates.extend([Path.cwd() / path, package_root / path])
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.resolve()
-    return candidates[0].resolve()
-
-
 def validate_config(config: Dict[str, Any]) -> None:
     model = config.get("model", {})
     attention = config.get("native_attention", {})

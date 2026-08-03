@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 from torch.utils.data import DataLoader
 
-from ..configuration import load_config, resolve_data_path
+from ..configuration import load_config
 from ..data.dataset import (
     Text2TextDataset,
 )
@@ -22,7 +22,7 @@ from . import engine as stable
 from .checkpoint import save_configured_epoch_checkpoints
 from .objectives import exact_duplicate_mask, info_nce_loss
 
-LOGGER = logging.getLogger("eviseq")
+LOGGER = logging.getLogger("eviseq_kd.student.training")
 
 _TRAIN_AVERAGE_METRICS = (
     "loss",
@@ -30,6 +30,11 @@ _TRAIN_AVERAGE_METRICS = (
     "loss_salience",
     "loss_contrastive",
     "loss_evidence_contrastive",
+    "loss_pseudo",
+    "weighted_pseudo",
+    "loss_kd",
+    "weighted_kd",
+    "kd_top1_agreement",
     "prompt_retrieval_accuracy",
     "contrastive_examples",
     "cross_residual_ratio",
@@ -438,6 +443,11 @@ def _run_stage(
                     "evi_pos_sim": _rounded(running.get("positive_similarity", 0.0) / divisor),
                     "evi_neg_sim": _rounded(running.get("hard_negative_similarity", 0.0) / divisor),
                     "evi_gap": _rounded(running.get("evidence_similarity_gap", 0.0) / divisor),
+                    "pseudo_ce": _rounded(running.get("loss_pseudo", 0.0) / divisor),
+                    "pseudo_weighted": _rounded(running.get("weighted_pseudo", 0.0) / divisor),
+                    "logit_kd": _rounded(running.get("loss_kd", 0.0) / divisor),
+                    "logit_kd_weighted": _rounded(running.get("weighted_kd", 0.0) / divisor),
+                    "kd_top1": _rounded(running.get("kd_top1_agreement", 0.0) / divisor),
                     "cross_res": _rounded(running.get("cross_residual_ratio", 0.0) / divisor),
                     "bidir": _rounded(running.get("bidirectional_gate_mean", 0.0) / divisor),
                     "step_s": _rounded(elapsed / max(1, steps_since_log)),
@@ -536,7 +546,7 @@ def build_experiment(
     train_dataset = None
     if include_train:
         train_dataset = Text2TextDataset(
-            resolve_data_path(data["train_file"], config),
+            data["train_file"],
             encoder_tokenizer,
             decoder_tokenizer,
             data,
@@ -544,7 +554,7 @@ def build_experiment(
             precompute_evidence=bool(data.get("precompute_evidence", True)),
         )
     validation_dataset = Text2TextDataset(
-        resolve_data_path(data["validation_file"], config),
+        data["validation_file"],
         encoder_tokenizer,
         decoder_tokenizer,
         data,

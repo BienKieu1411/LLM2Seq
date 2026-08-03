@@ -1,0 +1,39 @@
+_base_: wikilingua_kd.yaml
+
+experiment:
+  name: eviseq_kd_smoke_a100
+  output_dir: runs/eviseq_kd/smoke_a100
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 1
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  num_workers: 2
+  validation_batch_size: 2
+  validation_num_workers: 1
+  validation_every_epochs: 1
+  log_every_steps: 1
+  bf16: true
+  fp16: false
+  tf32: true
+  distillation:
+    cache_path: runs/eviseq_kd/cache/smoke_a100_train_qwen3_4b.jsonl
+    teacher_device: cuda
+    teacher_batch_size: 1
+    teacher_max_new_tokens: 64
+    teacher_num_beams: 1
+
+data:
+  train_file: ../datasets/wikilingua/train.jsonl
+  validation_file: ../datasets/wikilingua/validation.jsonl
+  test_file: ../datasets/wikilingua/test.jsonl
+
+limits:
+  max_train_examples: 100
+  max_validation_examples: 20
+  max_test_examples: 20
+
+generation:
+  batch_size: 2
+  max_new_tokens: 64
