@@ -17,7 +17,7 @@ training:
     teacher_batch_size: 32
     teacher_max_input_length: 4096
     teacher_max_new_tokens: 384
-    teacher_num_beams: 4
+    teacher_num_beams: 1
     sequence_enabled: true
     sequence_weight: 0.30
     logit_enabled: true
