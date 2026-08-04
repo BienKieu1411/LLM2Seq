@@ -18,6 +18,13 @@ def check_cache(cache_path: str | Path) -> dict[str, object]:
         "split": cache.metadata.get("split", ""),
         "max_new_tokens": cache.metadata.get("max_new_tokens", 0),
         "num_beams": cache.metadata.get("num_beams", 0),
+        "has_topk": bool(cache.metadata.get("has_topk", False)),
+        "has_gold_topk": bool(cache.metadata.get("has_gold_topk", False)),
+        "top_k": int(cache.metadata.get("top_k", 0) or 0),
+        "tokenizer_fingerprint": cache.metadata.get(
+            "teacher_tokenizer_fingerprint", cache.metadata.get("tokenizer_fingerprint", "")
+        ),
+        "tokenizer_vocab_size": cache.metadata.get("teacher_tokenizer_vocab_size", 0),
     }
 
 

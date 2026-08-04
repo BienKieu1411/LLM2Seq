@@ -2,21 +2,31 @@
 
 `eviseq_kd` is a self-contained sibling package. It does not import or require the separate `src/eviseq` package. Its student graph is vendored under `eviseq_kd.student`, so both projects can be run independently.
 
-The default implementation is offline, gold-anchored sequence-level knowledge distillation:
+The default implementation is offline, gold-anchored full-objective KD with a
+top-k approximation of the teacher vocabulary distribution:
 
 ```text
-L = L_gold_CE + salience + evidence_InfoNCE + 0.30 * L_pseudo_CE
+L = L_EviSeq
+  + 0.30 * L_sequence_KD
+  + 0.30 * (0.5 * L_gold_prefix_KL + 0.5 * L_pseudo_prefix_KL)
 ```
 
-`L_pseudo_CE` trains the EviSeq decoder on text generated offline by Qwen3-4B, then retokenizes that text with the student tokenizer. Gold evidence labels remain attached only to the gold branch. This follows Kim & Rush (2016), [Sequence-Level Knowledge Distillation](https://aclanthology.org/D16-1139/). No tokenizer compatibility check is needed for this text-only KD path.
+`L_sequence_KD` trains on the Qwen3-4B beam output as a hard sequence target,
+following Kim & Rush (2016), [Sequence-Level Knowledge Distillation](https://aclanthology.org/D16-1139/).
+The two KL terms transfer the teacher's token distribution with
+`T² * KL(teacher || student)` at temperature `T=2.0`; the cache stores teacher
+top-k logits because a full 151k-vocabulary tensor for every token is not a
+practical JSONL artifact. This is explicitly a top-k soft-target approximation,
+not a claim of exact full-vocabulary KL. Gold evidence labels remain attached
+only to the gold branch.
 
 The KD configs retain the full EviSeq task/model/bridge/objective/training/data,
 generation, checkpoint, benchmark, reporting, and limit settings. They add an
 explicit `training.distillation` block for the teacher model, cache split and
-limits, teacher generation controls, sequence-KD weight, optional logit-KD
-weight, and temperature. The inherited EviSeq objective settings are kept as
-configured: document-level InfoNCE is disabled by default while evidence
-contrastive learning remains enabled.
+limits, teacher generation controls, sequence/logit KD weights, temperature,
+gold/pseudo path mixing, and top-k width. The inherited EviSeq objective
+settings are kept as configured: document-level InfoNCE is disabled by default
+while evidence contrastive learning remains enabled.
 
 ## Run directly from source
 
@@ -56,13 +66,15 @@ python3 src/eviseq_kd/run.py \
   --output-dir runs/eviseq_kd/wikilingua_qwen3_4b_teacher
 ```
 
-No cache command or tokenizer check is needed for the normal run.
+The cache builder stores the pseudo sequence, gold and pseudo top-k teacher
+logits, EOS-aligned token rows, source hash, vocabulary metadata, and tokenizer
+fingerprint. Training refuses to consume the cache if the decoder tokenizer or
+vocabulary identity does not match.
 
-Training validates that every cached pseudo-target belongs to the current
-source text and that the cache teacher/split match the configuration. This is
-source-level cache validation, not a tokenizer fingerprint requirement. If a
-cache was created from another dataset snapshot or an older teacher, rebuild
-it explicitly:
+Training validates that every cached target belongs to the current source
+text and that the cache teacher/split/top-k settings match the configuration.
+If a cache was created from another dataset snapshot, teacher, tokenizer, or
+KD schema, rebuild it explicitly:
 
 ```bash
 python3 src/eviseq_kd/run.py \

@@ -1,0 +1,63 @@
+_base_: base_kd.yaml
+
+experiment:
+  name: eviseq_kd_pubmed_qwen3_4b_teacher
+  output_dir: runs/eviseq_kd/pubmed_qwen3_4b_teacher
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 3
+  distillation:
+    enabled: true
+    teacher_model: Qwen/Qwen3-4B
+    cache_path: runs/eviseq_kd/cache/pubmed_train_qwen3_4b.jsonl
+    cache_split: train
+    cache_max_examples: 0
+    teacher_device: auto
+    teacher_batch_size: 32
+    teacher_max_input_length: 4096
+    teacher_max_new_tokens: 512
+    teacher_num_beams: 4
+    sequence_enabled: true
+    sequence_weight: 0.30
+    logit_enabled: true
+    logit_weight: 0.30
+    temperature: 2.0
+    logit_path_mix: 0.5
+    topk: 32
+    cache_logits_dtype: float16
+
+data:
+  train_file: datasets/pubmed/train.jsonl
+  validation_file: datasets/pubmed/validation.jsonl
+  test_file: datasets/pubmed/test.jsonl
+  source_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
+  decoder_instruction: "Write a concise, factual abstract of the encoded biomedical article. Preserve the key objective, methods, results, and conclusion; do not add information."
+  decoder_prefix: "Abstract:\n"
+  use_teacher_chat_template: true
+  enable_thinking: false
+  clean_wikihow_metadata: false
+  max_source_length: 4096
+  max_target_length: 512
+  oracle_max_units: 12
+  precompute_evidence: false
+  precompute_validation_evidence: false
+  supervise_evidence: true
+
+generation:
+  batch_size: 64
+  min_new_tokens: 32
+  max_new_tokens: 512
+
+benchmark:
+  _replace_: true
+  paper:
+    name: T5Gemma2-1B-1B-full-PubMed
+    model_id: google/t5gemma-2-1b-1b
+    backend: Perl ROUGE-1.5.5 via pyrouge
+    status: pending_baseline_artifact
+
+limits:
+  max_train_examples: 0
+  max_validation_examples: 0
+  max_test_examples: 0

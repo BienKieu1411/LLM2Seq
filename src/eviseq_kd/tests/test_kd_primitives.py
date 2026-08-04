@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 from eviseq_kd.cache import TeacherRecord, load_cache, write_cache
-from eviseq_kd.kd import top1_agreement, topk_distillation_loss
+from eviseq_kd.kd import logits_kl_loss, sequence_kd_loss, top1_agreement, topk_distillation_loss
 from eviseq_kd.student.configuration import load_config
 
 from eviseq_kd.build_cache import _resolve_path
@@ -34,6 +34,43 @@ def test_topk_mask_and_agreement_ignore_padding() -> None:
     mask = torch.tensor([[True, False]])
     assert top1_agreement(student, ids, mask=mask).item() == 1.0
     assert topk_distillation_loss(student, ids, teacher, mask=mask).item() >= 0.0
+
+
+def test_sequence_kd_and_full_kl_ignore_padding_and_handle_all_masked() -> None:
+    student = torch.randn(1, 3, 4, requires_grad=True)
+    labels = torch.tensor([[-100, 1, 2]])
+    sequence = sequence_kd_loss(student, labels)
+    sequence.backward()
+    assert torch.isfinite(sequence)
+    assert student.grad is not None and student.grad[:, 0].abs().sum().item() == 0.0
+
+    student.grad = None
+    teacher = torch.randn(1, 3, 4, requires_grad=True)
+    full = logits_kl_loss(student, teacher, labels=labels, temperature=2.0)
+    full.backward()
+    assert torch.isfinite(full)
+    assert teacher.grad is None
+    assert student.grad is not None and student.grad[:, 0].abs().sum().item() == 0.0
+
+    all_masked = logits_kl_loss(student, teacher, labels=torch.full((1, 3), -100))
+    assert all_masked.item() == 0.0
+
+
+def test_topk_rejects_unaligned_vocab_and_width() -> None:
+    student = torch.zeros(1, 1, 2)
+    teacher = torch.zeros(1, 1, 2)
+    try:
+        topk_distillation_loss(student, torch.tensor([[[0, 1, 2]]]), torch.zeros(1, 1, 3))
+    except ValueError as exc:
+        assert "cannot exceed" in str(exc)
+    else:
+        raise AssertionError("K > V must be rejected")
+    try:
+        topk_distillation_loss(student, torch.tensor([[[0, 3]]]), teacher)
+    except ValueError as exc:
+        assert "student vocabulary" in str(exc)
+    else:
+        raise AssertionError("teacher IDs outside the student vocabulary must be rejected")
 
 
 def test_cache_roundtrip(tmp_path) -> None:
@@ -187,3 +224,55 @@ def test_kd_collator_keeps_gold_and_pseudo_branches_separate() -> None:
     assert tuple(batch["pseudo_decoder_input_ids"].shape) == (2, 3)
     assert tuple(batch["teacher_topk_ids"].shape) == (2, 3, 2)
     assert batch["teacher_kd_mask"].tolist() == [[False, True, True], [False, True, False]]
+
+
+def test_topk_dataset_features_require_alignment_metadata() -> None:
+    from eviseq_kd.dataset import KDText2TextDataset
+
+    class Tokenizer:
+        eos_token_id = 4
+
+        def __len__(self):
+            return 4
+
+    dataset = object.__new__(KDText2TextDataset)
+    dataset.decoder_tokenizer = Tokenizer()
+    dataset.teacher_cache = type("Cache", (), {"metadata": {}})()
+    record = TeacherRecord("a", "hash", "text", teacher_topk_ids=[[1, 2]], teacher_topk_logits=[[0.0, 1.0]])
+    try:
+        dataset._topk_features(record, target_count=1, prompt_prefix_count=1)
+    except ValueError as exc:
+        assert "teacher_vocab_size" in str(exc)
+    else:
+        raise AssertionError("top-k cache without vocab metadata must fail loudly")
+
+
+def test_topk_dataset_features_map_ids_and_prefix_prompt_mask() -> None:
+    from eviseq_kd.dataset import KDText2TextDataset
+
+    class Tokenizer:
+        eos_token_id = 4
+
+        def __len__(self):
+            return 4
+
+    dataset = object.__new__(KDText2TextDataset)
+    dataset.decoder_tokenizer = Tokenizer()
+    dataset.teacher_cache = type(
+        "Cache",
+        (),
+        {
+            "metadata": {
+                "teacher_vocab_size": 3,
+                "vocab_alignment": {"type": "explicit", "mapping": [2, 0, 1]},
+            }
+        },
+    )()
+    dataset.student_vocab_size = 4
+    dataset._teacher_vocab_mapping = None
+    record = TeacherRecord(
+        "a", "hash", "text", teacher_topk_ids=[[0, 1], [2, 1]], teacher_topk_logits=[[1.0, 0.0], [0.0, 1.0]]
+    )
+    result = dataset._topk_features(record, target_count=2, prompt_prefix_count=1)
+    assert result["teacher_topk_ids"].tolist() == [[0, 0], [2, 0], [1, 0]]
+    assert result["teacher_kd_mask"].tolist() == [False, True, True]

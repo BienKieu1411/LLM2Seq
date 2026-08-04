@@ -98,6 +98,9 @@ training:
     logit_enabled: false
     logit_weight: 0.0
     temperature: 2.0
+    logit_path_mix: 0.5
+    topk: 32
+    cache_logits_dtype: float16
 
 data:
   train_file: datasets/wikilingua/train.jsonl

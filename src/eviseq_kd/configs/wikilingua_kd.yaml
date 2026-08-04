@@ -14,15 +14,18 @@ training:
     cache_split: train
     cache_max_examples: 0
     teacher_device: auto
-    teacher_batch_size: 1
+    teacher_batch_size: 32
     teacher_max_input_length: 4096
     teacher_max_new_tokens: 384
     teacher_num_beams: 4
     sequence_enabled: true
     sequence_weight: 0.30
-    logit_enabled: false
-    logit_weight: 0.0
+    logit_enabled: true
+    logit_weight: 0.30
     temperature: 2.0
+    logit_path_mix: 0.5
+    topk: 32
+    cache_logits_dtype: float16
 
 data:
   train_file: ../datasets/wikilingua/train.jsonl

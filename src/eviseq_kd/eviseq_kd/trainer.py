@@ -74,6 +74,25 @@ def _load_teacher_cache(config: Dict[str, Any]) -> TeacherCache:
             f"Teacher cache model mismatch: expected {expected_teacher!r}, found {actual_teacher or '<missing>'!r}. "
             "Rebuild the cache with --force-rebuild-cache."
         )
+    if bool(distillation.get("logit_enabled", False)):
+        if not bool(cache.metadata.get("has_topk", False)) or int(cache.metadata.get("top_k", 0) or 0) <= 0:
+            raise ValueError(
+                "Logit KD is enabled but the teacher cache has no top-k logits. "
+                "Rebuild it with --top-k (or training.distillation.topk) and --force-rebuild-cache."
+            )
+        expected_top_k = int(distillation.get("topk", 0) or 0)
+        actual_top_k = int(cache.metadata.get("top_k", 0) or 0)
+        if expected_top_k > 0 and actual_top_k != expected_top_k:
+            raise ValueError(
+                f"Teacher cache top-k mismatch: expected {expected_top_k}, found {actual_top_k}. "
+                "Rebuild the cache with --force-rebuild-cache."
+            )
+        path_mix = float(distillation.get("logit_path_mix", 0.5))
+        if path_mix < 1.0 and not bool(cache.metadata.get("has_gold_topk", False)):
+            raise ValueError(
+                "Gold-prefix logit KD is enabled by logit_path_mix, but the teacher cache has no gold top-k logits. "
+                "Rebuild the cache with --force-rebuild-cache."
+            )
     return cache
 
 
@@ -112,6 +131,7 @@ def _ensure_teacher_cache(config_path: str, *, auto_build: bool, force_rebuild: 
         max_input_length=int(distillation.get("teacher_max_input_length", config["data"]["max_source_length"])),
         max_new_tokens=int(distillation.get("teacher_max_new_tokens", generation.get("max_new_tokens", 384))),
         num_beams=int(distillation.get("teacher_num_beams", generation.get("num_beams", 4))),
+        top_k=int(distillation.get("topk", 32)) if bool(distillation.get("logit_enabled", False)) else 0,
     )
     if not built_cache.is_file():
         raise RuntimeError(f"Teacher cache generation finished without creating: {built_cache}")

@@ -228,6 +228,13 @@ def validate_config(config: Dict[str, Any]) -> None:
             raise ValueError("Enabled logit KD requires a positive logit_weight")
     if float(distillation.get("temperature", 2.0)) <= 0.0:
         raise ValueError("training.distillation.temperature must be positive")
+    logit_path_mix = float(distillation.get("logit_path_mix", 0.5))
+    if not 0.0 <= logit_path_mix <= 1.0:
+        raise ValueError("training.distillation.logit_path_mix must be between 0 and 1")
+    if int(distillation.get("topk", 32)) <= 0:
+        raise ValueError("training.distillation.topk must be positive")
+    if str(distillation.get("cache_logits_dtype", "float16")).strip().lower() not in {"float16", "float32"}:
+        raise ValueError("training.distillation.cache_logits_dtype must be float16 or float32")
     if int(distillation.get("cache_max_examples", 0)) < 0:
         raise ValueError("training.distillation.cache_max_examples must be non-negative")
     if int(distillation.get("teacher_batch_size", 1)) <= 0:
