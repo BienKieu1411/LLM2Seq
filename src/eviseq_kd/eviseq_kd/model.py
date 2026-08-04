@@ -55,24 +55,40 @@ class EviSeqKD(nn.Module):
         pseudo_labels: Optional[torch.Tensor] = None,
         teacher_topk_ids: Optional[torch.Tensor] = None,
         teacher_topk_logits: Optional[torch.Tensor] = None,
+        teacher_topk_log_normalizers: Optional[torch.Tensor] = None,
         teacher_kd_mask: Optional[torch.Tensor] = None,
         teacher_gold_topk_ids: Optional[torch.Tensor] = None,
         teacher_gold_topk_logits: Optional[torch.Tensor] = None,
+        teacher_gold_topk_log_normalizers: Optional[torch.Tensor] = None,
         teacher_gold_kd_mask: Optional[torch.Tensor] = None,
         teacher_logits: Optional[torch.Tensor] = None,
         compute_source_diagnostics: bool = False,
         contrastive_mode: str = "local",
     ) -> Dict[str, torch.Tensor]:
         pseudo_present = pseudo_decoder_input_ids is not None or pseudo_labels is not None
+        pseudo_topk_present = any(
+            value is not None for value in (teacher_topk_ids, teacher_topk_logits, teacher_topk_log_normalizers)
+        )
+        pseudo_soft_targets_present = pseudo_topk_present or teacher_logits is not None
+        gold_topk_present = any(
+            value is not None
+            for value in (
+                teacher_gold_topk_ids,
+                teacher_gold_topk_logits,
+                teacher_gold_topk_log_normalizers,
+            )
+        )
         teacher_present = any(
             value is not None
             for value in (
                 teacher_logits,
                 teacher_topk_ids,
                 teacher_topk_logits,
+                teacher_topk_log_normalizers,
                 teacher_kd_mask,
                 teacher_gold_topk_ids,
                 teacher_gold_topk_logits,
+                teacher_gold_topk_log_normalizers,
                 teacher_gold_kd_mask,
             )
         )
@@ -86,6 +102,7 @@ class EviSeqKD(nn.Module):
             labels=labels,
             compute_source_diagnostics=compute_source_diagnostics,
             contrastive_mode=contrastive_mode,
+            return_full_logits=gold_topk_present and labels is not None,
         )
         if contrastive_mode == "representations_only" and pseudo_present:
             # The legacy GradCache pass asks only for representations.  Its
@@ -142,29 +159,21 @@ class EviSeqKD(nn.Module):
                     evidence_labels=None,
                     labels=pseudo_labels,
                     contrastive_mode="local",
+                    return_full_logits=pseudo_soft_targets_present,
                 )
             finally:
                 self.base.set_contrastive_scale(previous_scale)
             loss_pseudo = pseudo["loss_ce"]
             weighted_pseudo = float(self.sequence_weight) * loss_pseudo
 
-            topk_present = teacher_topk_ids is not None or teacher_topk_logits is not None
-            if teacher_logits is not None and topk_present:
+            if teacher_logits is not None and pseudo_topk_present:
                 raise ValueError("Supply either full teacher_logits or teacher top-k tensors, not both")
-            if teacher_kd_mask is not None and not topk_present and teacher_logits is None:
+            if teacher_kd_mask is not None and not pseudo_topk_present and teacher_logits is None:
                 raise ValueError("teacher_kd_mask was supplied without teacher logits")
-            if topk_present or teacher_logits is not None:
+            if pseudo_soft_targets_present:
                 if not self.distillation_enabled or not self.logit_enabled:
                     raise ValueError("Teacher logit tensors were supplied but logit KD is disabled")
-                logits = self.base(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    decoder_input_ids=pseudo_decoder_input_ids,
-                    decoder_attention_mask=pseudo_decoder_attention_mask,
-                    unit_ids=unit_ids,
-                    evidence_labels=None,
-                    labels=None,
-                )["logits"]
+                logits = pseudo.pop("logits")
                 if teacher_logits is not None:
                     loss_kd_pseudo = logits_kl_loss(
                         logits,
@@ -174,20 +183,27 @@ class EviSeqKD(nn.Module):
                         temperature=self.kd_temperature,
                     )
                 else:
-                    if teacher_topk_ids is None or teacher_topk_logits is None:
-                        raise ValueError("teacher_topk_ids and teacher_topk_logits must be supplied together")
+                    if teacher_topk_ids is None or teacher_topk_logits is None or teacher_topk_log_normalizers is None:
+                        raise ValueError(
+                            "teacher_topk_ids, teacher_topk_logits, and teacher_topk_log_normalizers "
+                            "must be supplied together"
+                        )
                     loss_kd_pseudo = topk_distillation_loss(
                         logits,
                         teacher_topk_ids,
                         teacher_topk_logits,
+                        teacher_log_normalizers=teacher_topk_log_normalizers,
                         mask=kd_mask,
                         temperature=self.kd_temperature,
                     )
                     kd_agreement = top1_agreement(logits, teacher_topk_ids, mask=kd_mask).detach()
-        gold_topk_present = teacher_gold_topk_ids is not None or teacher_gold_topk_logits is not None
         if gold_topk_present:
-            if teacher_gold_topk_ids is None or teacher_gold_topk_logits is None:
-                raise ValueError("teacher_gold_topk_ids and teacher_gold_topk_logits must be supplied together")
+            if (
+                teacher_gold_topk_ids is None
+                or teacher_gold_topk_logits is None
+                or teacher_gold_topk_log_normalizers is None
+            ):
+                raise ValueError("Gold top-k IDs, logits, and log normalizers must be supplied together")
             if not self.distillation_enabled or not self.logit_enabled:
                 raise ValueError("Gold teacher logit tensors were supplied but logit KD is disabled")
             if teacher_gold_kd_mask is not None and teacher_gold_kd_mask.shape != labels.shape:
@@ -198,19 +214,12 @@ class EviSeqKD(nn.Module):
                 else labels.ne(-100)
             )
             gold_mask = gold_mask & labels.ne(-100)
-            gold_logits = self.base(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                decoder_input_ids=decoder_input_ids,
-                decoder_attention_mask=decoder_attention_mask,
-                unit_ids=unit_ids,
-                evidence_labels=None,
-                labels=None,
-            )["logits"]
+            gold_logits = gold.pop("logits")
             loss_kd_gold = topk_distillation_loss(
                 gold_logits,
                 teacher_gold_topk_ids,
                 teacher_gold_topk_logits,
+                teacher_log_normalizers=teacher_gold_topk_log_normalizers,
                 mask=gold_mask,
                 temperature=self.kd_temperature,
             )
@@ -262,6 +271,8 @@ class EviSeqKD(nn.Module):
         """Accept both a legacy EviSeq state dict and an EviSeq-KD state dict."""
 
         expected = set(self.state_dict())
-        if not any(key in expected for key in state_dict) and any(not key.startswith("base.") for key in state_dict):
-            state_dict = {key if key.startswith("base.") else f"base.{key}": value for key, value in state_dict.items()}
+        state_dict = {
+            key if key in expected or key.startswith("base.") else f"base.{key}": value
+            for key, value in state_dict.items()
+        }
         return super().load_state_dict(state_dict, strict=strict, assign=assign)

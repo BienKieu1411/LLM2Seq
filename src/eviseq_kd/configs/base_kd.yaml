@@ -103,9 +103,9 @@ training:
     cache_logits_dtype: float16
 
 data:
-  train_file: datasets/wikilingua/train.jsonl
-  validation_file: datasets/wikilingua/validation.jsonl
-  test_file: datasets/wikilingua/test.jsonl
+  train_file: ../datasets/wikilingua/train.jsonl
+  validation_file: ../datasets/wikilingua/validation.jsonl
+  test_file: ../datasets/wikilingua/test.jsonl
   source_field: source
   target_field: target
   id_field: id

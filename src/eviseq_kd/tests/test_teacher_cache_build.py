@@ -7,6 +7,14 @@ from types import SimpleNamespace
 import torch
 
 
+def test_eos_is_kept_when_pad_and_eos_share_an_id() -> None:
+    from eviseq_kd.build_cache import _normalize_generated_row
+
+    row, observed = _normalize_generated_row([1, 2, 5, 5], pad_id=5, eos_id=5)
+    assert row == [1, 2, 5]
+    assert observed is True
+
+
 class _FakeTokenizer:
     pad_token_id = 0
     eos_token_id = 5
@@ -154,12 +162,14 @@ def test_build_cache_stores_forward_topk_with_explicit_alignment(tmp_path, monke
     assert second.teacher_topk_positions == [0, 2, 3]
     assert len(first.teacher_topk_ids) == len(first.pseudo_token_ids) == 3
     assert len(first.teacher_topk_logits) == 3
+    assert len(first.teacher_topk_log_normalizers) == 3
     assert first.teacher_topk_ids[0][0] == 1
     assert first.teacher_topk_ids[1][0] == 2
     assert second.teacher_topk_ids[0][0] == 2
     assert second.teacher_topk_ids[1][0] == 1
     assert first.gold_token_ids == [1, 2, 5]
     assert len(first.gold_topk_ids) == len(first.gold_token_ids) == 3
+    assert len(first.gold_topk_log_normalizers) == len(first.gold_token_ids) == 3
     assert first.prompt_token_count == 2
     assert second.prompt_token_count == 3
     assert first.prompt_sequence_width == second.prompt_sequence_width == 3

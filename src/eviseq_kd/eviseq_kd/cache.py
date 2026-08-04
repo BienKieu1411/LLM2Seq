@@ -15,12 +15,13 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 CACHE_KIND = "eviseq_kd_teacher_cache"
-CACHE_VERSION = 2
-LEGACY_CACHE_VERSIONS = frozenset({1, CACHE_VERSION})
+CACHE_VERSION = 3
+LEGACY_CACHE_VERSIONS = frozenset({1, 2, CACHE_VERSION})
 TOPK_ALIGNMENT = {
     "tokenization": "teacher",
     "rows": "teacher_topk_ids[i] and teacher_topk_logits[i] correspond to pseudo_token_ids[i]",
     "logits": "raw pre-temperature teacher logits; rows are selected from a full forward on prompt plus generated sequence",
+    "normalizer": "one full-vocabulary logsumexp at the configured KD temperature per top-k row",
     "position": "for row i, forward logits at prompt_sequence_width - 1 + teacher_topk_positions[i] predict the generated token",
     "special_tokens": "EOS is included exactly once; PAD and other teacher special tokens are omitted from pseudo_token_ids and top-k rows",
 }
@@ -112,6 +113,14 @@ def _int_list(value: Any, field_name: str) -> list[int]:
     return [int(item) for item in value]
 
 
+def _float_list(value: Any, field_name: str) -> list[float]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list")
+    return [float(item) for item in value]
+
+
 def _matrix(value: Any, field_name: str, cast: Any) -> list[list[Any]]:
     if value is None:
         return []
@@ -140,9 +149,12 @@ class TeacherRecord:
     prompt_token_count: int = 0
     prompt_sequence_width: int = 0
     generated_token_count: int = 0
+    generated_eos_observed: Optional[bool] = None
     gold_token_ids: list[int] = field(default_factory=list)
     gold_topk_ids: list[list[int]] = field(default_factory=list)
     gold_topk_logits: list[list[float]] = field(default_factory=list)
+    teacher_topk_log_normalizers: list[float] = field(default_factory=list)
+    gold_topk_log_normalizers: list[float] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "TeacherRecord":
@@ -156,6 +168,14 @@ class TeacherRecord:
         gold_token_ids = _int_list(value.get("gold_token_ids", []), "gold_token_ids")
         gold_topk_ids = _matrix(value.get("gold_topk_ids", []), "gold_topk_ids", int)
         gold_topk_logits = _matrix(value.get("gold_topk_logits", []), "gold_topk_logits", float)
+        topk_log_normalizers = _float_list(
+            value.get("teacher_topk_log_normalizers", []),
+            "teacher_topk_log_normalizers",
+        )
+        gold_topk_log_normalizers = _float_list(
+            value.get("gold_topk_log_normalizers", []),
+            "gold_topk_log_normalizers",
+        )
         generated_count = int(value.get("generated_token_count", len(pseudo_token_ids)))
         return cls(
             example_id=example_id,
@@ -169,9 +189,14 @@ class TeacherRecord:
             prompt_token_count=int(value.get("prompt_token_count", 0)),
             prompt_sequence_width=int(value.get("prompt_sequence_width", 0)),
             generated_token_count=generated_count,
+            generated_eos_observed=(
+                bool(value["generated_eos_observed"]) if "generated_eos_observed" in value else None
+            ),
             gold_token_ids=gold_token_ids,
             gold_topk_ids=gold_topk_ids,
             gold_topk_logits=gold_topk_logits,
+            teacher_topk_log_normalizers=topk_log_normalizers,
+            gold_topk_log_normalizers=gold_topk_log_normalizers,
         )
 
     @property
@@ -225,6 +250,13 @@ class TeacherRecord:
                     raise ValueError("Teacher cache top-k ID exceeds the teacher vocabulary size")
             if require_alignment and len(self.teacher_topk_ids) != len(self.pseudo_token_ids):
                 raise ValueError("Teacher top-k rows must align one-to-one with pseudo_token_ids")
+            if require_alignment and not self.teacher_topk_log_normalizers:
+                raise ValueError("Aligned teacher top-k rows require full-vocabulary log normalizers")
+            if self.teacher_topk_log_normalizers:
+                if len(self.teacher_topk_log_normalizers) != len(self.teacher_topk_ids):
+                    raise ValueError("Teacher top-k log normalizers must align with top-k rows")
+                if any(not math.isfinite(value) for value in self.teacher_topk_log_normalizers):
+                    raise ValueError("Teacher top-k log normalizers must be finite")
 
         if self.teacher_generated_token_ids or self.teacher_topk_positions:
             if len(self.teacher_topk_positions) != len(self.teacher_topk_ids):
@@ -253,6 +285,8 @@ class TeacherRecord:
                 raise ValueError(f"Gold teacher top-k width mismatch: expected {expected_top_k}, found {width}")
             if require_alignment and len(self.gold_topk_ids) != len(self.gold_token_ids):
                 raise ValueError("Gold teacher top-k rows must align one-to-one with gold_token_ids")
+            if require_alignment and not self.gold_topk_log_normalizers:
+                raise ValueError("Aligned gold top-k rows require full-vocabulary log normalizers")
             for ids, logits in zip(self.gold_topk_ids, self.gold_topk_logits):
                 if len(ids) != width or len(logits) != width:
                     raise ValueError("Gold teacher top-k rows must have a constant width")
@@ -264,6 +298,11 @@ class TeacherRecord:
                     raise ValueError("Gold teacher top-k logits must be finite")
                 if vocab_size is not None and any(token_id >= vocab_size for token_id in ids):
                     raise ValueError("Gold teacher top-k ID exceeds the teacher vocabulary size")
+            if self.gold_topk_log_normalizers:
+                if len(self.gold_topk_log_normalizers) != len(self.gold_topk_ids):
+                    raise ValueError("Gold top-k log normalizers must align with gold top-k rows")
+                if any(not math.isfinite(value) for value in self.gold_topk_log_normalizers):
+                    raise ValueError("Gold top-k log normalizers must be finite")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -278,9 +317,12 @@ class TeacherRecord:
             "prompt_token_count": self.prompt_token_count,
             "prompt_sequence_width": self.prompt_sequence_width,
             "generated_token_count": self.generated_token_count,
+            "generated_eos_observed": self.generated_eos_observed,
             "gold_token_ids": list(self.gold_token_ids),
             "gold_topk_ids": [list(row) for row in self.gold_topk_ids],
             "gold_topk_logits": [list(row) for row in self.gold_topk_logits],
+            "teacher_topk_log_normalizers": list(self.teacher_topk_log_normalizers),
+            "gold_topk_log_normalizers": list(self.gold_topk_log_normalizers),
         }
 
 
@@ -372,7 +414,7 @@ class TeacherCache:
 
 
 def write_cache(path: str | Path, metadata: dict[str, Any], records: Iterable[TeacherRecord]) -> None:
-    """Atomically write a version-2 cache while retaining text-only compatibility."""
+    """Atomically write the current cache schema while retaining legacy reads."""
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -438,6 +480,7 @@ def load_cache(path: str | Path) -> TeacherCache:
                 if version not in LEGACY_CACHE_VERSIONS:
                     raise ValueError(f"Unsupported teacher cache header at {path}:{line_number}")
                 metadata = dict(value.get("metadata", {}))
+                metadata["_cache_version"] = version
             else:
                 if not isinstance(value, dict):
                     raise ValueError(f"Teacher cache record must be an object at {path}:{line_number}")

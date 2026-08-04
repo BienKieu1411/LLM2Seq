@@ -18,6 +18,7 @@ from .build_cache import build_cache as build_teacher_cache
 from .cache import TeacherCache, load_cache
 from .dataset import KDCollator, KDText2TextDataset
 from .model import EviSeqKD
+from .paths import resolve_artifact_path, resolve_input_path
 from .student.configuration import load_config
 from .student.data.dataset import Text2TextDataset, decoder_seed_ids
 from .student.training import engine as stable
@@ -27,31 +28,6 @@ _ORIGINAL_COLLATOR = stable._collator
 LOGGER = logging.getLogger("eviseq_kd.trainer")
 
 
-def _resolve_path(value: str, config: Dict[str, Any]) -> Path:
-    path = Path(value)
-    if path.is_absolute():
-        return path
-    config_path = config.get("_meta", {}).get("config_path")
-    candidates = []
-    if config_path:
-        candidates.append(Path(str(config_path)).resolve().parent / path)
-    package_root = Path(__file__).resolve().parents[1]
-    if path.parts[:2] == ("src", "eviseq_kd"):
-        candidates.append(package_root.joinpath(*path.parts[2:]))
-    elif path.parts[:1] == ("eviseq_kd",):
-        candidates.append(package_root.joinpath(*path.parts[1:]))
-    candidates.extend(
-        [
-            Path.cwd() / path,
-            Path(__file__).resolve().parents[3] / path,
-        ]
-    )
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.resolve()
-    return candidates[0].resolve()
-
-
 def _load_teacher_cache(config: Dict[str, Any]) -> TeacherCache:
     distillation = config.get("training", {}).get("distillation", {})
     if not bool(distillation.get("enabled", False)):
@@ -59,7 +35,7 @@ def _load_teacher_cache(config: Dict[str, Any]) -> TeacherCache:
     cache_path = str(distillation.get("cache_path", "")).strip()
     if not cache_path:
         raise ValueError("KD is enabled but training.distillation.cache_path is empty")
-    cache = load_cache(_resolve_path(cache_path, config))
+    cache = load_cache(resolve_artifact_path(cache_path))
     expected_split = str(distillation.get("cache_split", "train"))
     actual_split = str(cache.metadata.get("split", ""))
     if actual_split != expected_split:
@@ -75,6 +51,19 @@ def _load_teacher_cache(config: Dict[str, Any]) -> TeacherCache:
             "Rebuild the cache with --force-rebuild-cache."
         )
     if bool(distillation.get("logit_enabled", False)):
+        cache_version = int(cache.metadata.get("_cache_version", 0) or 0)
+        if cache_version < 3:
+            raise ValueError(
+                "Logit KD requires a version-3 teacher cache with full-vocabulary log normalizers. "
+                "Rebuild it with --force-rebuild-cache."
+            )
+        expected_temperature = float(distillation.get("temperature", 2.0))
+        actual_temperature = float(cache.metadata.get("kd_temperature", 0.0) or 0.0)
+        if abs(actual_temperature - expected_temperature) > 1.0e-8:
+            raise ValueError(
+                f"Teacher cache temperature mismatch: expected {expected_temperature}, found {actual_temperature}. "
+                "Rebuild it with --force-rebuild-cache."
+            )
         if not bool(cache.metadata.get("has_topk", False)) or int(cache.metadata.get("top_k", 0) or 0) <= 0:
             raise ValueError(
                 "Logit KD is enabled but the teacher cache has no top-k logits. "
@@ -106,7 +95,7 @@ def _ensure_teacher_cache(config_path: str, *, auto_build: bool, force_rebuild: 
     cache_path = str(distillation.get("cache_path", "")).strip()
     if not cache_path:
         raise ValueError("KD is enabled but training.distillation.cache_path is empty")
-    resolved_cache = _resolve_path(cache_path, config)
+    resolved_cache = resolve_artifact_path(cache_path)
     if resolved_cache.is_file() and not force_rebuild:
         LOGGER.info("reusing teacher cache: %s", resolved_cache)
         return resolved_cache
@@ -151,7 +140,7 @@ def build_experiment(config: Dict[str, Any], *, include_train: bool = True):
     if include_train:
         assert teacher_cache is not None
         train_dataset = KDText2TextDataset(
-            _resolve_path(str(data["train_file"]), config),
+            resolve_input_path(str(data["train_file"]), config),
             encoder_tokenizer,
             decoder_tokenizer,
             data,
@@ -161,7 +150,7 @@ def build_experiment(config: Dict[str, Any], *, include_train: bool = True):
             require_teacher_cache=True,
         )
     validation_dataset = Text2TextDataset(
-        _resolve_path(str(data["validation_file"]), config),
+        resolve_input_path(str(data["validation_file"]), config),
         encoder_tokenizer,
         decoder_tokenizer,
         data,
@@ -211,8 +200,9 @@ def _initialize_from_checkpoint_compat(
     if not isinstance(state, dict):
         raise RuntimeError("Checkpoint does not contain a model state dictionary")
     expected = set(model.state_dict())
-    if not any(key in expected for key in state) and any(not key.startswith("base.") for key in state):
-        state = {key if key.startswith("base.") else f"base.{key}": value for key, value in state.items()}
+    state = {
+        key if key in expected or key.startswith("base.") else f"base.{key}": value for key, value in state.items()
+    }
     if strict:
         model.load_state_dict(state, strict=True)
         loaded = len(state)

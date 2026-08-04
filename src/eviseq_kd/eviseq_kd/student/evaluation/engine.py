@@ -16,7 +16,7 @@ from typing import Any, Dict, List
 
 import torch
 
-from ...trainer import _resolve_path as resolve_data_path
+from ...paths import resolve_input_path
 from ..configuration import load_config
 from ..data.dataset import clean_text, decoder_seed_ids, encode_source, read_jsonl
 from ..modeling.architecture import EviSeq as RuntimeModel
@@ -111,7 +111,7 @@ def evaluate(
     data = config["data"]
     configured_limit = int(config.get("limits", {}).get("max_test_examples", 0))
     effective_limit = int(max_samples) if int(max_samples) > 0 else configured_limit
-    rows = read_jsonl(resolve_data_path(data["test_file"], config), max_examples=effective_limit, data_config=data)
+    rows = read_jsonl(resolve_input_path(data["test_file"], config), max_examples=effective_limit, data_config=data)
     generation = config.get("generation", {})
     batch_size = int(os.environ.get("EVISEQ_EVAL_BATCH_SIZE", generation.get("batch_size", 64)))
     if batch_size <= 0:

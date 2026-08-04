@@ -124,8 +124,10 @@ def _validate_topk_ids(
     ids = teacher_topk_ids.to(device=student_logits.device, dtype=torch.long)
     if ids.numel() and (bool(ids.lt(0).any()) or bool(ids.ge(vocab).any())):
         raise ValueError("Teacher top-k IDs are not aligned to the student vocabulary")
-    if width > 1 and bool(ids[..., 1:].eq(ids[..., :-1]).any()):
-        raise ValueError("Teacher top-k IDs contain duplicate token IDs in a row")
+    if width > 1:
+        sorted_ids = ids.sort(dim=-1).values
+        if bool(sorted_ids[..., 1:].eq(sorted_ids[..., :-1]).any()):
+            raise ValueError("Teacher top-k IDs contain duplicate token IDs in a row")
     return ids
 
 
@@ -137,12 +139,18 @@ def topk_distillation_loss(
     temperature: float = 2.0,
     labels: Optional[torch.Tensor] = None,
     ignore_index: int = -100,
+    teacher_log_normalizers: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Compute masked top-k KL KD with the standard ``T^2`` correction.
+    """Compute masked top-k KD with the standard ``T^2`` correction.
 
-    The teacher distribution is renormalized over the cached top-k support.
-    ``teacher_topk_ids`` must already be mapped into the student vocabulary;
-    the dataset performs that mapping from cache metadata before batching.
+    Current caches provide the teacher's full-vocabulary log normalizer at the
+    configured temperature. In that case this computes an exact KL after
+    collapsing every non-top-k token into one ``OTHER`` bucket. This preserves
+    the teacher/student probability mass outside the cached support instead of
+    renormalizing the student over only K tokens.
+
+    The no-normalizer branch is retained only for direct primitive use and
+    legacy tests; production logit KD requires a version-3 cache.
     """
 
     _validate_logits(student_logits, "student_logits")
@@ -156,11 +164,48 @@ def topk_distillation_loss(
     if labels is not None and ignore_index != -100:
         labels = labels.masked_fill(labels.eq(ignore_index), -100)
 
-    selected_student = student_logits.float().gather(-1, ids)
     teacher = teacher_topk_logits.detach().to(device=student_logits.device, dtype=torch.float32)
-    student_log_probs = F.log_softmax(selected_student / float(temperature), dim=-1)
-    teacher_probs = F.softmax(teacher / float(temperature), dim=-1)
-    per_position = F.kl_div(student_log_probs, teacher_probs, reduction="none").sum(dim=-1)
+    if teacher_log_normalizers is None:
+        selected_student = student_logits.float().gather(-1, ids)
+        student_log_probs = F.log_softmax(selected_student / float(temperature), dim=-1)
+        teacher_probs = F.softmax(teacher / float(temperature), dim=-1)
+        per_position = F.kl_div(student_log_probs, teacher_probs, reduction="none").sum(dim=-1)
+    else:
+        if teacher_log_normalizers.shape != student_logits.shape[:2]:
+            raise ValueError("Teacher log normalizers must have shape [B,T]")
+        normalizers = teacher_log_normalizers.detach().to(
+            device=student_logits.device,
+            dtype=torch.float32,
+        )
+        if not bool(torch.isfinite(normalizers).all()):
+            raise ValueError("Teacher log normalizers must be finite")
+
+        student_full_log_probs = F.log_softmax(student_logits.float() / float(temperature), dim=-1)
+        student_topk_log_probs = student_full_log_probs.gather(-1, ids)
+        teacher_topk_log_probs = teacher / float(temperature) - normalizers.unsqueeze(-1)
+        teacher_topk_probs = teacher_topk_log_probs.exp()
+        # Cached logits may be float16 while the normalizer is float32. Guard
+        # against a tiny rounding overshoot above unit probability mass.
+        teacher_topk_probs = (
+            teacher_topk_probs
+            / teacher_topk_probs.sum(
+                dim=-1,
+                keepdim=True,
+            )
+            .clamp_min(1.0)
+            .detach()
+        )
+        teacher_topk_log_probs = teacher_topk_probs.clamp_min(1.0e-30).log()
+        teacher_tail = (1.0 - teacher_topk_probs.sum(dim=-1)).clamp(min=0.0, max=1.0)
+        student_tail = (1.0 - student_topk_log_probs.exp().sum(dim=-1)).clamp_min(1.0e-12)
+
+        topk_kl = (teacher_topk_probs * (teacher_topk_log_probs - student_topk_log_probs)).sum(dim=-1)
+        tail_kl = torch.where(
+            teacher_tail > 0.0,
+            teacher_tail * (teacher_tail.clamp_min(1.0e-12).log() - student_tail.log()),
+            torch.zeros_like(teacher_tail),
+        )
+        per_position = topk_kl + tail_kl
     valid = _valid_positions(
         student_logits.shape[:2],
         mask=mask,

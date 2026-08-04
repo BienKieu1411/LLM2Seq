@@ -28,9 +28,9 @@ training:
     cache_logits_dtype: float16
 
 data:
-  train_file: datasets/pubmed/train.jsonl
-  validation_file: datasets/pubmed/validation.jsonl
-  test_file: datasets/pubmed/test.jsonl
+  train_file: ../datasets/pubmed/train.jsonl
+  validation_file: ../datasets/pubmed/validation.jsonl
+  test_file: ../datasets/pubmed/test.jsonl
   source_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
   decoder_instruction: "Write a concise, factual abstract of the encoded biomedical article. Preserve the key objective, methods, results, and conclusion; do not add information."
   decoder_prefix: "Abstract:\n"

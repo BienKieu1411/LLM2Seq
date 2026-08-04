@@ -3,7 +3,7 @@
 `eviseq_kd` is a self-contained sibling package. It does not import or require the separate `src/eviseq` package. Its student graph is vendored under `eviseq_kd.student`, so both projects can be run independently.
 
 The default implementation is offline, gold-anchored full-objective KD with a
-top-k approximation of the teacher vocabulary distribution:
+top-k-plus-tail representation of the teacher vocabulary distribution:
 
 ```text
 L = L_EviSeq
@@ -14,11 +14,18 @@ L = L_EviSeq
 `L_sequence_KD` trains on the Qwen3-4B beam output as a hard sequence target,
 following Kim & Rush (2016), [Sequence-Level Knowledge Distillation](https://aclanthology.org/D16-1139/).
 The two KL terms transfer the teacher's token distribution with
-`T² * KL(teacher || student)` at temperature `T=2.0`; the cache stores teacher
-top-k logits because a full 151k-vocabulary tensor for every token is not a
-practical JSONL artifact. This is explicitly a top-k soft-target approximation,
-not a claim of exact full-vocabulary KL. Gold evidence labels remain attached
-only to the gold branch.
+`T² * KL(teacher || student)` at temperature `T=2.0`. Cache schema v3 stores
+the top-k logits plus one full-vocabulary log normalizer per token. Training
+therefore computes an exact KL over `K + 1` buckets: each cached teacher token
+is one bucket and all remaining vocabulary items form an `OTHER` bucket. This
+preserves probability mass outside the top-k without storing a full
+151k-vocabulary tensor. Gold evidence labels remain attached only to the gold
+branch.
+
+Gold and pseudo trajectories each use one encoder-decoder forward. When soft
+KD is enabled, that same forward returns the full student logits needed by
+both CE and KD; it does not repeat the complete model merely to recover
+logits.
 
 The KD configs retain the full EviSeq task/model/bridge/objective/training/data,
 generation, checkpoint, benchmark, reporting, and limit settings. They add an
@@ -67,9 +74,10 @@ python3 src/eviseq_kd/run.py \
 ```
 
 The cache builder stores the pseudo sequence, gold and pseudo top-k teacher
-logits, EOS-aligned token rows, source hash, vocabulary metadata, and tokenizer
-fingerprint. Training refuses to consume the cache if the decoder tokenizer or
-vocabulary identity does not match.
+logits, full-vocabulary log normalizers, EOS-aligned token rows, source hash,
+vocabulary metadata, and tokenizer fingerprint. Training refuses to consume
+the cache if the decoder tokenizer, vocabulary identity, KD temperature, or
+cache schema does not match.
 
 Training validates that every cached target belongs to the current source
 text and that the cache teacher/split/top-k settings match the configuration.
@@ -81,6 +89,10 @@ python3 src/eviseq_kd/run.py \
   --config src/eviseq_kd/configs/wikilingua_kd.yaml \
   --force-rebuild-cache
 ```
+
+Version-1/2 caches remain inspectable, but logit KD intentionally requires a
+version-3 rebuild so the loss cannot silently discard student probability mass
+outside the teacher top-k.
 
 ## A100 smoke run
 

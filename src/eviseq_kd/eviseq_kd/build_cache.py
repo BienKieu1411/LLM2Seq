@@ -22,35 +22,11 @@ from .cache import (
     tokenizer_vocab_size,
     write_cache,
 )
+from .paths import resolve_artifact_path, resolve_input_path
 from .student.configuration import load_config
 from .student.data.dataset import clean_text, read_jsonl
 
 LOGGER = logging.getLogger("eviseq_kd.cache")
-
-
-def _resolve_path(value: str, config: Dict[str, Any]) -> Path:
-    path = Path(value)
-    if path.is_absolute():
-        return path
-    config_path = config.get("_meta", {}).get("config_path")
-    candidates = []
-    if config_path:
-        candidates.append(Path(str(config_path)).resolve().parent / path)
-    package_root = Path(__file__).resolve().parents[1]
-    if path.parts[:2] == ("src", "eviseq_kd"):
-        candidates.append(package_root.joinpath(*path.parts[2:]))
-    elif path.parts[:1] == ("eviseq_kd",):
-        candidates.append(package_root.joinpath(*path.parts[1:]))
-    candidates.extend(
-        [
-            Path.cwd() / path,
-            Path(__file__).resolve().parents[3] / path,
-        ]
-    )
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.resolve()
-    return candidates[0].resolve()
 
 
 def _device(value: str) -> torch.device:
@@ -120,6 +96,44 @@ def _output_logits(outputs: Any) -> torch.Tensor:
     return logits
 
 
+def _prediction_logits(
+    teacher: Any,
+    *,
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    prompt_width: int,
+    target_width: int,
+) -> torch.Tensor:
+    """Return only logits that predict the target suffix when supported.
+
+    Qwen3 accepts ``logits_to_keep``. Keeping ``target_width + 1`` gives the
+    prompt's final position plus target positions; the last row predicts one
+    token beyond the cached target and is dropped. A full-logit fallback keeps
+    the builder compatible with simpler test doubles and other causal LMs.
+    """
+
+    try:
+        outputs = teacher(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=False,
+            logits_to_keep=target_width + 1,
+        )
+    except TypeError:
+        outputs = teacher(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=False,
+        )
+    sequence_logits = _output_logits(outputs)
+    if sequence_logits.shape[1] == target_width + 1:
+        return sequence_logits[:, :-1]
+    prediction_logits = sequence_logits[:, prompt_width - 1 : prompt_width - 1 + target_width]
+    if prediction_logits.shape[1] != target_width:
+        raise ValueError("Teacher forward did not return logits for every target token")
+    return prediction_logits
+
+
 def _generated_suffix(generated: torch.Tensor, prompt_width: int) -> torch.Tensor:
     """Return the generated suffix from the standard decoder-only generate output."""
 
@@ -131,6 +145,30 @@ def _generated_suffix(generated: torch.Tensor, prompt_width: int) -> torch.Tenso
             "decoder-only generation must return prompt plus generated tokens"
         )
     return generated[:, prompt_width:]
+
+
+def _normalize_generated_row(
+    token_ids: list[int],
+    *,
+    pad_id: int | None,
+    eos_id: int | None,
+) -> tuple[list[int], bool]:
+    """Keep one EOS even when a tokenizer uses EOS as its padding token."""
+
+    effective: list[int] = []
+    saw_eos = False
+    for value in token_ids:
+        token_id = int(value)
+        if eos_id is not None and token_id == eos_id:
+            effective.append(token_id)
+            saw_eos = True
+            break
+        if pad_id is not None and token_id == pad_id:
+            break
+        effective.append(token_id)
+    if eos_id is not None and not saw_eos:
+        effective.append(int(eos_id))
+    return effective, saw_eos
 
 
 def _pad_token_rows(
@@ -188,8 +226,15 @@ def build_cache(
     if cache_logits_dtype_name not in {"float16", "float32"}:
         raise ValueError("cache_logits_dtype must be float16 or float32")
     cache_logits_dtype = torch.float16 if cache_logits_dtype_name == "float16" else torch.float32
+    kd_temperature = float(distillation.get("temperature", 2.0))
+    if kd_temperature <= 0.0:
+        raise ValueError("training.distillation.temperature must be positive")
     data_key = {"train": "train_file", "validation": "validation_file", "test": "test_file"}[split]
-    rows = read_jsonl(_resolve_path(str(data[data_key]), config), max_examples=max_examples, data_config=data)
+    rows = read_jsonl(
+        resolve_input_path(str(data[data_key]), config),
+        max_examples=max_examples,
+        data_config=data,
+    )
     device = _device(device_name)
     teacher_tokenizer = AutoTokenizer.from_pretrained(teacher_name, trust_remote_code=True)
     if teacher_tokenizer.pad_token_id is None:
@@ -240,20 +285,15 @@ def build_cache(
         # max_new_tokens without emitting EOS, append EOS so the student and
         # cached teacher rows still have identical target lengths.
         effective_suffixes: list[list[int]] = []
+        generated_eos_observed: list[bool] = []
         for row_values in generated_suffix.tolist():
-            effective: list[int] = []
-            saw_eos = False
-            for value in row_values:
-                token_id = int(value)
-                if token_id == pad_id:
-                    break
-                effective.append(token_id)
-                if token_id == eos_id:
-                    saw_eos = True
-                    break
-            if eos_id is not None and not saw_eos:
-                effective.append(int(eos_id))
+            effective, saw_eos = _normalize_generated_row(
+                row_values,
+                pad_id=pad_id,
+                eos_id=eos_id,
+            )
             effective_suffixes.append(effective)
+            generated_eos_observed.append(saw_eos)
         alignment_width = max((len(row_values) for row_values in effective_suffixes), default=0)
         aligned_suffix = torch.full(
             (len(effective_suffixes), alignment_width),
@@ -282,25 +322,23 @@ def build_cache(
                 ],
                 dim=1,
             )
-            outputs = teacher(
+            prediction_logits = _prediction_logits(
+                teacher,
                 input_ids=torch.cat([encoded["input_ids"], aligned_suffix], dim=1),
                 attention_mask=full_attention_mask,
-                use_cache=False,
+                prompt_width=prompt_width,
+                target_width=alignment_width,
             )
-            sequence_logits = _output_logits(outputs)
-            model_vocab_size = int(sequence_logits.shape[-1])
+            model_vocab_size = int(prediction_logits.shape[-1])
             if top_k > model_vocab_size:
                 raise ValueError(
                     f"Requested top_k={top_k}, but teacher forward exposes only {model_vocab_size} vocabulary logits"
                 )
-            # At absolute sequence position prompt_width - 1 + j, the causal
-            # LM predicts generated_suffix[j].  The offset is intentionally
-            # based on the padded prompt width because prompts are left-padded
-            # for batched decoder-only generation.
-            prediction_logits = sequence_logits[:, prompt_width - 1 : prompt_width - 1 + alignment_width]
-            if prediction_logits.shape[1] != alignment_width:
-                raise ValueError("Teacher forward did not return logits for every generated token")
             topk_logits_tensor, topk_ids_tensor = torch.topk(prediction_logits.float(), k=top_k, dim=-1)
+            topk_log_normalizers_tensor = torch.logsumexp(
+                prediction_logits.float() / kd_temperature,
+                dim=-1,
+            )
             topk_logits_tensor = topk_logits_tensor.to(dtype=cache_logits_dtype)
 
             # Also cache the teacher distribution on the gold trajectory.  It
@@ -328,33 +366,37 @@ def build_cache(
                 dtype=generated.dtype,
                 device=device,
             )
-            gold_outputs = teacher(
+            gold_prediction_logits = _prediction_logits(
+                teacher,
                 input_ids=torch.cat([encoded["input_ids"], gold_suffix], dim=1),
                 attention_mask=torch.cat([encoded["attention_mask"], gold_attention], dim=1),
-                use_cache=False,
+                prompt_width=prompt_width,
+                target_width=int(gold_suffix.shape[1]),
             )
-            gold_sequence_logits = _output_logits(gold_outputs)
-            if int(gold_sequence_logits.shape[-1]) != model_vocab_size:
+            if int(gold_prediction_logits.shape[-1]) != model_vocab_size:
                 raise ValueError("Teacher vocabulary width changed between pseudo and gold KD forwards")
-            gold_prediction_logits = gold_sequence_logits[:, prompt_width - 1 : prompt_width - 1 + gold_suffix.shape[1]]
             gold_topk_logits_tensor, gold_topk_ids_tensor = torch.topk(gold_prediction_logits.float(), k=top_k, dim=-1)
+            gold_topk_log_normalizers_tensor = torch.logsumexp(
+                gold_prediction_logits.float() / kd_temperature,
+                dim=-1,
+            )
             gold_topk_logits_tensor = gold_topk_logits_tensor.to(dtype=cache_logits_dtype)
         else:
             topk_logits_tensor = None
             topk_ids_tensor = None
+            topk_log_normalizers_tensor = None
             gold_token_rows = [[] for _ in chunk]
             gold_topk_logits_tensor = None
             gold_topk_ids_tensor = None
+            gold_topk_log_normalizers_tensor = None
         for row_index, row in enumerate(chunk):
-            raw_ids = [int(value) for value in generated_suffix[row_index].tolist()]
             effective_ids = effective_suffixes[row_index]
             token_ids: List[int] = []
             topk_ids: List[List[int]] = []
             topk_logits: List[List[float]] = []
             topk_positions: List[int] = []
+            topk_log_normalizers: List[float] = []
             for generated_position, token_id in enumerate(effective_ids):
-                if token_id == pad_id:
-                    break
                 if token_id == eos_id:
                     token_ids.append(token_id)
                     if topk_ids_tensor is not None and topk_logits_tensor is not None:
@@ -365,6 +407,10 @@ def build_cache(
                         topk_logits.append(
                             [float(value) for value in topk_logits_tensor[row_index, generated_position].tolist()]
                         )
+                        assert topk_log_normalizers_tensor is not None
+                        topk_log_normalizers.append(float(topk_log_normalizers_tensor[row_index, generated_position]))
+                    break
+                if token_id == pad_id:
                     break
                 if token_id in special_ids:
                     continue
@@ -375,6 +421,8 @@ def build_cache(
                     topk_logits.append(
                         [float(value) for value in topk_logits_tensor[row_index, generated_position].tolist()]
                     )
+                    assert topk_log_normalizers_tensor is not None
+                    topk_log_normalizers.append(float(topk_log_normalizers_tensor[row_index, generated_position]))
             decoded_ids = [token_id for token_id in token_ids if token_id not in special_ids]
             pseudo_target = teacher_tokenizer.decode(decoded_ids, skip_special_tokens=True).strip()
             gold_ids = gold_token_rows[row_index]
@@ -394,6 +442,11 @@ def build_cache(
                 if gold_topk_logits_tensor is not None
                 else []
             )
+            gold_topk_log_normalizers = (
+                [float(gold_topk_log_normalizers_tensor[row_index, position]) for position in range(len(gold_ids))]
+                if gold_topk_log_normalizers_tensor is not None
+                else []
+            )
             source = clean_text(row["source"], bool(data.get("clean_wikihow_metadata", False)))
             raw_id = row.get("id")
             records.append(
@@ -409,9 +462,12 @@ def build_cache(
                     prompt_token_count=int(encoded["attention_mask"][row_index].sum().item()),
                     prompt_sequence_width=prompt_width,
                     generated_token_count=len(token_ids),
+                    generated_eos_observed=generated_eos_observed[row_index],
                     gold_token_ids=gold_ids,
                     gold_topk_ids=gold_topk_ids,
                     gold_topk_logits=gold_topk_logits,
+                    teacher_topk_log_normalizers=topk_log_normalizers,
+                    gold_topk_log_normalizers=gold_topk_log_normalizers,
                 )
             )
         LOGGER.info("cached %d/%d examples", len(records), len(rows))
@@ -439,9 +495,10 @@ def build_cache(
         # responsible for verifying that the declared identity is valid.
         "vocab_alignment": "identity",
         "topk_logit_dtype": cache_logits_dtype_name,
+        "kd_temperature": kd_temperature,
         "topk_includes_eos": True,
     }
-    output = _resolve_path(output_path, config)
+    output = resolve_artifact_path(output_path)
     write_cache(output, metadata, records)
     LOGGER.info("wrote teacher cache to %s", output)
     return output

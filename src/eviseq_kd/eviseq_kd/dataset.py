@@ -211,8 +211,17 @@ class KDText2TextDataset(Text2TextDataset):
                     f"rows={cached_count}, target_tokens={target_count}"
                 )
         includes_eos = bool(includes_eos)
-        expected_content_count = target_count - (1 if self.decoder_tokenizer.eos_token_id is not None else 0)
-        expected_count = target_count if includes_eos else expected_content_count
+        eos_id = self.decoder_tokenizer.eos_token_id
+        expected_content_count = target_count - int(eos_id is not None)
+        cached_content_count = len(record.pseudo_token_ids)
+        if eos_id is not None and record.pseudo_token_ids and record.pseudo_token_ids[-1] == int(eos_id):
+            cached_content_count -= 1
+        target_was_truncated = cached_content_count > expected_content_count
+        expected_count = (
+            expected_content_count
+            if target_was_truncated
+            else (target_count if includes_eos else expected_content_count)
+        )
         if cached_count < expected_count:
             raise ValueError(
                 "Teacher top-k rows are shorter than the student-retokenized pseudo target: "
@@ -245,6 +254,12 @@ class KDText2TextDataset(Text2TextDataset):
 
         ids_rows = record.teacher_topk_ids[:expected_count]
         logit_rows = record.teacher_topk_logits[:expected_count]
+        normalizer_rows = record.teacher_topk_log_normalizers[:expected_count]
+        if len(normalizer_rows) != expected_count:
+            raise ValueError(
+                "Teacher top-k log normalizers are missing or shorter than the aligned pseudo target; "
+                "rebuild the teacher cache"
+            )
         width = len(ids_rows[0]) if ids_rows else 0
         if width <= 0:
             raise ValueError("Teacher top-k rows must have positive width")
@@ -255,15 +270,26 @@ class KDText2TextDataset(Text2TextDataset):
 
         teacher_ids = torch.tensor(ids_rows, dtype=torch.long)
         teacher_logits = torch.tensor(logit_rows, dtype=torch.float32)
+        teacher_log_normalizers = torch.tensor(normalizer_rows, dtype=torch.float32)
         if not bool(torch.isfinite(teacher_logits).all()):
             raise ValueError("Teacher top-k logits must be finite")
+        if not bool(torch.isfinite(teacher_log_normalizers).all()):
+            raise ValueError("Teacher top-k log normalizers must be finite")
         student_ids = self._map_teacher_ids(teacher_ids)
-        if not includes_eos and self.decoder_tokenizer.eos_token_id is not None:
+        mask_eos = eos_id is not None and (
+            target_was_truncated or not includes_eos or record.generated_eos_observed is False
+        )
+        if mask_eos:
             # The cache builder omits EOS because it is not part of the
-            # generated pseudo_token_ids.  Preserve the student sequence
-            # shape with a deliberately invalid, zero-filled EOS row.
+            # generated pseudo trajectory, or the student target truncated a
+            # longer trajectory. Preserve shape with an invalid EOS row so
+            # soft KD never aligns an ordinary continuation logit to EOS.
             student_ids = torch.cat([student_ids, torch.zeros((1, width), dtype=torch.long)], dim=0)
             teacher_logits = torch.cat([teacher_logits, torch.zeros((1, width), dtype=torch.float32)], dim=0)
+            teacher_log_normalizers = torch.cat(
+                [teacher_log_normalizers, torch.zeros(1, dtype=torch.float32)],
+                dim=0,
+            )
             target_mask = torch.cat(
                 [torch.ones(expected_content_count, dtype=torch.bool), torch.zeros(1, dtype=torch.bool)], dim=0
             )
@@ -271,10 +297,15 @@ class KDText2TextDataset(Text2TextDataset):
             target_mask = torch.ones(target_count, dtype=torch.bool)
         prefix_ids = torch.zeros((max(0, int(prompt_prefix_count)), width), dtype=torch.long)
         prefix_logits = torch.zeros((max(0, int(prompt_prefix_count)), width), dtype=torch.float32)
+        prefix_normalizers = torch.zeros(max(0, int(prompt_prefix_count)), dtype=torch.float32)
         prefix_mask = torch.zeros(max(0, int(prompt_prefix_count)), dtype=torch.bool)
         return {
             "teacher_topk_ids": torch.cat([prefix_ids, student_ids], dim=0),
             "teacher_topk_logits": torch.cat([prefix_logits, teacher_logits], dim=0),
+            "teacher_topk_log_normalizers": torch.cat(
+                [prefix_normalizers, teacher_log_normalizers],
+                dim=0,
+            ),
             "teacher_kd_mask": torch.cat(
                 [prefix_mask, target_mask],
                 dim=0,
@@ -306,15 +337,25 @@ class KDText2TextDataset(Text2TextDataset):
             raise ValueError("Gold teacher top-k rows must have a constant positive width")
         teacher_ids = torch.tensor(record.gold_topk_ids, dtype=torch.long)
         teacher_logits = torch.tensor(record.gold_topk_logits, dtype=torch.float32)
+        teacher_log_normalizers = torch.tensor(record.gold_topk_log_normalizers, dtype=torch.float32)
         if not bool(torch.isfinite(teacher_logits).all()):
             raise ValueError("Gold teacher top-k logits must be finite")
+        if teacher_log_normalizers.numel() != expected_ids.numel():
+            raise ValueError("Gold teacher top-k log normalizers must align with gold target tokens")
+        if not bool(torch.isfinite(teacher_log_normalizers).all()):
+            raise ValueError("Gold teacher top-k log normalizers must be finite")
         student_ids = self._map_teacher_ids(teacher_ids)
         prefix_ids = torch.zeros((max(0, int(prompt_prefix_count)), width), dtype=torch.long)
         prefix_logits = torch.zeros((max(0, int(prompt_prefix_count)), width), dtype=torch.float32)
+        prefix_normalizers = torch.zeros(max(0, int(prompt_prefix_count)), dtype=torch.float32)
         prefix_mask = torch.zeros(max(0, int(prompt_prefix_count)), dtype=torch.bool)
         return {
             "teacher_gold_topk_ids": torch.cat([prefix_ids, student_ids], dim=0),
             "teacher_gold_topk_logits": torch.cat([prefix_logits, teacher_logits], dim=0),
+            "teacher_gold_topk_log_normalizers": torch.cat(
+                [prefix_normalizers, teacher_log_normalizers],
+                dim=0,
+            ),
             "teacher_gold_kd_mask": torch.cat([prefix_mask, torch.ones(expected_ids.numel(), dtype=torch.bool)], dim=0),
         }
 
@@ -434,17 +475,20 @@ class KDCollator:
         def collate_topk(prefix: str, length: int, labels_key: str) -> None:
             ids_key = f"teacher_{prefix}topk_ids"
             logits_key = f"teacher_{prefix}topk_logits"
+            normalizers_key = f"teacher_{prefix}topk_log_normalizers"
             mask_key = f"teacher_{prefix}kd_mask"
             present = ids_key in teacher_keys_present or logits_key in teacher_keys_present
             if not present:
                 return
-            if not all(ids_key in item and logits_key in item for item in features):
+            if not all(ids_key in item and logits_key in item and normalizers_key in item for item in features):
                 raise ValueError(f"Every item in a {prefix or 'pseudo'} top-k KD batch must have teacher tensors")
             width = int(features[0][ids_key].shape[1])
             if width <= 0 or any(int(item[ids_key].shape[1]) != width for item in features):
                 raise ValueError("Teacher top-k width must be constant and positive in a batch")
             if any(item[ids_key].shape != item[logits_key].shape for item in features):
                 raise ValueError("Teacher top-k IDs/logits must have identical shapes per item")
+            if any(item[normalizers_key].shape != item[ids_key].shape[:1] for item in features):
+                raise ValueError("Teacher top-k log normalizers must have one value per token row")
             masks = []
             for item in features:
                 mask = item.get(mask_key)
@@ -457,6 +501,11 @@ class KDCollator:
                 {
                     ids_key: self._pad_matrix((item[ids_key] for item in features), length, width, 0),
                     logits_key: self._pad_matrix((item[logits_key] for item in features), length, width, 0.0),
+                    normalizers_key: self._pad(
+                        (item[normalizers_key] for item in features),
+                        length,
+                        0.0,
+                    ),
                     mask_key: self._pad(masks, length, 0).bool(),
                 }
             )
@@ -471,9 +520,11 @@ class KDCollator:
         allowed_teacher_keys = {
             "teacher_topk_ids",
             "teacher_topk_logits",
+            "teacher_topk_log_normalizers",
             "teacher_kd_mask",
             "teacher_gold_topk_ids",
             "teacher_gold_topk_logits",
+            "teacher_gold_topk_log_normalizers",
             "teacher_gold_kd_mask",
         }
         unknown = teacher_keys_present - allowed_teacher_keys
