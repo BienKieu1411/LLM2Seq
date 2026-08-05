@@ -209,6 +209,18 @@ def validate_config(config: Dict[str, Any]) -> None:
     if not isinstance(distillation, dict):
         raise ValueError("training.distillation must be a mapping")
     distillation_enabled = bool(distillation.get("enabled", False))
+    configured_mode = distillation.get("mode")
+    distillation_mode = (
+        str(
+            configured_mode
+            if configured_mode is not None
+            else ("offline" if str(distillation.get("cache_path", "")).strip() else "online")
+        )
+        .strip()
+        .lower()
+    )
+    if distillation_mode not in {"online", "offline"}:
+        raise ValueError("training.distillation.mode must be online or offline")
     teacher_model = str(distillation.get("teacher_model", "")).strip()
     cache_path = str(distillation.get("cache_path", "")).strip()
     cache_split = str(distillation.get("cache_split", "train")).strip()
@@ -216,7 +228,7 @@ def validate_config(config: Dict[str, Any]) -> None:
         raise ValueError("training.distillation.cache_split must be train, validation, or test")
     if distillation_enabled and not teacher_model:
         raise ValueError("Enabled KD requires training.distillation.teacher_model")
-    if distillation_enabled and not cache_path:
+    if distillation_enabled and distillation_mode == "offline" and not cache_path:
         raise ValueError("Enabled KD requires training.distillation.cache_path")
     if bool(distillation.get("sequence_enabled", True)) and distillation_enabled:
         if float(distillation.get("sequence_weight", 0.0)) <= 0.0:

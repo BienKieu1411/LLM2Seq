@@ -134,6 +134,7 @@ def test_kd_wrapper_reuses_each_supervised_forward_for_ce_and_logits(monkeypatch
             "training": {
                 "distillation": {
                     "enabled": True,
+                    "mode": "offline",
                     "sequence_enabled": True,
                     "sequence_weight": 0.3,
                     "logit_enabled": True,

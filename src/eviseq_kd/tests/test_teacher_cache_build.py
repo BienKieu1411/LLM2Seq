@@ -18,6 +18,7 @@ def test_eos_is_kept_when_pad_and_eos_share_an_id() -> None:
 class _FakeTokenizer:
     pad_token_id = 0
     eos_token_id = 5
+    bos_token_id = None
     pad_token = "<pad>"
     eos_token = "<eos>"
     all_special_ids = [0, 3, 5]
@@ -35,6 +36,7 @@ class _FakeTokenizer:
 
     def __call__(self, prompts, **kwargs):
         del kwargs
+        single = isinstance(prompts, str)
         if isinstance(prompts, str):
             prompts = [prompts]
         rows = [[1, 2], [6, 7, 1]][: len(prompts)]
@@ -45,10 +47,13 @@ class _FakeTokenizer:
             padding = [self.pad_token_id] * (width - len(row))
             input_ids.append(padding + row)
             attention_mask.append([0] * len(padding) + [1] * len(row))
-        return {
+        result = {
             "input_ids": torch.tensor(input_ids, dtype=torch.long),
             "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
         }
+        if single:
+            return {key: value[0].tolist() for key, value in result.items()}
+        return result
 
     def decode(self, token_ids, **kwargs) -> str:
         del kwargs
@@ -72,7 +77,7 @@ class _FakeTeacher:
     def generate(self, input_ids, **kwargs):
         del kwargs
         suffix = torch.tensor([[1, 3, 2, 5], [2, 3, 1, 5]], dtype=torch.long, device=input_ids.device)
-        return torch.cat([input_ids, suffix], dim=1)
+        return torch.cat([input_ids, suffix[: input_ids.shape[0]]], dim=1)
 
     def __call__(self, input_ids, attention_mask, use_cache):
         assert use_cache is False
@@ -200,3 +205,49 @@ def test_cache_loader_rejects_misaligned_topk_rows(tmp_path) -> None:
         assert "align" in str(exc)
     else:
         raise AssertionError("misaligned top-k rows must be rejected for the explicit schema")
+
+
+def test_online_teacher_generates_and_aligns_targets_without_cache() -> None:
+    from eviseq_kd.online_teacher import OnlineTeacher
+
+    tokenizer = _FakeTokenizer()
+    teacher = _FakeTeacher()
+    config = {
+        "data": {
+            "decoder_instruction": "Summarize",
+            "decoder_prefix": "Summary:",
+            "use_decoder_chat_template": False,
+        },
+        "training": {
+            "distillation": {
+                "enabled": True,
+                "mode": "online",
+                "teacher_model": "fake-teacher",
+                "teacher_batch_size": 1,
+                "teacher_max_new_tokens": 4,
+                "teacher_num_beams": 1,
+                "sequence_enabled": True,
+                "logit_enabled": True,
+                "topk": 2,
+                "temperature": 2.0,
+                "logit_path_mix": 0.0,
+            }
+        },
+    }
+    runtime = OnlineTeacher(config)
+    runtime._tokenizer = tokenizer
+    runtime._model = teacher
+    runtime._model_device = torch.device("cpu")
+    runtime.configure_student_tokenizer(tokenizer)
+
+    outputs = runtime.distill_batch(
+        teacher_input_ids=torch.tensor([[1, 2, 3], [0, 1, 2]]),
+        teacher_attention_mask=torch.tensor([[0, 1, 1], [1, 1, 1]]),
+        gold_labels=torch.tensor([[-100, 1, 2, 5], [-100, 6, 7, 5]]),
+        output_device=torch.device("cpu"),
+    )
+    assert outputs["pseudo_labels"].shape[0] == 2
+    assert outputs["teacher_topk_ids"].shape[:2] == outputs["pseudo_labels"].shape
+    assert outputs["teacher_gold_topk_ids"].shape[0] == 2
+    assert outputs["teacher_kd_mask"].dtype is torch.bool
+    assert len(teacher.forward_inputs) == 4  # pseudo + gold for each teacher micro-batch

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "eviseq-kd"
 version = "0.1.0"
-description = "Independent offline knowledge-distillation pipeline for EviSeq"
+description = "Independent online knowledge-distillation pipeline for EviSeq"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

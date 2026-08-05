@@ -1,0 +1,14 @@
+_base_: pubmed.yaml
+
+experiment:
+  name: eviseq_pubmed_continue_epoch5
+  output_dir: runs/eviseq/pubmed_continue_epoch5
+
+training:
+  # epoch_004 already contains the original 1 warm-up + 3 full epochs.
+  interface_warmup_epochs: 0
+  full_finetune_epochs: 1
+
+objectives:
+  # The continuation is already in the full-finetune stage.
+  evidence_contrastive_warmup_epochs: 0

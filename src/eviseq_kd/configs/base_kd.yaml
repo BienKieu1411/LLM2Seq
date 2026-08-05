@@ -84,6 +84,7 @@ training:
   strict_initial_checkpoint: true
   distillation:
     enabled: false
+    mode: online
     teacher_model: ""
     cache_path: ""
     cache_split: train

@@ -16,7 +16,7 @@ import torch
 
 from .build_cache import build_cache as build_teacher_cache
 from .cache import TeacherCache, load_cache
-from .dataset import KDCollator, KDText2TextDataset
+from .dataset import KDCollator, KDText2TextDataset, OnlineKDCollator, OnlineKDText2TextDataset
 from .model import EviSeqKD
 from .paths import resolve_artifact_path, resolve_input_path
 from .student.configuration import load_config
@@ -28,10 +28,29 @@ _ORIGINAL_COLLATOR = stable._collator
 LOGGER = logging.getLogger("eviseq_kd.trainer")
 
 
+def _distillation_mode(config: Dict[str, Any]) -> str:
+    distillation = config.get("training", {}).get("distillation", {})
+    configured_mode = distillation.get("mode")
+    mode = (
+        str(
+            configured_mode
+            if configured_mode is not None
+            else ("offline" if str(distillation.get("cache_path", "")).strip() else "online")
+        )
+        .strip()
+        .lower()
+    )
+    if mode not in {"online", "offline"}:
+        raise ValueError("training.distillation.mode must be 'online' or 'offline'")
+    return mode
+
+
 def _load_teacher_cache(config: Dict[str, Any]) -> TeacherCache:
     distillation = config.get("training", {}).get("distillation", {})
     if not bool(distillation.get("enabled", False)):
         raise ValueError("eviseq_kd requires training.distillation.enabled=true")
+    if _distillation_mode(config) != "offline":
+        raise ValueError("Teacher cache loading is only valid when training.distillation.mode=offline")
     cache_path = str(distillation.get("cache_path", "")).strip()
     if not cache_path:
         raise ValueError("KD is enabled but training.distillation.cache_path is empty")
@@ -86,11 +105,15 @@ def _load_teacher_cache(config: Dict[str, Any]) -> TeacherCache:
 
 
 def _ensure_teacher_cache(config_path: str, *, auto_build: bool, force_rebuild: bool = False) -> Path:
-    """Materialize the offline teacher cache on demand for one-command training."""
+    """Materialize a legacy offline cache; online KD deliberately skips this."""
 
     config = load_config(config_path)
     distillation = config.get("training", {}).get("distillation", {})
     if not bool(distillation.get("enabled", False)):
+        return Path()
+    if _distillation_mode(config) == "online":
+        if force_rebuild:
+            LOGGER.warning("--force-rebuild-cache is ignored because distillation.mode=online")
         return Path()
     cache_path = str(distillation.get("cache_path", "")).strip()
     if not cache_path:
@@ -135,20 +158,40 @@ def build_experiment(config: Dict[str, Any], *, include_train: bool = True):
     model = EviSeqKD(config)
     data = config["data"]
     limits = config.get("limits", {})
-    teacher_cache = _load_teacher_cache(config) if include_train else None
+    mode = _distillation_mode(config)
     train_dataset = None
     if include_train:
-        assert teacher_cache is not None
-        train_dataset = KDText2TextDataset(
-            resolve_input_path(str(data["train_file"]), config),
-            encoder_tokenizer,
-            decoder_tokenizer,
-            data,
-            max_examples=int(limits.get("max_train_examples", 0)),
-            precompute_evidence=bool(data.get("precompute_evidence", True)),
-            teacher_cache=teacher_cache,
-            require_teacher_cache=True,
-        )
+        if mode == "online":
+            teacher_tokenizer = model.online_teacher.tokenizer()
+            model.configure_online_student_tokenizer(decoder_tokenizer)
+            online_data = dict(data)
+            online_data["teacher_max_input_length"] = int(
+                config["training"]["distillation"].get(
+                    "teacher_max_input_length",
+                    data.get("max_source_length", 3072),
+                )
+            )
+            train_dataset = OnlineKDText2TextDataset(
+                resolve_input_path(str(data["train_file"]), config),
+                encoder_tokenizer,
+                decoder_tokenizer,
+                online_data,
+                max_examples=int(limits.get("max_train_examples", 0)),
+                precompute_evidence=bool(data.get("precompute_evidence", True)),
+                teacher_tokenizer=teacher_tokenizer,
+            )
+        else:
+            teacher_cache = _load_teacher_cache(config)
+            train_dataset = KDText2TextDataset(
+                resolve_input_path(str(data["train_file"]), config),
+                encoder_tokenizer,
+                decoder_tokenizer,
+                data,
+                max_examples=int(limits.get("max_train_examples", 0)),
+                precompute_evidence=bool(data.get("precompute_evidence", True)),
+                teacher_cache=teacher_cache,
+                require_teacher_cache=True,
+            )
     validation_dataset = Text2TextDataset(
         resolve_input_path(str(data["validation_file"]), config),
         encoder_tokenizer,
@@ -162,6 +205,23 @@ def build_experiment(config: Dict[str, Any], *, include_train: bool = True):
 
 def _collator(config: Dict[str, Any], encoder_tokenizer: Any, decoder_tokenizer: Any) -> KDCollator:
     base = _ORIGINAL_COLLATOR(config, encoder_tokenizer, decoder_tokenizer)
+    if _distillation_mode(config) == "online":
+        from transformers import AutoTokenizer
+
+        distillation = config["training"]["distillation"]
+        teacher_tokenizer = AutoTokenizer.from_pretrained(
+            str(distillation["teacher_model"]),
+            trust_remote_code=True,
+        )
+        if teacher_tokenizer.pad_token_id is None:
+            teacher_tokenizer.pad_token = teacher_tokenizer.eos_token
+        return OnlineKDCollator(
+            base,
+            teacher_pad_id=int(teacher_tokenizer.pad_token_id),
+            teacher_max_input_length=int(
+                distillation.get("teacher_max_input_length", config["data"]["max_source_length"])
+            ),
+        )
     return KDCollator(
         base,
         decoder_pad_id=int(decoder_tokenizer.pad_token_id),

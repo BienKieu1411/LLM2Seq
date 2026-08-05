@@ -6,8 +6,37 @@ from typing import Any, Dict, Iterable, List, Mapping
 
 import torch
 
+from .build_cache import _teacher_prompt
 from .cache import TeacherCache, TeacherRecord, source_hash, tokenizer_fingerprint
 from .student.data.dataset import Text2TextDataset, clean_text, decoder_seed_ids
+
+
+class OnlineKDText2TextDataset(Text2TextDataset):
+    """Attach a teacher prompt, but never a pre-generated teacher target."""
+
+    def __init__(self, *args: Any, teacher_tokenizer: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.teacher_tokenizer = teacher_tokenizer
+        self.teacher_max_input_length = int(
+            self.config.get("teacher_max_input_length", self.config.get("max_source_length", 3072))
+        )
+
+    def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
+        item = super().__getitem__(index)
+        row = self.examples[index]
+        prompt = _teacher_prompt(row, self.config, self.teacher_tokenizer)
+        encoded = self.teacher_tokenizer(
+            prompt,
+            add_special_tokens=False,
+            truncation=True,
+            max_length=self.teacher_max_input_length,
+        )
+        teacher_ids = [int(token_id) for token_id in encoded["input_ids"]]
+        if not teacher_ids:
+            raise ValueError(f"Teacher prompt tokenization is empty at training index {index}")
+        item["teacher_input_ids"] = torch.tensor(teacher_ids, dtype=torch.long)
+        item["teacher_attention_mask"] = torch.ones(len(teacher_ids), dtype=torch.long)
+        return item
 
 
 class KDText2TextDataset(Text2TextDataset):
@@ -530,4 +559,46 @@ class KDCollator:
         unknown = teacher_keys_present - allowed_teacher_keys
         if unknown:
             raise ValueError(f"Unsupported teacher KD fields: {sorted(unknown)}")
+        return batch
+
+
+class OnlineKDCollator:
+    """Left-pad teacher prompts and delegate student tensors to EviSeq."""
+
+    def __init__(self, base_collator: Any, teacher_pad_id: int, teacher_max_input_length: int):
+        self.base_collator = base_collator
+        self.teacher_pad_id = int(teacher_pad_id)
+        self.teacher_max_input_length = int(teacher_max_input_length)
+
+    @staticmethod
+    def _left_pad(values: Iterable[torch.Tensor], length: int, fill: int) -> torch.Tensor:
+        rows = []
+        for value in values:
+            value = value[-length:]
+            padding = torch.full((length - value.numel(),), int(fill), dtype=value.dtype)
+            rows.append(torch.cat([padding, value]))
+        return torch.stack(rows)
+
+    def __call__(self, features: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+        required = {"teacher_input_ids", "teacher_attention_mask"}
+        if not any(required.intersection(item) for item in features):
+            return self.base_collator(features)
+        if not all(required.issubset(item) for item in features):
+            raise ValueError("Every online-KD training item must contain a teacher prompt")
+        student_features = [{key: value for key, value in item.items() if key not in required} for item in features]
+        batch = self.base_collator(student_features)
+        length = min(
+            self.teacher_max_input_length,
+            max(int(item["teacher_input_ids"].numel()) for item in features),
+        )
+        batch["teacher_input_ids"] = self._left_pad(
+            (item["teacher_input_ids"] for item in features),
+            length,
+            self.teacher_pad_id,
+        )
+        batch["teacher_attention_mask"] = self._left_pad(
+            (item["teacher_attention_mask"] for item in features),
+            length,
+            0,
+        )
         return batch

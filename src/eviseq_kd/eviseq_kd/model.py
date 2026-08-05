@@ -8,11 +8,12 @@ import torch
 import torch.nn as nn
 
 from .kd import logits_kl_loss, top1_agreement, topk_distillation_loss
+from .online_teacher import OnlineTeacher
 from .student.modeling.architecture import EviSeq
 
 
 class EviSeqKD(nn.Module):
-    """Add offline sequence KD and optional top-k logit KD around the bundled EviSeq graph.
+    """Add online sequence KD and optional top-k logit KD around EviSeq.
 
     Gold batches use the complete original EviSeq objective, including its
     evidence-focused contrastive loss.  The pseudo branch uses CE only, so
@@ -24,6 +25,18 @@ class EviSeqKD(nn.Module):
         self.base = EviSeq(config)
         distillation = config.get("training", {}).get("distillation", {})
         self.distillation_enabled = bool(distillation.get("enabled", False))
+        configured_mode = distillation.get("mode")
+        self.distillation_mode = (
+            str(
+                configured_mode
+                if configured_mode is not None
+                else ("offline" if str(distillation.get("cache_path", "")).strip() else "online")
+            )
+            .strip()
+            .lower()
+        )
+        if self.distillation_mode not in {"online", "offline"}:
+            raise ValueError("training.distillation.mode must be 'online' or 'offline'")
         self.sequence_enabled = bool(distillation.get("sequence_enabled", True))
         self.sequence_weight = float(distillation.get("sequence_weight", 0.0)) if self.sequence_enabled else 0.0
         self.logit_enabled = bool(distillation.get("logit_enabled", False))
@@ -40,6 +53,19 @@ class EviSeqKD(nn.Module):
             raise ValueError("training.distillation.temperature must be positive")
         if not 0.0 <= self.logit_path_mix <= 1.0:
             raise ValueError("training.distillation.logit_path_mix must be between 0 and 1")
+        self._online_teacher: OnlineTeacher | None = None
+        if self.distillation_enabled and self.distillation_mode == "online":
+            self._online_teacher = OnlineTeacher(config)
+
+    @property
+    def online_teacher(self) -> OnlineTeacher:
+        if self._online_teacher is None:
+            raise RuntimeError("This EviSeq-KD instance is not configured for online distillation")
+        return self._online_teacher
+
+    def configure_online_student_tokenizer(self, tokenizer: Any) -> None:
+        if self._online_teacher is not None:
+            self._online_teacher.configure_student_tokenizer(tokenizer)
 
     def forward(
         self,
@@ -62,9 +88,62 @@ class EviSeqKD(nn.Module):
         teacher_gold_topk_log_normalizers: Optional[torch.Tensor] = None,
         teacher_gold_kd_mask: Optional[torch.Tensor] = None,
         teacher_logits: Optional[torch.Tensor] = None,
+        teacher_input_ids: Optional[torch.Tensor] = None,
+        teacher_attention_mask: Optional[torch.Tensor] = None,
         compute_source_diagnostics: bool = False,
         contrastive_mode: str = "local",
     ) -> Dict[str, torch.Tensor]:
+        if contrastive_mode == "representations_only":
+            # GradCache's representation pass must never invoke the 4B
+            # teacher or the auxiliary pseudo trajectory.
+            return self.base(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                decoder_input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
+                unit_ids=unit_ids,
+                evidence_labels=evidence_labels,
+                labels=labels,
+                compute_source_diagnostics=compute_source_diagnostics,
+                contrastive_mode=contrastive_mode,
+                return_full_logits=False,
+            )
+
+        if self.training and self.distillation_enabled and self.distillation_mode == "online" and labels is not None:
+            externally_supplied = any(
+                value is not None
+                for value in (
+                    pseudo_decoder_input_ids,
+                    pseudo_labels,
+                    teacher_logits,
+                    teacher_topk_ids,
+                    teacher_gold_topk_ids,
+                )
+            )
+            if externally_supplied:
+                raise ValueError(
+                    "Online KD generates teacher targets inside the training step; do not supply cached KD fields"
+                )
+            if teacher_input_ids is None or teacher_attention_mask is None:
+                raise ValueError("Online KD training batches require teacher_input_ids and teacher_attention_mask")
+            online = self.online_teacher.distill_batch(
+                teacher_input_ids=teacher_input_ids,
+                teacher_attention_mask=teacher_attention_mask,
+                gold_labels=labels,
+                output_device=input_ids.device,
+            )
+            pseudo_decoder_input_ids = online["pseudo_decoder_input_ids"]
+            pseudo_decoder_attention_mask = online["pseudo_decoder_attention_mask"]
+            pseudo_labels = online["pseudo_labels"]
+            teacher_topk_ids = online.get("teacher_topk_ids")
+            teacher_topk_logits = online.get("teacher_topk_logits")
+            teacher_topk_log_normalizers = online.get("teacher_topk_log_normalizers")
+            teacher_kd_mask = online.get("teacher_kd_mask")
+            teacher_gold_topk_ids = online.get("teacher_gold_topk_ids")
+            teacher_gold_topk_logits = online.get("teacher_gold_topk_logits")
+            teacher_gold_topk_log_normalizers = online.get("teacher_gold_topk_log_normalizers")
+            teacher_gold_kd_mask = online.get("teacher_gold_kd_mask")
+
         pseudo_present = pseudo_decoder_input_ids is not None or pseudo_labels is not None
         pseudo_topk_present = any(
             value is not None for value in (teacher_topk_ids, teacher_topk_logits, teacher_topk_log_normalizers)
@@ -104,10 +183,6 @@ class EviSeqKD(nn.Module):
             contrastive_mode=contrastive_mode,
             return_full_logits=gold_topk_present and labels is not None,
         )
-        if contrastive_mode == "representations_only" and pseudo_present:
-            # The legacy GradCache pass asks only for representations.  Its
-            # extra batch fields must not trigger a second pseudo forward.
-            return gold
         if labels is None:
             if teacher_present:
                 raise ValueError("Teacher KD tensors require pseudo labels and a supervised KD forward")
