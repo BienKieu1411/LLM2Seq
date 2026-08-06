@@ -16,6 +16,10 @@ CONFIG="${CONFIG:-${RUN_DIR}/resolved_config.yaml}"
 CHECKPOINT="${CHECKPOINT:-${RUN_DIR}/last.pt}"
 OUTPUT="${OUTPUT:-${RUN_DIR}/epoch5_test_predictions.jsonl}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-96}"
+LOG_FILE="${LOG_FILE:-${RUN_DIR}/epoch5_evaluation.log}"
+
+mkdir -p "${RUN_DIR}"
+exec > >(tee -a "${LOG_FILE}") 2>&1
 
 for required in "${CONFIG}" "${CHECKPOINT}"; do
   if [[ ! -f "${required}" ]]; then
@@ -30,6 +34,7 @@ echo "Config: ${CONFIG}"
 echo "Checkpoint: ${CHECKPOINT}"
 echo "Output: ${OUTPUT}"
 echo "Batch size: ${EVAL_BATCH_SIZE}"
+echo "Log: ${LOG_FILE}"
 echo "Resume: enabled"
 
 bash eviseq/scripts/run.sh evaluate \
