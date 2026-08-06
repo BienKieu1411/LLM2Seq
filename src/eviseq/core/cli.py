@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from typing import Any, Dict
 
 from .configuration import load_config, resolve_data_path
@@ -49,6 +50,13 @@ def _dataset_summary(config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main() -> None:
+    # Evaluation and training emit useful per-batch progress at INFO level.
+    # Configure the source runner explicitly because Python's default logging
+    # threshold is WARNING, which otherwise hides the ETA/progress messages.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
     parser = argparse.ArgumentParser(prog="eviseq")
     subparsers = parser.add_subparsers(dest="command", required=True)
     _add_train(subparsers)
