@@ -27,6 +27,15 @@ from .metrics import task_scores
 LOGGER = logging.getLogger("eviseq.evaluation.engine")
 
 
+def _format_duration(seconds: float) -> str:
+    """Render an ETA without exposing fractional seconds in progress logs."""
+
+    total = max(0, int(round(float(seconds))))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
 def _diagnostics(predictions: List[str], references: List[str], sources: List[str]) -> Dict[str, float]:
     prediction_lengths = [len(value.split()) for value in predictions]
     reference_lengths = [len(value.split()) for value in references]
@@ -131,6 +140,7 @@ def evaluate(
     # Stream completed batches so long evaluations remain observable and a
     # partial prediction file survives an interruption.
     output_handle = output.open("w", encoding="utf-8")
+    generation_started = time.perf_counter()
     bf16 = device.type == "cuda" and bool(config.get("training", {}).get("bf16", True))
 
     def autocast():
@@ -206,8 +216,19 @@ def evaluate(
                 + "\n"
             )
         output_handle.flush()
-        LOGGER.info("evaluation progress: %d/%d predictions written", cursor + len(batch_rows), len(rows))
         cursor += len(batch_rows)
+        elapsed = time.perf_counter() - generation_started
+        rate = cursor / max(elapsed, 1e-9)
+        remaining = max(0, len(rows) - cursor)
+        eta = remaining / max(rate, 1e-9)
+        LOGGER.info(
+            "evaluation progress: %d/%d predictions written | rate=%.2f examples/s | elapsed=%s | eta=%s",
+            cursor,
+            len(rows),
+            rate,
+            _format_duration(elapsed),
+            _format_duration(eta),
+        )
     output_handle.close()
     metrics: Dict[str, Any] = {
         **task_scores(predictions, references, config.get("task", {})),
