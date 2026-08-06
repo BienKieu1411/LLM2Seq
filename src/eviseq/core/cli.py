@@ -56,6 +56,7 @@ def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        force=True,
     )
     parser = argparse.ArgumentParser(prog="eviseq")
     subparsers = parser.add_subparsers(dest="command", required=True)

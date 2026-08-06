@@ -288,14 +288,16 @@ def evaluate(
         rate = max(0, completed - len(resume_records)) / max(elapsed, 1e-9)
         remaining = max(0, len(rows) - completed)
         eta = remaining / max(rate, 1e-9)
-        LOGGER.info(
-            "evaluation progress: %d/%d predictions written | rate=%.2f examples/s | elapsed=%s | eta=%s",
-            completed,
-            len(rows),
-            rate,
-            _format_duration(elapsed),
-            _format_duration(eta),
+        progress = (
+            f"evaluation progress: {completed}/{len(rows)} predictions written | "
+            f"rate={rate:.2f} examples/s | elapsed={_format_duration(elapsed)} | "
+            f"eta={_format_duration(eta)}"
         )
+        LOGGER.info(progress)
+        # Keep long evaluations observable even when an embedding application
+        # has already installed a WARNING-only logging handler. The explicit
+        # flush is also required for live `tee`/`tail -f` monitoring.
+        print(progress, flush=True)
     output_handle.close()
     metrics: Dict[str, Any] = {
         **task_scores(predictions, references, config.get("task", {})),
