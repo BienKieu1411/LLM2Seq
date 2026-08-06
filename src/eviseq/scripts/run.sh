@@ -20,6 +20,7 @@ export PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 WIKI_CONFIG="$PROJECT_ROOT/configs/tasks/wikilingua.yaml"
 CNN_CONFIG="$PROJECT_ROOT/configs/tasks/cnndm.yaml"
 PUBMED_CONFIG="$PROJECT_ROOT/configs/tasks/pubmed.yaml"
+ARXIV_CONFIG="$PROJECT_ROOT/configs/tasks/arxiv.yaml"
 PPLX_PUBMED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed.yaml"
 SMOKE_CONFIG="$PROJECT_ROOT/configs/tasks/smoke.yaml"
 
@@ -125,6 +126,9 @@ case "$MODE" in
   pubmed)
     train_and_validate "$PUBMED_CONFIG" "$@"
     ;;
+  arxiv)
+    train_and_validate "$ARXIV_CONFIG" "$@"
+    ;;
   pplx-pubmed)
     train_and_validate "$PPLX_PUBMED_CONFIG" "$@"
     ;;
@@ -172,6 +176,9 @@ case "$MODE" in
   evaluate-pubmed-test)
     evaluate_test "$PUBMED_CONFIG" "$@"
     ;;
+  evaluate-arxiv-test)
+    evaluate_test "$ARXIV_CONFIG" "$@"
+    ;;
   evaluate-pplx-pubmed-test)
     evaluate_test "$PPLX_PUBMED_CONFIG" "$@"
     ;;
@@ -206,6 +213,13 @@ case "$MODE" in
       --raw-copy-dir "$PROJECT_ROOT/datasets/raw/pubmed" \
       --output-dir "$PROJECT_ROOT/datasets/pubmed"
     ;;
+  prepare-arxiv)
+    SOURCE_DIR="$(absolute_path "${1:?Pass the local ArXiv directory}")"
+    "$PYTHON_BIN" -m core.data.arxiv \
+      --input-dir "$SOURCE_DIR" \
+      --raw-copy-dir "$PROJECT_ROOT/datasets/raw/arxiv" \
+      --output-dir "$PROJECT_ROOT/datasets/arxiv"
+    ;;
   *)
     cat <<'EOF'
 EviSeq (runs directly from source; no local package install required)
@@ -216,6 +230,7 @@ EviSeq (runs directly from source; no local package install required)
   bash eviseq/scripts/run.sh test
   bash eviseq/scripts/run.sh smoke --overwrite-output-dir
   bash eviseq/scripts/run.sh wiki --overwrite-output-dir
+  bash eviseq/scripts/run.sh arxiv --overwrite-output-dir
   bash eviseq/scripts/run.sh pplx --overwrite-output-dir
   bash eviseq/scripts/run.sh nemotron --overwrite-output-dir
   bash eviseq/scripts/run.sh c0|c2|c3-no-cl --overwrite-output-dir
@@ -225,12 +240,15 @@ EviSeq (runs directly from source; no local package install required)
 Data and other datasets:
   bash eviseq/scripts/run.sh prepare-cnndm /absolute/path/to/cnndm
   bash eviseq/scripts/run.sh prepare-pubmed /absolute/path/to/pubmed
+  bash eviseq/scripts/run.sh prepare-arxiv /absolute/path/to/arxiv
   bash eviseq/scripts/run.sh cnndm --overwrite-output-dir
   bash eviseq/scripts/run.sh pubmed --overwrite-output-dir
+  bash eviseq/scripts/run.sh arxiv --overwrite-output-dir
   bash eviseq/scripts/run.sh pplx-pubmed --overwrite-output-dir
 
 Evaluation commands:
   bash eviseq/scripts/run.sh evaluate-wiki-test
+  bash eviseq/scripts/run.sh evaluate-arxiv-test --batch-size 96
   bash eviseq/scripts/run.sh evaluate-test CONFIG.yaml --batch-size 8
   bash eviseq/scripts/run.sh rouge155 runs/.../last_test_predictions.jsonl --details
   bash eviseq/scripts/run.sh bootstrap CANDIDATE_ROUGE155 BASELINE_ROUGE155 OUTPUT_JSON

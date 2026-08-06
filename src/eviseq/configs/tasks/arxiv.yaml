@@ -1,0 +1,41 @@
+_base_: ../base.yaml
+
+experiment:
+  name: eviseq_arxiv_qwen3_evidence
+  output_dir: runs/eviseq/arxiv_qwen3_evidence
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 3
+  batch_size: 96
+  gradient_accumulation_steps: 1
+  length_bucketing: true
+  length_bucket_multiplier: 50
+  num_workers: 8
+  validation_batch_size: 2
+
+data:
+  train_file: datasets/arxiv/train.jsonl
+  validation_file: datasets/arxiv/validation.jsonl
+  test_file: datasets/arxiv/test.jsonl
+  source_prefix: "Summarize the following scientific article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
+  decoder_instruction: "Write a concise, factual abstract of the encoded scientific article. Preserve the key objective, methods, results, and conclusion; do not add information."
+  decoder_prefix: "Abstract:\n"
+  clean_wikihow_metadata: false
+  max_source_length: 4096
+  max_target_length: 512
+  oracle_max_units: 12
+  precompute_evidence: false
+
+generation:
+  batch_size: 64
+  min_new_tokens: 32
+  max_new_tokens: 512
+
+benchmark:
+  _replace_: true
+  paper:
+    name: T5Gemma2-1B-1B-full-ArXiv
+    model_id: google/t5gemma-2-1b-1b
+    backend: Perl ROUGE-1.5.5 via pyrouge
+    status: pending_baseline_artifact

@@ -40,7 +40,13 @@ def _records_with_unique_ids(path: Path, split: str) -> Iterator[tuple[str, str,
         yield identifier, source, target
 
 
-def convert_split(input_path: Path, output_path: Path, split: str) -> Dict[str, Any]:
+def convert_split(
+    input_path: Path,
+    output_path: Path,
+    split: str,
+    *,
+    dataset_name: str = "pubmed",
+) -> Dict[str, Any]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")
     identifiers: set[str] = set()
@@ -60,7 +66,7 @@ def convert_split(input_path: Path, output_path: Path, split: str) -> Dict[str, 
                             "source": source,
                             "target": target,
                             "task": "summarization",
-                            "dataset": "pubmed",
+                            "dataset": dataset_name,
                         },
                         ensure_ascii=False,
                     )
@@ -91,19 +97,25 @@ def copy_raw_file(source: Path, raw_copy_dir: Path) -> Path:
     return destination
 
 
-def prepare(input_dir: Path, raw_copy_dir: Path, output_dir: Path) -> Dict[str, Any]:
+def prepare(
+    input_dir: Path,
+    raw_copy_dir: Path,
+    output_dir: Path,
+    *,
+    dataset_name: str = "pubmed",
+) -> Dict[str, Any]:
     input_dir = input_dir.expanduser().resolve()
     raw_copy_dir = raw_copy_dir.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
     if not input_dir.is_dir():
         raise NotADirectoryError(input_dir)
 
-    report: Dict[str, Any] = {"dataset": "pubmed", "input_dir": str(input_dir), "splits": {}}
+    report: Dict[str, Any] = {"dataset": dataset_name, "input_dir": str(input_dir), "splits": {}}
     for split in ("train", "validation", "test"):
         source_path = find_split(input_dir, split)
         copied_path = copy_raw_file(source_path, raw_copy_dir)
         output_path = output_dir / ("validation.jsonl" if split == "validation" else f"{split}.jsonl")
-        stats = convert_split(copied_path, output_path, split)
+        stats = convert_split(copied_path, output_path, split, dataset_name=dataset_name)
         stats.pop("ids")
         report["splits"][split] = {
             **stats,

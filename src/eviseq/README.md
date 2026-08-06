@@ -199,7 +199,16 @@ bash eviseq/scripts/run.sh smoke --overwrite-output-dir
 bash eviseq/scripts/run.sh wiki --overwrite-output-dir
 bash eviseq/scripts/run.sh cnndm --overwrite-output-dir
 bash eviseq/scripts/run.sh pubmed --overwrite-output-dir
+bash eviseq/scripts/run.sh arxiv --overwrite-output-dir
 bash eviseq/scripts/run.sh test
+```
+
+For PubMed/ArXiv-style `*.label.jsonl` files (`text` and `summary` fields),
+prepare the data first:
+
+```bash
+bash eviseq/scripts/run.sh prepare-pubmed /absolute/path/to/pubmed
+bash eviseq/scripts/run.sh prepare-arxiv /absolute/path/to/arxiv
 ```
 
 The ready-to-run PubMed GPU queue is isolated in `scripts/gpu_0.sh` instead

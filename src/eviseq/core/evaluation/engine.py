@@ -125,8 +125,12 @@ def evaluate(
     predictions: List[str] = []
     references: List[str] = []
     sources: List[str] = []
-    records: List[Dict[str, Any]] = []
     latencies: List[float] = []
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Stream completed batches so long evaluations remain observable and a
+    # partial prediction file survives an interruption.
+    output_handle = output.open("w", encoding="utf-8")
     bf16 = device.type == "cuda" and bool(config.get("training", {}).get("bf16", True))
 
     def autocast():
@@ -190,14 +194,21 @@ def evaluate(
         sources.extend(batch_sources)
         latencies.extend([elapsed / len(batch_rows)] * len(batch_rows))
         for row, prediction, reference in zip(batch_rows, decoded, batch_references):
-            records.append(
-                {
-                    "id": row.get("id"),
-                    "prediction": prediction.strip(),
-                    "reference": reference,
-                }
+            output_handle.write(
+                json.dumps(
+                    {
+                        "id": row.get("id"),
+                        "prediction": prediction.strip(),
+                        "reference": reference,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
             )
+        output_handle.flush()
+        LOGGER.info("evaluation progress: %d/%d predictions written", cursor + len(batch_rows), len(rows))
         cursor += len(batch_rows)
+    output_handle.close()
     metrics: Dict[str, Any] = {
         **task_scores(predictions, references, config.get("task", {})),
         **_diagnostics(predictions, references, sources),
@@ -221,11 +232,6 @@ def evaluate(
             name: round(float(metrics[name]) - float(benchmark[name]), 4) for name in ("rouge1", "rouge2", "rougeL")
         }
         metrics["rouge2_target_reached"] = float(metrics["rouge2"]) >= float(benchmark["rouge2"])
-    output = Path(output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("w", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     metrics_path = output.with_suffix(".metrics.json")
     metrics_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
     if "gap_to_t5gemma" in metrics:

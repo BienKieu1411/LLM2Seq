@@ -21,24 +21,63 @@ elif [[ -z "${PYTHON_BIN}" ]]; then
 fi
 export PYTHON_BIN
 
-CONFIG="${PROJECT_ROOT}/configs/tasks/pubmed_continue_epoch5.yaml"
 CHECKPOINT="${EVISEQ_CHECKPOINT:-${PROJECT_ROOT}/runs/eviseq/pubmed_qwen3_evidence/epoch_004.pt}"
+SOURCE_RUN_DIR="$(cd "$(dirname "${CHECKPOINT}")" && pwd -P)"
+SOURCE_CONFIG="${EVISEQ_SOURCE_CONFIG:-${SOURCE_RUN_DIR}/resolved_config.yaml}"
 OUTPUT_DIR="${EVISEQ_CONTINUE_OUTPUT_DIR:-${PROJECT_ROOT}/runs/eviseq/pubmed_continue_epoch5}"
 EVAL_BATCH_SIZE="${EVISEQ_EVAL_BATCH_SIZE:-96}"
+TRAIN_BATCH_SIZE="${EVISEQ_TRAIN_BATCH_SIZE:-}"
 PREDICTIONS="${OUTPUT_DIR}/epoch5_test_predictions.jsonl"
 
 if [[ ! -f "${CHECKPOINT}" ]]; then
   echo "ERROR: checkpoint not found: ${CHECKPOINT}" >&2
   exit 1
 fi
+if [[ ! -f "${SOURCE_CONFIG}" ]]; then
+  echo "ERROR: source resolved config not found: ${SOURCE_CONFIG}" >&2
+  echo "Set EVISEQ_SOURCE_CONFIG to the resolved_config.yaml matching epoch_004.pt." >&2
+  exit 1
+fi
+
+# Keep the exact training batch/model/data settings of the completed run.
+# Only the stage duration and output directory are changed for the continuation.
+RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/eviseq-continue.XXXXXX")"
+RUNTIME_CONFIG="${RUNTIME_DIR}/resolved_continue.yaml"
+cleanup() { rm -rf "${RUNTIME_DIR}"; }
+trap cleanup EXIT
+"${PYTHON_BIN}" - "${SOURCE_CONFIG}" "${RUNTIME_CONFIG}" "${OUTPUT_DIR}" "${TRAIN_BATCH_SIZE}" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+output_dir = Path(sys.argv[3])
+requested_batch_size = sys.argv[4].strip()
+config = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+config.setdefault("experiment", {})["name"] = "eviseq_pubmed_continue_epoch5"
+config["experiment"]["output_dir"] = str(output_dir)
+training = config.setdefault("training", {})
+training["interface_warmup_epochs"] = 0
+training["full_finetune_epochs"] = 1
+if requested_batch_size:
+    training["batch_size"] = int(requested_batch_size)
+objectives = config.setdefault("objectives", {})
+objectives["evidence_contrastive_warmup_epochs"] = 0
+destination.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+print(f"source_config={source}")
+print(f"train_batch_size={training.get('batch_size')}")
+print(f"gradient_accumulation_steps={training.get('gradient_accumulation_steps')}")
+PY
 
 echo "=== EviSeq continuation: epoch_004 -> one full epoch ==="
 echo "checkpoint: ${CHECKPOINT}"
+echo "source config: ${SOURCE_CONFIG}"
 echo "output:     ${OUTPUT_DIR}"
 echo "eval batch: ${EVAL_BATCH_SIZE}"
 
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
-  bash "${RUNNER}" train "${CONFIG}" \
+  bash "${RUNNER}" train "${RUNTIME_CONFIG}" \
     --init-checkpoint "${CHECKPOINT}" \
     --output-dir "${OUTPUT_DIR}" \
     --overwrite-output-dir

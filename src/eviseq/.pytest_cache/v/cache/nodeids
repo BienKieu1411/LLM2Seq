@@ -1,0 +1,7 @@
+[
+  "tests/test_eviseq.py::test_all_configs_load_without_model_access",
+  "tests/test_eviseq.py::test_dataset_recipes_share_the_same_model_graph",
+  "tests/test_prepare_arxiv.py::test_prepare_arxiv_reuses_text_summary_schema",
+  "tests/test_prepare_pubmed.py::test_prepare_pubmed_allows_reused_ids_across_splits",
+  "tests/test_prepare_pubmed.py::test_prepare_pubmed_is_self_contained_and_deterministic"
+]

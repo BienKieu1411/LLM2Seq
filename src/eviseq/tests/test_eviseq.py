@@ -47,7 +47,8 @@ def test_all_configs_load_without_model_access() -> None:
 
 def test_dataset_recipes_share_the_same_model_graph() -> None:
     configs = [
-        load_config(ROOT / "configs" / "tasks" / name) for name in ("wikilingua.yaml", "cnndm.yaml", "pubmed.yaml")
+        load_config(ROOT / "configs" / "tasks" / name)
+        for name in ("wikilingua.yaml", "cnndm.yaml", "pubmed.yaml", "arxiv.yaml")
     ]
     assert all(_architecture(config) == _architecture(configs[0]) for config in configs[1:])
 
