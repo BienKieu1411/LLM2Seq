@@ -31,6 +31,7 @@ def evaluate(
     split: str = "validation",
     max_samples: int = 0,
     batch_size: int = 0,
+    resume: bool = False,
 ) -> Dict[str, Any]:
     if split not in {"validation", "test"}:
         raise ValueError("split must be validation or test")
@@ -42,7 +43,7 @@ def evaluate(
     if int(batch_size) > 0:
         os.environ["EVISEQ_EVAL_BATCH_SIZE"] = str(int(batch_size))
     try:
-        metrics = stable.evaluate(config_path, checkpoint_path, output_path, max_samples)
+        metrics = stable.evaluate(config_path, checkpoint_path, output_path, max_samples, resume=resume)
     finally:
         stable.load_config = original_loader
         if previous_batch_override is None:
@@ -65,6 +66,7 @@ def main() -> None:
     parser.add_argument("--split", choices=("validation", "test"), default="validation")
     parser.add_argument("--max-samples", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=0)
+    parser.add_argument("--resume", action="store_true", help="Resume from completed JSONL predictions at --output")
     args = parser.parse_args()
     evaluate(
         args.config,
@@ -73,6 +75,7 @@ def main() -> None:
         split=args.split,
         max_samples=args.max_samples,
         batch_size=args.batch_size,
+        resume=args.resume,
     )
 
 

@@ -250,6 +250,7 @@ Evaluation commands:
   bash eviseq/scripts/run.sh evaluate-wiki-test
   bash eviseq/scripts/run.sh evaluate-arxiv-test --batch-size 96
   bash eviseq/scripts/run.sh evaluate-test CONFIG.yaml --batch-size 8
+  # Add --resume to continue an interrupted JSONL evaluation.
   bash eviseq/scripts/run.sh rouge155 runs/.../last_test_predictions.jsonl --details
   bash eviseq/scripts/run.sh bootstrap CANDIDATE_ROUGE155 BASELINE_ROUGE155 OUTPUT_JSON
 

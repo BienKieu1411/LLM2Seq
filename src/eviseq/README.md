@@ -165,6 +165,18 @@ python3 run.py evaluate \
   --split test
 ```
 
+Evaluation writes each completed batch immediately. If an evaluation is
+interrupted, reuse the same output path with `--resume`; completed IDs are
+skipped and metrics are recomputed over old plus new predictions:
+
+```bash
+python3 run.py evaluate \
+  --config runs/eviseq/my_task/resolved_config.yaml \
+  --checkpoint runs/eviseq/my_task/last.pt \
+  --output runs/eviseq/my_task/test_predictions.jsonl \
+  --split test --batch-size 96 --resume
+```
+
 Training has two stages: interface warm-up and full fine-tuning. Set
 `training.interface_warmup_epochs: 0` to start directly with full fine-tuning.
 The canonical recipe saves `epoch_XXX.pt` after every epoch, selects `best.pt`

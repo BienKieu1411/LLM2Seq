@@ -27,6 +27,7 @@ def _add_evaluate(subparsers: Any) -> None:
     parser.add_argument("--split", choices=("validation", "test"), default="validation")
     parser.add_argument("--max-samples", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=0)
+    parser.add_argument("--resume", action="store_true", help="Resume from completed JSONL predictions at --output")
 
 
 def _dataset_summary(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -78,6 +79,7 @@ def main() -> None:
             split=args.split,
             max_samples=args.max_samples,
             batch_size=args.batch_size,
+            resume=args.resume,
         )
     elif args.command == "inspect":
         print(json.dumps(load_config(args.config), ensure_ascii=False, indent=2))

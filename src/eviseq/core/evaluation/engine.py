@@ -36,6 +36,57 @@ def _format_duration(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
+def _row_id(row: Dict[str, Any]) -> str:
+    value = row.get("id")
+    if value is None or str(value).strip() == "":
+        raise ValueError("Evaluation resume requires every dataset row to have a non-empty id")
+    return str(value)
+
+
+def _load_resume_records(
+    output: Path,
+    rows: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], set[str]]:
+    """Read completed JSONL records and discard an incomplete trailing line."""
+
+    if not output.is_file() or output.stat().st_size == 0:
+        return [], set()
+
+    row_ids = {_row_id(row) for row in rows}
+    records: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    valid_end = 0
+    with output.open("rb") as handle:
+        while True:
+            line = handle.readline()
+            if not line:
+                break
+            next_end = handle.tell()
+            try:
+                record = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                break
+            if not isinstance(record, dict):
+                break
+            record_id = record.get("id")
+            if record_id is None or str(record_id) not in row_ids:
+                raise ValueError("Cannot resume evaluation: prediction file contains an unknown or empty id")
+            record_id = str(record_id)
+            if record_id in seen:
+                raise ValueError(f"Cannot resume evaluation: duplicate prediction id {record_id!r}")
+            if "prediction" not in record or "reference" not in record:
+                raise ValueError("Cannot resume evaluation: every record needs prediction and reference fields")
+            records.append(record)
+            seen.add(record_id)
+            valid_end = next_end
+
+    if valid_end < output.stat().st_size:
+        # A process killed during a write may leave a partial final JSON line.
+        with output.open("r+b") as handle:
+            handle.truncate(valid_end)
+    return records, seen
+
+
 def _diagnostics(predictions: List[str], references: List[str], sources: List[str]) -> Dict[str, float]:
     prediction_lengths = [len(value.split()) for value in predictions]
     reference_lengths = [len(value.split()) for value in references]
@@ -108,6 +159,7 @@ def evaluate(
     checkpoint_path: str,
     output_path: str,
     max_samples: int = 0,
+    resume: bool = False,
 ) -> Dict[str, Any]:
     checkpoint = Path(checkpoint_path)
     config = load_config(config_path)
@@ -131,15 +183,21 @@ def evaluate(
         os.environ.get("EVISEQ_EVAL_BATCH_SIZE", "<none>"),
     )
     decoder_seed = decoder_seed_ids(decoder_tokenizer, data)
-    predictions: List[str] = []
-    references: List[str] = []
-    sources: List[str] = []
-    latencies: List[float] = []
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
+    resume_records: List[Dict[str, Any]] = []
+    processed_ids: set[str] = set()
+    if resume:
+        resume_records, processed_ids = _load_resume_records(output, rows)
+
+    row_by_id = {_row_id(row): row for row in rows}
+    predictions: List[str] = [str(record["prediction"]).strip() for record in resume_records]
+    references: List[str] = [str(record["reference"]).strip() for record in resume_records]
+    sources: List[str] = [str(row_by_id[str(record["id"])]["source"]) for record in resume_records]
+    latencies: List[float] = []
     # Stream completed batches so long evaluations remain observable and a
     # partial prediction file survives an interruption.
-    output_handle = output.open("w", encoding="utf-8")
+    output_handle = output.open("a" if resume else "w", encoding="utf-8")
     generation_started = time.perf_counter()
     bf16 = device.type == "cuda" and bool(config.get("training", {}).get("bf16", True))
 
@@ -148,10 +206,18 @@ def evaluate(
             return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
         return nullcontext()
 
+    pending_rows = [row for row in rows if _row_id(row) not in processed_ids]
     cursor = 0
     active_batch_size = batch_size
-    while cursor < len(rows):
-        batch_rows = rows[cursor : cursor + active_batch_size]
+    if resume_records:
+        LOGGER.info(
+            "resuming evaluation: %d/%d predictions already present; %d remaining",
+            len(resume_records),
+            len(rows),
+            len(pending_rows),
+        )
+    while cursor < len(pending_rows):
+        batch_rows = pending_rows[cursor : cursor + active_batch_size]
         input_ids = attention_mask = unit_ids = generated = None
         try:
             input_ids, attention_mask, unit_ids, batch_sources, batch_references = _pad_source(
@@ -190,7 +256,7 @@ def evaluate(
             active_batch_size = max(1, active_batch_size // 2)
             LOGGER.warning(
                 "CUDA OOM at evaluation example %d; retrying with batch=%d (was %d)",
-                cursor,
+                len(resume_records) + cursor,
                 active_batch_size,
                 previous_batch_size,
             )
@@ -218,12 +284,13 @@ def evaluate(
         output_handle.flush()
         cursor += len(batch_rows)
         elapsed = time.perf_counter() - generation_started
-        rate = cursor / max(elapsed, 1e-9)
-        remaining = max(0, len(rows) - cursor)
+        completed = len(resume_records) + cursor
+        rate = max(0, completed - len(resume_records)) / max(elapsed, 1e-9)
+        remaining = max(0, len(rows) - completed)
         eta = remaining / max(rate, 1e-9)
         LOGGER.info(
             "evaluation progress: %d/%d predictions written | rate=%.2f examples/s | elapsed=%s | eta=%s",
-            cursor,
+            completed,
             len(rows),
             rate,
             _format_duration(elapsed),
@@ -236,9 +303,14 @@ def evaluate(
         "checkpoint": str(checkpoint),
         "checkpoint_role": payload.get("checkpoint_role"),
         "task_metrics": list(config.get("task", {}).get("metrics", ["rouge"])),
+        "resumed_examples": len(resume_records),
+        "generated_examples_this_run": len(pending_rows),
         "latency_seconds_mean": round(statistics.mean(latencies), 6) if latencies else 0.0,
         "decode_elapsed_seconds": round(sum(latencies), 3),
-        "decode_examples_per_second": round(len(rows) / max(1e-9, sum(latencies)), 6),
+        "decode_examples_per_second": round(
+            len(pending_rows) / max(1e-9, sum(latencies)) if pending_rows else 0.0,
+            6,
+        ),
         "encoder_name": config["model"]["encoder_name"],
         "decoder_name": config["model"]["decoder_name"],
         "final_graph": "one_encoder_one_adapter_one_decoder",
@@ -282,8 +354,9 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-samples", type=int, default=0)
+    parser.add_argument("--resume", action="store_true", help="Resume from completed JSONL predictions at --output")
     args = parser.parse_args()
-    evaluate(args.config, args.checkpoint, args.output, args.max_samples)
+    evaluate(args.config, args.checkpoint, args.output, args.max_samples, resume=args.resume)
 
 
 if __name__ == "__main__":
