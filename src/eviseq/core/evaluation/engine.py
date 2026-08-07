@@ -210,12 +210,12 @@ def evaluate(
     cursor = 0
     active_batch_size = batch_size
     if resume_records:
-        LOGGER.info(
-            "resuming evaluation: %d/%d predictions already present; %d remaining",
-            len(resume_records),
-            len(rows),
-            len(pending_rows),
+        resume_message = (
+            f"resuming evaluation: {len(resume_records)}/{len(rows)} predictions already present; "
+            f"{len(pending_rows)} remaining"
         )
+        LOGGER.info(resume_message)
+        print(resume_message, flush=True)
     while cursor < len(pending_rows):
         batch_rows = pending_rows[cursor : cursor + active_batch_size]
         input_ids = attention_mask = unit_ids = generated = None
