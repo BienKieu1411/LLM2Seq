@@ -1,0 +1,24 @@
+_base_: ../tasks/pubmed.yaml
+
+# Isolated Qwen3 -> Qwen3 experiment. This never reuses the default PubMed
+# output directory, so it cannot overwrite the Qwen-Embedding run.
+experiment:
+  name: eviseq_pubmed_qwen3_to_qwen3
+  output_dir: runs/eviseq/pubmed_qwen3_to_qwen3
+
+model:
+  encoder_name: Qwen/Qwen3-0.6B
+  decoder_name: Qwen/Qwen3-0.6B
+  encoder_hidden_size: 1024
+  decoder_hidden_size: 1024
+  encoder_attn_implementation: sdpa
+  encoder_trust_remote_code: true
+
+native_attention:
+  _replace_: true
+  backend: qwen_native
+  variant: evidence
+  implementation_revision: selective_evidence_v2
+  bidirectional_layer_count: 6
+  evidence_key_bias_scale: 1.0
+  evidence_view_gate_init: 0.01
