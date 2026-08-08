@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -50,6 +51,7 @@ def convert_split(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")
     identifiers: set[str] = set()
+    source_hashes: set[str] = set()
     kept = 0
     skipped = 0
     try:
@@ -59,6 +61,7 @@ def convert_split(
                     skipped += 1
                     continue
                 identifiers.add(identifier)
+                source_hashes.add(hashlib.sha256(source.encode("utf-8")).hexdigest())
                 output.write(
                     json.dumps(
                         {
@@ -79,7 +82,7 @@ def convert_split(
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
-    return {"kept": kept, "skipped": skipped, "ids": identifiers}
+    return {"kept": kept, "skipped": skipped, "ids": identifiers, "source_hashes": source_hashes}
 
 
 def copy_raw_file(source: Path, raw_copy_dir: Path) -> Path:
@@ -111,12 +114,26 @@ def prepare(
         raise NotADirectoryError(input_dir)
 
     report: Dict[str, Any] = {"dataset": dataset_name, "input_dir": str(input_dir), "splits": {}}
+    seen_identifiers: set[str] = set()
+    seen_source_hashes: set[str] = set()
     for split in ("train", "validation", "test"):
         source_path = find_split(input_dir, split)
         copied_path = copy_raw_file(source_path, raw_copy_dir)
         output_path = output_dir / ("validation.jsonl" if split == "validation" else f"{split}.jsonl")
         stats = convert_split(copied_path, output_path, split, dataset_name=dataset_name)
+        duplicate_ids = sorted(stats["ids"] & seen_identifiers)
+        duplicate_sources = stats["source_hashes"] & seen_source_hashes
+        if duplicate_ids or duplicate_sources:
+            details = []
+            if duplicate_ids:
+                details.append(f"duplicate ids={duplicate_ids[:5]}")
+            if duplicate_sources:
+                details.append(f"duplicate source texts={len(duplicate_sources)}")
+            raise ValueError(f"Cross-split content leakage while preparing {dataset_name}: " + "; ".join(details))
+        seen_identifiers.update(stats["ids"])
+        seen_source_hashes.update(stats["source_hashes"])
         stats.pop("ids")
+        stats.pop("source_hashes")
         report["splits"][split] = {
             **stats,
             "source_path": str(source_path),

@@ -1,0 +1,14 @@
+_base_: pplx_pubmed_aligned.yaml
+
+# Ablation C: CE plus the existing salience loss only.  Keep the aligned
+# recipe's union salience labels and source serialization fixed; otherwise the
+# comparison would change both the evidence objective and bridge supervision.
+experiment:
+  name: eviseq_pubmed_pplx_no_evidence_cl_0_6b_to_qwen3_0_6b
+  output_dir: runs/eviseq/pubmed_pplx_no_evidence_cl_0_6b
+
+objectives:
+  use_evidence_contrastive: false
+  evidence_contrastive_weight: 0.0
+  evidence_contrastive_mode: document
+  evidence_contrastive_salience_bias: 0.0

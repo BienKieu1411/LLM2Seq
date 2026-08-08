@@ -49,7 +49,14 @@ objectives:
   evidence_contrastive_temperature: 0.07
   evidence_contrastive_projection_size: 256
   evidence_hard_negatives: 4
+  # Use a gentle set while the copied cross-attention is warming up.  A task
+  # recipe may raise this for full fine-tuning once evidence keys are useful.
+  evidence_hard_negatives_full: 4
   evidence_hard_negative_salience_boost: 0.10
+  # ``document`` is the legacy whole-summary objective.  The PubMed aligned
+  # recipe replaces it with one query/evidence set per abstract sentence.
+  evidence_contrastive_mode: document
+  evidence_contrastive_salience_bias: 0.0
   evidence_contrastive_warmup_epochs: 1
 
 training:
@@ -104,6 +111,9 @@ data:
   max_source_length: 3072
   max_target_length: 384
   oracle_max_units: 12
+  sentence_evidence_supervision: false
+  sentence_evidence_max_units: 1
+  sentence_evidence_use_union_as_salience: false
   precompute_evidence: true
   precompute_validation_evidence: false
   supervise_evidence: true

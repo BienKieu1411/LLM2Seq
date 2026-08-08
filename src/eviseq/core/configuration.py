@@ -189,10 +189,32 @@ def validate_config(config: Dict[str, Any]) -> None:
             raise ValueError("objectives.evidence_contrastive_temperature must be positive")
         if int(objectives.get("evidence_hard_negatives", 2)) <= 0:
             raise ValueError("objectives.evidence_hard_negatives must be positive")
+        if int(objectives.get("evidence_hard_negatives_full", objectives.get("evidence_hard_negatives", 2))) <= 0:
+            raise ValueError("objectives.evidence_hard_negatives_full must be positive")
         if float(objectives.get("evidence_hard_negative_salience_boost", 0.1)) < 0.0:
             raise ValueError("objectives.evidence_hard_negative_salience_boost must be non-negative")
         if int(objectives.get("evidence_contrastive_projection_size", 128)) <= 0:
             raise ValueError("objectives.evidence_contrastive_projection_size must be positive")
+        evidence_mode = str(objectives.get("evidence_contrastive_mode", "document"))
+        if evidence_mode not in {"document", "sentence_aligned"}:
+            raise ValueError("objectives.evidence_contrastive_mode must be document or sentence_aligned")
+        if float(objectives.get("evidence_contrastive_salience_bias", 0.0)) < 0.0:
+            raise ValueError("objectives.evidence_contrastive_salience_bias must be non-negative")
+        if evidence_mode == "sentence_aligned" and data.get("sentence_evidence_supervision", False) is not True:
+            raise ValueError("sentence_aligned evidence contrastive requires data.sentence_evidence_supervision=true")
+        if (
+            evidence_mode == "sentence_aligned"
+            and float(objectives.get("evidence_contrastive_salience_bias", 0.0)) > 0.0
+            and data.get("sentence_evidence_use_union_as_salience", False) is not True
+        ):
+            raise ValueError(
+                "Sentence-aligned salience coupling requires data.sentence_evidence_use_union_as_salience=true"
+            )
+        if (
+            data.get("sentence_evidence_use_union_as_salience", False)
+            and data.get("sentence_evidence_supervision", False) is not True
+        ):
+            raise ValueError("sentence_evidence_use_union_as_salience requires sentence_evidence_supervision=true")
         evi_warmup = int(objectives.get("evidence_contrastive_warmup_epochs", 0))
         if evi_warmup < 0:
             raise ValueError("objectives.evidence_contrastive_warmup_epochs must be non-negative")
@@ -235,6 +257,8 @@ def validate_config(config: Dict[str, Any]) -> None:
             raise ValueError(f"data.{field} is required")
     if int(data.get("max_source_length", 0)) <= 0 or int(data.get("max_target_length", 0)) <= 1:
         raise ValueError("data lengths are invalid")
+    if int(data.get("sentence_evidence_max_units", 1)) <= 0:
+        raise ValueError("data.sentence_evidence_max_units must be positive")
     for field in ("source_field", "target_field", "id_field"):
         if not str(data.get(field, field.removesuffix("_field"))).strip():
             raise ValueError(f"data.{field} cannot be empty")

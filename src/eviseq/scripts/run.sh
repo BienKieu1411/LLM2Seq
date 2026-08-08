@@ -22,6 +22,10 @@ CNN_CONFIG="$PROJECT_ROOT/configs/tasks/cnndm.yaml"
 PUBMED_CONFIG="$PROJECT_ROOT/configs/tasks/pubmed.yaml"
 ARXIV_CONFIG="$PROJECT_ROOT/configs/tasks/arxiv.yaml"
 PPLX_PUBMED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed.yaml"
+PPLX_PUBMED_ALIGNED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_aligned.yaml"
+PPLX_PUBMED_GLOBAL_MATCHED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_global_matched.yaml"
+PPLX_PUBMED_ALIGNED_NO_COUPLING_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_aligned_no_coupling.yaml"
+PPLX_PUBMED_NO_EVIDENCE_CL_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_no_evidence_cl.yaml"
 SMOKE_CONFIG="$PROJECT_ROOT/configs/tasks/smoke.yaml"
 
 absolute_path() {
@@ -59,11 +63,35 @@ select_committed_checkpoint() {
   SELECTED_PREDICTIONS="$output_dir/last_${split}_predictions.jsonl"
 }
 
+resolved_output_dir() {
+  # Training accepts ``--output-dir``.  The post-training validation must
+  # inspect that same directory rather than the YAML default; otherwise a
+  # successful override can silently evaluate a stale experiment.
+  local configured="$1"
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --output-dir)
+        [[ $# -ge 2 ]] || { echo "ERROR: --output-dir requires a value" >&2; return 2; }
+        absolute_path "$2"
+        return 0
+        ;;
+      --output-dir=*)
+        absolute_path "${1#--output-dir=}"
+        return 0
+        ;;
+    esac
+    shift
+  done
+  printf '%s\n' "$configured"
+}
+
 train_and_validate() {
   local config="$1"
   shift
   local output_dir
   output_dir="$(config_value "$config" experiment.output_dir)"
+  output_dir="$(resolved_output_dir "$output_dir" "$@")"
   "$PYTHON_BIN" "$RUNNER" train --config "$config" "$@"
   select_committed_checkpoint "$output_dir" validation
   "$PYTHON_BIN" "$RUNNER" evaluate \
@@ -132,6 +160,18 @@ case "$MODE" in
   pplx-pubmed)
     train_and_validate "$PPLX_PUBMED_CONFIG" "$@"
     ;;
+  pplx-pubmed-aligned)
+    train_and_validate "$PPLX_PUBMED_ALIGNED_CONFIG" "$@"
+    ;;
+  pplx-pubmed-global-matched)
+    train_and_validate "$PPLX_PUBMED_GLOBAL_MATCHED_CONFIG" "$@"
+    ;;
+  pplx-pubmed-aligned-no-coupling)
+    train_and_validate "$PPLX_PUBMED_ALIGNED_NO_COUPLING_CONFIG" "$@"
+    ;;
+  pplx-pubmed-no-evidence-cl)
+    train_and_validate "$PPLX_PUBMED_NO_EVIDENCE_CL_CONFIG" "$@"
+    ;;
   c0|c2|c3-no-cl)
     case "$MODE" in
       c0) ABLATION="c0_causal" ;;
@@ -181,6 +221,18 @@ case "$MODE" in
     ;;
   evaluate-pplx-pubmed-test)
     evaluate_test "$PPLX_PUBMED_CONFIG" "$@"
+    ;;
+  evaluate-pplx-pubmed-aligned-test)
+    evaluate_test "$PPLX_PUBMED_ALIGNED_CONFIG" "$@"
+    ;;
+  evaluate-pplx-pubmed-global-matched-test)
+    evaluate_test "$PPLX_PUBMED_GLOBAL_MATCHED_CONFIG" "$@"
+    ;;
+  evaluate-pplx-pubmed-aligned-no-coupling-test)
+    evaluate_test "$PPLX_PUBMED_ALIGNED_NO_COUPLING_CONFIG" "$@"
+    ;;
+  evaluate-pplx-pubmed-no-evidence-cl-test)
+    evaluate_test "$PPLX_PUBMED_NO_EVIDENCE_CL_CONFIG" "$@"
     ;;
   evaluate-test)
     CONFIG="${1:-$WIKI_CONFIG}"
@@ -245,6 +297,10 @@ Data and other datasets:
   bash eviseq/scripts/run.sh pubmed --overwrite-output-dir
   bash eviseq/scripts/run.sh arxiv --overwrite-output-dir
   bash eviseq/scripts/run.sh pplx-pubmed --overwrite-output-dir
+  bash eviseq/scripts/run.sh pplx-pubmed-aligned --overwrite-output-dir
+  bash eviseq/scripts/run.sh pplx-pubmed-global-matched --overwrite-output-dir
+  bash eviseq/scripts/run.sh pplx-pubmed-aligned-no-coupling --overwrite-output-dir
+  bash eviseq/scripts/run.sh pplx-pubmed-no-evidence-cl --overwrite-output-dir
 
 Evaluation commands:
   bash eviseq/scripts/run.sh evaluate-wiki-test

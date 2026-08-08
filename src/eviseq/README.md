@@ -223,5 +223,6 @@ bash eviseq/scripts/run.sh prepare-pubmed /absolute/path/to/pubmed
 bash eviseq/scripts/run.sh prepare-arxiv /absolute/path/to/arxiv
 ```
 
-The ready-to-run PubMed GPU queue is isolated in `scripts/gpu_0.sh` instead
+The ready-to-run PubMed GPU queue runs the paper PPLX-encoder,
+sentence-aligned-EviSeq recipe and is isolated in `scripts/gpu_0.sh` instead
 of being mixed with the Python package.

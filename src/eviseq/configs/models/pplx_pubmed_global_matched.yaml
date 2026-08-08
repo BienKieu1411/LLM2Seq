@@ -1,0 +1,22 @@
+_base_: pplx_pubmed_aligned.yaml
+
+# Ablation A: replace only the aligned per-summary-sentence query with the
+# original whole-abstract query.  It deliberately inherits the aligned
+# recipe's prompt and union salience labels, so any score difference is due to
+# query granularity rather than source serialization or bridge supervision.
+experiment:
+  name: eviseq_pubmed_pplx_global_matched_0_6b_to_qwen3_0_6b
+  output_dir: runs/eviseq/pubmed_pplx_global_matched_0_6b
+
+objectives:
+  evidence_contrastive_mode: document
+  evidence_contrastive_salience_bias: 0.0
+  evidence_hard_negatives: 4
+  evidence_hard_negatives_full: 8
+  evidence_contrastive_weight: 0.10
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 3
+  batch_size: 32
+  gradient_accumulation_steps: 1

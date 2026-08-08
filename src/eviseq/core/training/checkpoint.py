@@ -2,12 +2,70 @@
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 from typing import Any, Dict
 
 import torch
 import torch.nn as nn
+
+_RUNTIME_DATA_FIELDS = (
+    "source_field",
+    "target_field",
+    "id_field",
+    "source_template",
+    "target_template",
+    "list_separator",
+    "source_prefix",
+    "sentence_separator",
+    "max_source_length",
+    "decoder_instruction",
+    "decoder_prefix",
+    "use_decoder_chat_template",
+    "enable_thinking",
+    "clean_wikihow_metadata",
+)
+_RUNTIME_GENERATION_FIELDS = (
+    "min_new_tokens",
+    "max_new_tokens",
+    "repetition_penalty",
+    "no_repeat_ngram_size",
+)
+
+
+def evaluation_config_fingerprint(config: Dict[str, Any]) -> str:
+    """Stable fingerprint for fields that change a checkpoint's decoded output.
+
+    Batch size and dataset split deliberately do not participate.  In
+    contrast, source serialization, model graph, and greedy constraints must
+    agree with the checkpoint's resolved configuration.
+    """
+
+    data = config.get("data", {})
+    generation = config.get("generation", {})
+    material = {
+        "model": config.get("model", {}),
+        "native_attention": config.get("native_attention", {}),
+        "bridge": config.get("bridge", {}),
+        "decoder": config.get("decoder", {}),
+        "data": {name: data.get(name) for name in _RUNTIME_DATA_FIELDS},
+        "generation": {name: generation.get(name) for name in _RUNTIME_GENERATION_FIELDS},
+    }
+    return json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def assert_evaluation_config_matches_checkpoint(payload: Dict[str, Any], config: Dict[str, Any]) -> None:
+    """Fail closed when inference would use a different model/task protocol."""
+
+    saved = payload.get("config")
+    if not isinstance(saved, dict):
+        raise RuntimeError("Checkpoint has no resolved configuration; refusing unverifiable evaluation")
+    if evaluation_config_fingerprint(saved) != evaluation_config_fingerprint(config):
+        raise RuntimeError(
+            "Evaluation configuration differs from the checkpoint's resolved model, source serialization, "
+            "or greedy-generation settings. Evaluate with that run's resolved_config.yaml instead."
+        )
 
 
 def _save_checkpoint(

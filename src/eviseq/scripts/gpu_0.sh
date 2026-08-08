@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Train EviSeq on PubMed, evaluate last.pt on the test split, then compute
-# the paper ROUGE scores with Perl ROUGE-1.5.5.
+# Train the paper EviSeq recipe (PPLX encoder, sentence-aligned evidence CL)
+# on PubMed, evaluate last.pt on the test split, then compute Perl ROUGE-1.5.5.
 #
 # Run from the repository src directory:
 #   CUDA_VISIBLE_DEVICES=0 bash eviseq/scripts/gpu_0.sh
@@ -19,7 +19,7 @@ export PYROUGE_HOME_DIR="${PYROUGE_HOME_DIR:-/workspace/storage-shared/nlp/dungd
 
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-8}"
 PUBMED_SOURCE_DIR="${PUBMED_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/datasets/pubmed}"
-RUN_DIR="runs/eviseq/pubmed_qwen3_evidence"
+RUN_DIR="runs/eviseq/pubmed_pplx_aligned_0_6b"
 LAST_PREDICTIONS="${RUN_DIR}/last_test_predictions.jsonl"
 BEST_PREDICTIONS="${RUN_DIR}/best_test_predictions.jsonl"
 PROCESSED_DATA_DIR="datasets/pubmed"
@@ -34,7 +34,7 @@ mkdir -p logs/gpu_queues
 LOG_FILE="logs/gpu_queues/gpu_0_pubmed_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "${LOG_FILE}") 2>&1
 
-echo "=== GPU 0: EviSeq PubMed train, test, and ROUGE-1.5.5 ==="
+echo "=== GPU 0: EviSeq PPLX-aligned PubMed train, test, and ROUGE-1.5.5 ==="
 echo "=== CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ==="
 echo "=== PYROUGE_HOME_DIR=${PYROUGE_HOME_DIR} ==="
 echo "=== Log: ${LOG_FILE} ==="
@@ -54,9 +54,9 @@ else
   bash scripts/run.sh prepare-pubmed "${PUBMED_SOURCE_DIR}"
 fi
 
-bash scripts/run.sh pubmed --overwrite-output-dir
+bash scripts/run.sh pplx-pubmed-aligned --overwrite-output-dir
 
-bash scripts/run.sh evaluate-pubmed-test \
+bash scripts/run.sh evaluate-pplx-pubmed-aligned-test \
   --batch-size "${EVAL_BATCH_SIZE}"
 
 bash scripts/run.sh rouge155 \

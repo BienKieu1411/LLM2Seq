@@ -11,11 +11,13 @@ import torch.nn.functional as F
 from ..training.objectives import (
     EvidenceContrastiveHead,
     SourcePromptAlignmentHead,
+    decoder_sentence_representations,
     decoder_summary_representation,
     evidence_info_nce_loss,
     exact_duplicate_mask,
     info_nce_loss,
     last_prompt_states,
+    sentence_evidence_info_nce_loss,
 )
 from .attention import pool_units
 from .bridge import BridgeOutput, EvidenceBridge
@@ -78,9 +80,23 @@ class EviSeq(nn.Module):
             float(objectives.get("evidence_contrastive_weight", 0.05)) if self.use_evidence_contrastive else 0.0
         )
         self.evidence_contrastive_temperature = float(objectives.get("evidence_contrastive_temperature", 0.07))
-        self.evidence_hard_negatives = int(objectives.get("evidence_hard_negatives", 4))
+        self.evidence_hard_negatives_warmup = int(objectives.get("evidence_hard_negatives", 4))
+        self.evidence_hard_negatives_full = int(
+            objectives.get("evidence_hard_negatives_full", self.evidence_hard_negatives_warmup)
+        )
+        # The active value changes at the warm-up/full boundary.  Keeping one
+        # public attribute makes the actual K visible in training logs and
+        # avoids accidentally mining harder negatives before the bridge has a
+        # usable evidence representation.
+        self.evidence_hard_negatives = self.evidence_hard_negatives_warmup
         self.evidence_hard_negative_salience_boost = float(objectives.get("evidence_hard_negative_salience_boost", 0.1))
         self.evidence_contrastive_warmup_epochs = int(objectives.get("evidence_contrastive_warmup_epochs", 2))
+        self.evidence_contrastive_mode = str(objectives.get("evidence_contrastive_mode", "document"))
+        self.evidence_contrastive_salience_bias = float(objectives.get("evidence_contrastive_salience_bias", 0.0))
+        if self.evidence_contrastive_mode not in {"document", "sentence_aligned"}:
+            raise ValueError("evidence_contrastive_mode must be 'document' or 'sentence_aligned'")
+        if self.evidence_contrastive_salience_bias < 0.0:
+            raise ValueError("evidence_contrastive_salience_bias must be non-negative")
         if self.use_evidence_contrastive:
             self.evidence_contrastive_head: Optional[EvidenceContrastiveHead] = EvidenceContrastiveHead(
                 encoder_hidden_size=expected_encoder,
@@ -129,6 +145,8 @@ class EviSeq(nn.Module):
         decoder_attention_mask: Optional[torch.Tensor] = None,
         unit_ids: Optional[torch.Tensor] = None,
         evidence_labels: Optional[torch.Tensor] = None,
+        target_sentence_ids: Optional[torch.Tensor] = None,
+        sentence_evidence_labels: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         compute_source_diagnostics: bool = False,
         contrastive_mode: str = "local",
@@ -213,23 +231,52 @@ class EviSeq(nn.Module):
             if unit_count > 0:
                 sentence_reprs, valid_units = pool_units(encoded.memory, unit_ids, unit_count)
 
-                # Get summary representation from decoder
-                summary_repr = decoder_summary_representation(states, labels)
-
-                # Project through evidence contrastive head
-                q, k = self.evidence_contrastive_head(summary_repr, sentence_reprs)
-
-                # Within-document evidence InfoNCE
-                evi_results = evidence_info_nce_loss(
-                    query=q,
-                    keys=k,
-                    evidence_labels=evidence_labels,
-                    valid_units=valid_units,
-                    temperature=self.evidence_contrastive_temperature,
-                    num_hard_negatives=self.evidence_hard_negatives,
-                    salience_logits=encoded.unit_logits,
-                    salience_boost=self.evidence_hard_negative_salience_boost,
-                )
+                if self.evidence_contrastive_mode == "sentence_aligned":
+                    if target_sentence_ids is None or sentence_evidence_labels is None:
+                        raise ValueError(
+                            "sentence_aligned evidence contrastive requires target_sentence_ids and "
+                            "sentence_evidence_labels from the dataset"
+                        )
+                    sentence_count = int(sentence_evidence_labels.shape[1])
+                    summary_reprs, summary_valid = decoder_sentence_representations(
+                        states,
+                        labels,
+                        target_sentence_ids,
+                        sentence_count,
+                    )
+                    projected_queries = torch.nn.functional.normalize(
+                        self.evidence_contrastive_head.query_projection(summary_reprs).float(), dim=-1
+                    )
+                    projected_keys = torch.nn.functional.normalize(
+                        self.evidence_contrastive_head.key_projection(sentence_reprs).float(), dim=-1
+                    )
+                    evi_results = sentence_evidence_info_nce_loss(
+                        query=projected_queries,
+                        query_valid=summary_valid,
+                        keys=projected_keys,
+                        evidence_labels=sentence_evidence_labels,
+                        valid_units=valid_units,
+                        temperature=self.evidence_contrastive_temperature,
+                        num_hard_negatives=self.evidence_hard_negatives,
+                        salience_logits=encoded.unit_logits,
+                        salience_boost=self.evidence_hard_negative_salience_boost,
+                        salience_logit_bias=self.evidence_contrastive_salience_bias,
+                        global_evidence_labels=evidence_labels,
+                    )
+                else:
+                    # Legacy whole-summary objective, retained as an ablation.
+                    summary_repr = decoder_summary_representation(states, labels)
+                    q, k = self.evidence_contrastive_head(summary_repr, sentence_reprs)
+                    evi_results = evidence_info_nce_loss(
+                        query=q,
+                        keys=k,
+                        evidence_labels=evidence_labels,
+                        valid_units=valid_units,
+                        temperature=self.evidence_contrastive_temperature,
+                        num_hard_negatives=self.evidence_hard_negatives,
+                        salience_logits=encoded.unit_logits,
+                        salience_boost=self.evidence_hard_negative_salience_boost,
+                    )
                 loss_evidence_contrastive = evi_results.get("evidence_contrastive_loss", loss_evidence_contrastive)
 
         # --- Total loss ---
@@ -259,7 +306,11 @@ class EviSeq(nn.Module):
             # Evidence contrastive metrics
             "loss_evidence_contrastive": loss_evidence_contrastive.detach(),
             "weighted_evidence_contrastive": weighted_evidence.detach(),
+            "evidence_contrastive_to_ce_ratio": (
+                weighted_evidence.detach() / loss_ce.detach().float().clamp_min(1.0e-8)
+            ),
             "evidence_contrastive_scale": states.new_tensor(evidence_scale),
+            "evidence_hard_negatives": states.new_tensor(self.evidence_hard_negatives),
             "cross_gate_mean": self.decoder.cross_gate_mean().detach(),
             "cross_residual_ratio": self.decoder.cross_residual_ratio_mean().detach(),
             "bidirectional_gate_mean": encoded.native_gate_mean.detach(),
@@ -328,6 +379,9 @@ class EviSeq(nn.Module):
             raise ValueError(f"Unknown training stage: {stage}")
 
         full = stage == "full_finetune"
+        self.evidence_hard_negatives = (
+            self.evidence_hard_negatives_full if full else self.evidence_hard_negatives_warmup
+        )
         self.encoder.set_trainable(full)
         self.decoder.set_backbone_trainable(full)
         for parameter in self.adapter.parameters():

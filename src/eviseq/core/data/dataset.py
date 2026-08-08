@@ -116,10 +116,40 @@ def clean_text(text: Any, enabled: bool) -> str:
 
 
 def split_units(text: str) -> List[str]:
+    return [unit for unit, _, _ in split_units_with_spans(text)]
+
+
+def split_units_with_spans(text: str) -> List[Tuple[str, int, int]]:
+    """Split text exactly like ``split_units`` while retaining character spans."""
+
+    value = str(text)
     lines = [line.strip() for line in str(text).splitlines() if line.strip()]
     if len(lines) > 1:
-        return lines
-    return [part.strip() for part in _SENTENCE.split(str(text).strip()) if part.strip()]
+        units: List[Tuple[str, int, int]] = []
+        for match in re.finditer(r"[^\n]+", value):
+            unit = match.group(0).strip()
+            if not unit:
+                continue
+            start = match.start() + len(match.group(0)) - len(match.group(0).lstrip())
+            units.append((unit, start, start + len(unit)))
+        return units
+
+    units = []
+    start = 0
+    for separator in _SENTENCE.finditer(value):
+        end = separator.start()
+        segment = value[start:end]
+        unit = segment.strip()
+        if unit:
+            unit_start = start + len(segment) - len(segment.lstrip())
+            units.append((unit, unit_start, unit_start + len(unit)))
+        start = separator.end()
+    segment = value[start:]
+    unit = segment.strip()
+    if unit:
+        unit_start = start + len(segment) - len(segment.lstrip())
+        units.append((unit, unit_start, unit_start + len(unit)))
+    return units
 
 
 def _tokens(text: str) -> List[str]:
@@ -145,6 +175,7 @@ def greedy_evidence_labels(
     max_units: int = 12,
     rouge1_weight: float = 0.5,
     rouge2_weight: float = 0.5,
+    budget: int | None = None,
 ) -> List[float]:
     """Greedy sentence coverage labels; reference is used during training only."""
 
@@ -153,7 +184,9 @@ def greedy_evidence_labels(
     target_tokens = _tokens(target)
     reference = (_ngrams(target_tokens, 1), _ngrams(target_tokens, 2))
     counters = [(_ngrams(_tokens(unit), 1), _ngrams(_tokens(unit), 2)) for unit in units]
-    budget = min(len(units), max(1, len(split_units(target))), max(1, int(max_units)))
+    if budget is None:
+        budget = max(1, len(split_units(target)))
+    budget = min(len(units), max(1, int(budget)), max(1, int(max_units)))
     selected: List[int] = []
     remaining = set(range(len(units)))
     current = (Counter(), Counter())
@@ -196,6 +229,11 @@ def encode_source(
     prefix_ids = list(tokenizer(prefix, add_special_tokens=False)["input_ids"])
     eos_id = tokenizer.eos_token_id
     eos_budget = int(eos_id is not None)
+    if len(prefix_ids) + eos_budget >= max_length:
+        raise ValueError(
+            "source_prefix leaves no room for article tokens: "
+            f"prefix={len(prefix_ids)} eos={eos_budget} max_source_length={max_length}"
+        )
     budget = max(1, max_length - len(prefix_ids) - eos_budget)
     source_ids: List[int] = []
     unit_ids: List[int] = []
@@ -222,6 +260,35 @@ def encode_source(
         ids.append(int(eos_id))
         aligned.append(0)
     return ids[:max_length], aligned[:max_length], visible_units
+
+
+def visible_target_sentences(
+    tokenizer: Any,
+    content_target_ids: Sequence[int],
+    sentence_ids: Sequence[int],
+) -> List[str]:
+    """Decode exactly the target content supervised after truncation.
+
+    Sentence evidence labels must not use words that were cut off by
+    ``max_target_length``.  Grouping the *actual* retained token ids by their
+    offset-derived sentence ids keeps the evidence target and decoder loss
+    aligned even when the final reference sentence is partial.
+    """
+
+    if len(content_target_ids) != len(sentence_ids):
+        raise ValueError("content_target_ids and sentence_ids must be aligned")
+    grouped: Dict[int, List[int]] = {}
+    for token_id, sentence_id in zip(content_target_ids, sentence_ids):
+        if int(sentence_id) > 0:
+            grouped.setdefault(int(sentence_id), []).append(int(token_id))
+    # Keep row ``r`` tied to sentence id ``r + 1`` even if decoding a span
+    # yields only special/empty tokens.  Dropping an empty group would shift
+    # every later evidence-label row and train sentence r against sentence
+    # r+1's oracle evidence.
+    sentences = [""] * max(grouped, default=0)
+    for sentence_id, token_ids in grouped.items():
+        sentences[sentence_id - 1] = tokenizer.decode(token_ids, skip_special_tokens=True).strip()
+    return sentences
 
 
 def decoder_seed_ids(tokenizer: Any, config: Dict[str, Any]) -> List[int]:
@@ -257,6 +324,62 @@ def decoder_seed_ids(tokenizer: Any, config: Dict[str, Any]) -> List[int]:
     return seed
 
 
+def target_sentence_ids(
+    tokenizer: Any,
+    target: str,
+    target_ids: Sequence[int],
+    *,
+    require_offsets: bool = False,
+) -> List[int]:
+    """Map every target token to its reference sentence, using fast offsets.
+
+    A conservative all-one fallback is appropriate for generic text-to-text
+    tasks.  Sentence-aligned evidence supervision instead requests strict
+    offsets: silently treating a multi-sentence abstract as one sentence
+    would turn the intended objective back into global InfoNCE.
+    """
+
+    spans = split_units_with_spans(target)
+    fallback = [1] * len(target_ids)
+    if not spans or not target_ids:
+        return fallback
+    try:
+        encoded = tokenizer(
+            target,
+            add_special_tokens=False,
+            return_offsets_mapping=True,
+            truncation=True,
+            max_length=len(target_ids),
+        )
+        encoded_ids = [int(value) for value in encoded["input_ids"]]
+        offsets = [tuple(map(int, value)) for value in encoded["offset_mapping"]]
+    except (AttributeError, KeyError, TypeError, ValueError, NotImplementedError) as error:
+        if require_offsets:
+            raise ValueError(
+                "Sentence-aligned evidence supervision requires a fast decoder tokenizer with offsets"
+            ) from error
+        return fallback
+    if encoded_ids != [int(value) for value in target_ids] or len(offsets) != len(target_ids):
+        if require_offsets:
+            raise ValueError(
+                "Sentence-aligned target offsets do not match the truncated decoder target ids; "
+                "refusing to collapse the objective to one summary sentence"
+            )
+        return fallback
+
+    sentence_ids: List[int] = []
+    sentence_index = 0
+    for start, end in offsets:
+        if end <= start:
+            sentence_ids.append(max(1, sentence_index + 1))
+            continue
+        midpoint = start + (end - start - 1) // 2
+        while sentence_index + 1 < len(spans) and midpoint >= spans[sentence_index][2]:
+            sentence_index += 1
+        sentence_ids.append(sentence_index + 1)
+    return sentence_ids
+
+
 class Text2TextDataset(Dataset):
     """Token-level encoder memory plus decoder-native target tokenization."""
 
@@ -276,9 +399,18 @@ class Text2TextDataset(Dataset):
         self.max_target_length = int(data_config.get("max_target_length", 384))
         self.clean_metadata = bool(data_config.get("clean_wikihow_metadata", False))
         self.supervise_evidence = bool(data_config.get("supervise_evidence", True))
+        self.sentence_evidence_supervision = bool(data_config.get("sentence_evidence_supervision", False))
+        self.sentence_evidence_max_units = int(data_config.get("sentence_evidence_max_units", 1))
+        self.sentence_evidence_use_union_as_salience = bool(
+            data_config.get("sentence_evidence_use_union_as_salience", False)
+        )
         self.seed = decoder_seed_ids(decoder_tokenizer, data_config)
         self.evidence_cache: List[List[float]] | None = None
-        if precompute_evidence and self.supervise_evidence:
+        if (
+            precompute_evidence
+            and self.supervise_evidence
+            and not (self.sentence_evidence_supervision and self.sentence_evidence_use_union_as_salience)
+        ):
             self.evidence_cache = []
             for row in self.examples:
                 source = clean_text(row["source"], self.clean_metadata)
@@ -307,8 +439,17 @@ class Text2TextDataset(Dataset):
         source_ids, unit_ids, visible_units = encode_source(self.encoder_tokenizer, source, self.config)
         full_units = split_units(source)
         cached = self.evidence_cache[index] if self.evidence_cache is not None else None
+        use_sentence_union = (
+            self.sentence_evidence_supervision
+            and self.sentence_evidence_use_union_as_salience
+            and self.supervise_evidence
+        )
         if not self.supervise_evidence:
             evidence = [-1.0] * len(visible_units)
+        elif use_sentence_union:
+            # Filled after each visible target sentence receives its own
+            # oracle labels.  Avoid computing an unused global greedy oracle.
+            evidence = []
         elif cached is not None and visible_units == full_units:
             evidence = cached
         else:
@@ -330,6 +471,18 @@ class Text2TextDataset(Dataset):
         )
         if eos_id is not None:
             target_ids.append(int(eos_id))
+        content_target_ids = target_ids[:-1] if eos_id is not None else target_ids
+        sentence_ids = target_sentence_ids(
+            self.decoder_tokenizer,
+            target,
+            content_target_ids,
+            require_offsets=self.sentence_evidence_supervision and self.supervise_evidence,
+        )
+        if eos_id is not None:
+            # EOS helps CE finish the sequence but carries no semantic
+            # evidence.  Leaving it out of sentence pooling avoids a short
+            # final sentence being dominated by its EOS prediction state.
+            sentence_ids.append(0)
         target_tensor = torch.tensor(target_ids, dtype=torch.long)
         decoder_input = torch.cat([torch.tensor(self.seed, dtype=torch.long), target_tensor[:-1]])
         labels = torch.cat(
@@ -340,6 +493,43 @@ class Text2TextDataset(Dataset):
         )
         if decoder_input.numel() != labels.numel():
             raise RuntimeError("Shifted decoder inputs and labels must have equal length")
+        decoder_sentence_ids = torch.cat(
+            [
+                torch.zeros((len(self.seed) - 1,), dtype=torch.long),
+                torch.tensor(sentence_ids, dtype=torch.long),
+            ]
+        )
+        if decoder_sentence_ids.numel() != labels.numel():
+            raise RuntimeError("Decoder sentence ids must align with shifted decoder labels")
+        if self.sentence_evidence_supervision and self.supervise_evidence:
+            target_units = visible_target_sentences(
+                self.decoder_tokenizer,
+                content_target_ids,
+                sentence_ids[: len(content_target_ids)],
+            )
+            sentence_evidence = [
+                greedy_evidence_labels(
+                    visible_units,
+                    sentence,
+                    max_units=self.sentence_evidence_max_units,
+                    budget=self.sentence_evidence_max_units,
+                )
+                for sentence in target_units
+            ]
+            if not sentence_evidence:
+                sentence_evidence = [[-1.0] * len(visible_units)]
+            if use_sentence_union:
+                evidence = []
+                for unit_index in range(len(visible_units)):
+                    labels_for_unit = [row[unit_index] for row in sentence_evidence if unit_index < len(row)]
+                    if any(value > 0.5 for value in labels_for_unit):
+                        evidence.append(1.0)
+                    elif any(value >= 0.0 for value in labels_for_unit):
+                        evidence.append(0.0)
+                    else:
+                        evidence.append(-1.0)
+        else:
+            sentence_evidence = [[-1.0] * len(visible_units)]
         return {
             "input_ids": torch.tensor(source_ids, dtype=torch.long),
             "attention_mask": torch.ones(len(source_ids), dtype=torch.long),
@@ -348,6 +538,8 @@ class Text2TextDataset(Dataset):
             "decoder_input_ids": decoder_input,
             "decoder_attention_mask": torch.ones_like(decoder_input),
             "labels": labels,
+            "target_sentence_ids": decoder_sentence_ids,
+            "sentence_evidence_labels": torch.tensor(sentence_evidence, dtype=torch.float32),
         }
 
 
@@ -419,6 +611,11 @@ class Seq2SeqCollator:
             max(item["decoder_input_ids"].numel() for item in features),
         )
         unit_count = max(1, max(item["evidence_labels"].numel() for item in features))
+        sentence_count = max(1, max(item["sentence_evidence_labels"].shape[0] for item in features))
+        sentence_evidence = torch.full((len(features), sentence_count, unit_count), -1.0, dtype=torch.float32)
+        for index, item in enumerate(features):
+            values = item["sentence_evidence_labels"]
+            sentence_evidence[index, : values.shape[0], : values.shape[1]] = values
         return {
             "input_ids": self._pad((item["input_ids"] for item in features), source_length, self.encoder_pad_id),
             "attention_mask": self._pad((item["attention_mask"] for item in features), source_length, 0),
@@ -439,4 +636,6 @@ class Seq2SeqCollator:
                 0,
             ),
             "labels": self._pad((item["labels"] for item in features), decoder_length, -100),
+            "target_sentence_ids": self._pad((item["target_sentence_ids"] for item in features), decoder_length, 0),
+            "sentence_evidence_labels": sentence_evidence,
         }

@@ -197,6 +197,39 @@ def decoder_summary_representation(
     return pooled  # [B, D]
 
 
+def decoder_sentence_representations(
+    decoder_states: torch.Tensor,
+    labels: torch.Tensor,
+    sentence_ids: torch.Tensor,
+    sentence_count: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Pool teacher-forced decoder states separately for every target sentence.
+
+    The old evidence objective compressed an entire biomedical abstract into
+    one query.  Objective, method, result, and conclusion sentences then all
+    competed for the same evidence representation.  Sentence ids are aligned
+    with decoder labels by the dataset and use ``0`` for the fixed prompt.
+    """
+
+    if decoder_states.ndim != 3 or labels.ndim != 2 or sentence_ids.ndim != 2:
+        raise ValueError("decoder states, labels, and sentence ids must be [B, T, ...]/[B, T]")
+    if decoder_states.shape[:2] != labels.shape or labels.shape != sentence_ids.shape:
+        raise ValueError("decoder states, labels, and sentence ids must have matching batch/time dimensions")
+    if sentence_count <= 0:
+        raise ValueError("sentence_count must be positive")
+
+    supervised = labels.ne(-100) & sentence_ids.gt(0)
+    sentence_index = sentence_ids.clamp(min=1, max=sentence_count).long() - 1
+    states = decoder_states.float()
+    pooled = states.new_zeros((states.shape[0], sentence_count, states.shape[-1]))
+    counts = states.new_zeros((states.shape[0], sentence_count))
+    weighted = states * supervised.unsqueeze(-1).to(states.dtype)
+    pooled.scatter_add_(1, sentence_index.unsqueeze(-1).expand_as(weighted), weighted)
+    counts.scatter_add_(1, sentence_index, supervised.to(states.dtype))
+    valid = counts.gt(0)
+    return pooled / counts.unsqueeze(-1).clamp_min(1.0), valid
+
+
 class EvidenceContrastiveHead(nn.Module):
     """Projection heads for within-document evidence contrastive learning.
 
@@ -438,5 +471,135 @@ def evidence_info_nce_loss(
         "positive_similarity": mean_pos_sim.detach(),
         "hard_negative_similarity": mean_neg_sim.detach(),
         "evidence_similarity_gap": (mean_pos_sim - mean_neg_sim).detach(),
+        "evidence_valid_examples": valid_count.detach(),
+    }
+
+
+def sentence_evidence_info_nce_loss(
+    query: torch.Tensor,
+    query_valid: torch.Tensor,
+    keys: torch.Tensor,
+    evidence_labels: torch.Tensor,
+    valid_units: torch.Tensor,
+    temperature: float = 0.07,
+    num_hard_negatives: int = 4,
+    salience_logits: Optional[torch.Tensor] = None,
+    salience_boost: float = 0.1,
+    salience_logit_bias: float = 0.0,
+    global_evidence_labels: Optional[torch.Tensor] = None,
+) -> Dict[str, torch.Tensor]:
+    """Sentence-conditioned, attention-aligned evidence InfoNCE.
+
+    ``query`` is one representation per reference-summary sentence and every
+    sentence receives its own oracle evidence labels.  Hard-negative *choice*
+    is detached, but the optional salience term remains differentiable in the
+    final contrastive score.  A unit that is evidence for *another* target
+    sentence never receives a contradictory negative salience gradient: it is
+    still a q/k hard negative, but the global attention-bias term is masked.
+    """
+
+    if temperature <= 0.0:
+        raise ValueError("evidence contrastive temperature must be positive")
+    if salience_logit_bias < 0.0:
+        raise ValueError("salience_logit_bias must be non-negative")
+    if query.ndim != 3 or keys.ndim != 3:
+        raise ValueError("sentence evidence contrastive expects query [B,R,P] and keys [B,U,P]")
+    if query_valid.shape != query.shape[:2]:
+        raise ValueError("query_valid must be [B, R]")
+    if evidence_labels.ndim != 3 or evidence_labels.shape[:2] != query.shape[:2]:
+        raise ValueError("sentence evidence labels must be [B, R, U]")
+    if keys.shape[0] != query.shape[0] or keys.shape[-1] != query.shape[-1]:
+        raise ValueError("query/key batch and projection dimensions must match")
+    if global_evidence_labels is not None and (
+        global_evidence_labels.ndim != 2 or global_evidence_labels.shape[0] != query.shape[0]
+    ):
+        raise ValueError("global evidence labels must be [B, U]")
+
+    zero = query.sum() * 0.0
+    width = min(keys.shape[1], evidence_labels.shape[2], valid_units.shape[1])
+    if width == 0:
+        detached_zero = zero.detach()
+        return {
+            "evidence_contrastive_loss": zero,
+            "evidence_top1_accuracy": detached_zero,
+            "positive_similarity": detached_zero,
+            "hard_negative_similarity": detached_zero,
+            "evidence_similarity_gap": detached_zero,
+            "evidence_valid_examples": detached_zero,
+        }
+    labels = evidence_labels[:, :, :width]
+    valid = valid_units[:, None, :width].bool()
+    positive_mask = valid & labels.gt(0.5) & query_valid[:, :, None]
+    negative_mask = valid & labels.ge(0.0) & labels.le(0.5) & query_valid[:, :, None]
+
+    similarity = torch.einsum("brp,bup->bru", query, keys[:, :width])
+    mining_score = similarity.detach()
+    if salience_logits is not None and salience_boost > 0.0:
+        salience_width = min(width, salience_logits.shape[1])
+        detached_salience = torch.zeros_like(mining_score)
+        detached_salience[:, :, :salience_width] = torch.sigmoid(
+            salience_logits[:, None, :salience_width].detach().float()
+        ).to(mining_score.dtype)
+        mining_score = mining_score + float(salience_boost) * detached_salience
+    mining_score = mining_score.masked_fill(~negative_mask, -torch.inf)
+    hard_negative_mask = torch.zeros_like(negative_mask)
+    if width > 0:
+        k = min(int(num_hard_negatives), width)
+        top_values, top_indices = mining_score.topk(k, dim=2)
+        selected = torch.isfinite(top_values)
+        hard_negative_mask.scatter_(2, top_indices, selected)
+
+    logits = similarity / float(temperature)
+    if salience_logits is not None and salience_logit_bias > 0.0:
+        salience_width = min(width, salience_logits.shape[1])
+        aligned_salience = torch.zeros_like(logits)
+        # This term is intentionally *not* detached: it gives the
+        # contrastive objective a direct gradient into the unit logits that
+        # become the token-level cross-attention bias at generation time.
+        # Bound only this auxiliary path so a transient salience outlier
+        # cannot swamp the cosine/temperature score during warm-up.
+        aligned_salience[:, :, :salience_width] = salience_logits[:, None, :salience_width].float().clamp(-4.0, 4.0)
+        if global_evidence_labels is None:
+            global_positive = positive_mask.any(dim=1)
+        else:
+            global_positive = global_evidence_labels[:, :width].gt(0.5) & valid_units[:, :width].bool()
+        # Local sentence evidence is always encouraged.  A true document-level
+        # non-evidence hard negative is discouraged.  But a unit selected by a
+        # different summary sentence does not receive a false negative update
+        # to the single global score consumed by bridge attention.
+        salience_coupling = positive_mask | (hard_negative_mask & ~global_positive[:, None, :])
+        logits = logits + float(salience_logit_bias) * aligned_salience * salience_coupling.to(logits.dtype)
+    negative_logits = logits.masked_fill(~hard_negative_mask, -torch.inf)
+    negative_logsumexp = torch.logsumexp(negative_logits, dim=2)
+
+    positive_count = positive_mask.sum(dim=2)
+    negative_count = hard_negative_mask.sum(dim=2)
+    valid_queries = query_valid & positive_count.gt(0) & negative_count.gt(0)
+    safe_negative_logsumexp = torch.where(valid_queries, negative_logsumexp, torch.zeros_like(negative_logsumexp))
+    positive_losses = F.softplus(safe_negative_logsumexp.unsqueeze(-1) - logits)
+    loss_per_query = (positive_losses * positive_mask).sum(dim=2) / positive_count.clamp_min(1)
+    valid_float = valid_queries.to(loss_per_query.dtype)
+    valid_count = valid_float.sum()
+    loss = (loss_per_query * valid_float).sum() / valid_count.clamp_min(1.0)
+    loss = loss + zero
+
+    with torch.no_grad():
+        positive_float = positive_mask.to(similarity.dtype)
+        negative_float = hard_negative_mask.to(similarity.dtype)
+        positive_similarity = (similarity * positive_float).sum(dim=2) / positive_count.clamp_min(1)
+        negative_similarity = (similarity * negative_float).sum(dim=2) / negative_count.clamp_min(1)
+        mean_positive = (positive_similarity * valid_float).sum() / valid_count.clamp_min(1.0)
+        mean_negative = (negative_similarity * valid_float).sum() / valid_count.clamp_min(1.0)
+        hardest_negative = negative_logits.max(dim=2).values
+        beats_hardest = positive_mask & logits.gt(hardest_negative.unsqueeze(-1))
+        accuracy_per_query = beats_hardest.sum(dim=2).float() / positive_count.clamp_min(1)
+        accuracy = (accuracy_per_query * valid_float).sum() / valid_count.clamp_min(1.0)
+
+    return {
+        "evidence_contrastive_loss": loss,
+        "evidence_top1_accuracy": accuracy.detach(),
+        "positive_similarity": mean_positive.detach(),
+        "hard_negative_similarity": mean_negative.detach(),
+        "evidence_similarity_gap": (mean_positive - mean_negative).detach(),
         "evidence_valid_examples": valid_count.detach(),
     }

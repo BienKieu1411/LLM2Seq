@@ -8,17 +8,27 @@ import pytest
 import torch
 import torch.nn as nn
 from eviseq.configuration import load_config, resolve_data_path, validate_config
-from eviseq.data.dataset import LengthBucketBatchSampler, read_jsonl
+from eviseq.data.dataset import (
+    LengthBucketBatchSampler,
+    encode_source,
+    read_jsonl,
+    split_units_with_spans,
+    target_sentence_ids,
+    visible_target_sentences,
+)
+from eviseq.evaluation.engine import _verify_or_write_resume_manifest
+from eviseq.evaluation.generation import _apply_no_repeat_ngram, _apply_repetition_penalty, _blocked_tokens
 from eviseq.evaluation.metrics import exact_match_score, token_f1_score
 from eviseq.modeling.attention import mix_attention_outputs
 from eviseq.modeling.bridge import balanced_salience_loss
 from eviseq.training.checkpoint import (
+    assert_evaluation_config_matches_checkpoint,
     initialize_from_checkpoint,
     load_checkpoint,
     save_configured_epoch_checkpoints,
     save_last_checkpoint,
 )
-from eviseq.training.objectives import evidence_info_nce_loss
+from eviseq.training.objectives import evidence_info_nce_loss, sentence_evidence_info_nce_loss
 from eviseq.training.trainer import _capture_optimizer_moments, _restore_optimizer_moments
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -143,6 +153,69 @@ def test_warmup_can_be_disabled() -> None:
     validate_config(config)
 
 
+def test_evaluation_refuses_a_same_shape_checkpoint_with_changed_source_protocol() -> None:
+    config = load_config(ROOT / "configs" / "models" / "pplx_pubmed_aligned.yaml")
+    payload = {"config": copy.deepcopy(config)}
+    assert_evaluation_config_matches_checkpoint(payload, config)
+    changed = copy.deepcopy(config)
+    changed["data"]["source_prefix"] = "A different article prompt"
+    with pytest.raises(RuntimeError, match="differs from the checkpoint"):
+        assert_evaluation_config_matches_checkpoint(payload, changed)
+
+
+def test_evaluation_resume_is_bound_to_checkpoint_config_and_dataset(tmp_path: Path) -> None:
+    config = load_config(ROOT / "configs" / "models" / "pplx_pubmed_aligned.yaml")
+    payload = {"checkpoint_role": "last", "epoch": 4, "global_step": 123, "config": copy.deepcopy(config)}
+    rows = [{"id": "doc-1", "source": "article", "target": "abstract"}]
+    output = tmp_path / "predictions.jsonl"
+    _verify_or_write_resume_manifest(
+        output,
+        resume=False,
+        checkpoint=tmp_path / "last.pt",
+        payload=payload,
+        config=config,
+        rows=rows,
+    )
+    output.write_text('{"id":"doc-1","prediction":"abstract","reference":"abstract"}\n', encoding="utf-8")
+    _verify_or_write_resume_manifest(
+        output,
+        resume=True,
+        checkpoint=tmp_path / "last.pt",
+        payload=payload,
+        config=config,
+        rows=rows,
+    )
+    changed_payload = {**payload, "global_step": 124}
+    with pytest.raises(RuntimeError, match="Cannot safely resume"):
+        _verify_or_write_resume_manifest(
+            output,
+            resume=True,
+            checkpoint=tmp_path / "last.pt",
+            payload=changed_payload,
+            config=config,
+            rows=rows,
+        )
+
+
+def test_sentence_aligned_salience_coupling_requires_union_labels() -> None:
+    config = load_config(ROOT / "configs" / "models" / "pplx_pubmed_aligned.yaml")
+    config["data"]["sentence_evidence_use_union_as_salience"] = False
+    with pytest.raises(ValueError, match="requires.*union"):
+        validate_config(config)
+
+
+def test_pubmed_evidence_ablations_hold_prompt_and_salience_labels_fixed() -> None:
+    main = load_config(ROOT / "configs" / "models" / "pplx_pubmed_aligned.yaml")
+    for name in ("pplx_pubmed_global_matched.yaml", "pplx_pubmed_no_evidence_cl.yaml"):
+        ablation = load_config(ROOT / "configs" / "models" / name)
+        for field in (
+            "source_prefix",
+            "sentence_evidence_supervision",
+            "sentence_evidence_use_union_as_salience",
+        ):
+            assert ablation["data"][field] == main["data"][field]
+
+
 def test_builtin_general_metrics() -> None:
     predictions = ["Paris", "red green"]
     references = ["paris", "red blue"]
@@ -248,6 +321,135 @@ def test_evidence_contrastive_backpropagates() -> None:
     result["evidence_contrastive_loss"].backward()
     assert query.grad is not None and torch.isfinite(query.grad).all()
     assert keys.grad is not None and torch.isfinite(keys.grad).all()
+
+
+def test_sentence_aligned_evidence_loss_reaches_salience_logits() -> None:
+    query = torch.nn.functional.normalize(torch.randn(2, 2, 8), dim=-1).requires_grad_()
+    keys = torch.nn.functional.normalize(torch.randn(2, 4, 8), dim=-1).requires_grad_()
+    salience = torch.randn(2, 4, requires_grad=True)
+    labels = torch.tensor(
+        [
+            [[1.0, 0.0, 0.0, -1.0], [0.0, 1.0, 0.0, -1.0]],
+            [[0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]],
+        ]
+    )
+    result = sentence_evidence_info_nce_loss(
+        query,
+        torch.ones(2, 2, dtype=torch.bool),
+        keys,
+        labels,
+        labels[:, 0].ge(0),
+        num_hard_negatives=2,
+        salience_logits=salience,
+        salience_logit_bias=0.15,
+    )
+    result["evidence_contrastive_loss"].backward()
+    assert query.grad is not None and torch.isfinite(query.grad).all()
+    assert keys.grad is not None and torch.isfinite(keys.grad).all()
+    assert salience.grad is not None and salience.grad.abs().sum() > 0
+
+
+def test_sentence_aligned_salience_does_not_contradict_other_sentence_evidence() -> None:
+    # Unit 0 supports sentence 0 and unit 1 supports sentence 1.  They remain
+    # useful q/k negatives for the other sentence, but neither may receive a
+    # negative update to the *single* global bridge salience score.
+    query = torch.zeros(1, 2, 2, requires_grad=True)
+    keys = torch.zeros(1, 3, 2, requires_grad=True)
+    salience = torch.zeros(1, 3, requires_grad=True)
+    labels = torch.tensor([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]])
+    result = sentence_evidence_info_nce_loss(
+        query,
+        torch.ones(1, 2, dtype=torch.bool),
+        keys,
+        labels,
+        torch.ones(1, 3, dtype=torch.bool),
+        num_hard_negatives=2,
+        salience_logits=salience,
+        salience_logit_bias=0.15,
+        global_evidence_labels=torch.tensor([[1.0, 1.0, 0.0]]),
+    )
+    result["evidence_contrastive_loss"].backward()
+    assert salience.grad is not None
+    assert salience.grad[0, 0] < 0.0
+    assert salience.grad[0, 1] < 0.0
+    assert salience.grad[0, 2] > 0.0
+
+
+def test_target_sentence_ids_follow_sentence_spans() -> None:
+    class OffsetTokenizer:
+        def __call__(self, text, **kwargs):
+            assert kwargs["return_offsets_mapping"] is True
+            return {"input_ids": [5, 6, 7, 8], "offset_mapping": [(0, 5), (6, 10), (12, 18), (19, 23)]}
+
+    text = "First line. Second line."
+    assert [value[0] for value in split_units_with_spans(text)] == ["First line.", "Second line."]
+    assert target_sentence_ids(OffsetTokenizer(), text, [5, 6, 7, 8]) == [1, 1, 2, 2]
+
+
+def test_sentence_aligned_targets_fail_closed_on_tokenization_mismatch() -> None:
+    class MismatchedTokenizer:
+        def __call__(self, text, **kwargs):
+            return {"input_ids": [9], "offset_mapping": [(0, 5)]}
+
+    with pytest.raises(ValueError, match="do not match"):
+        target_sentence_ids(MismatchedTokenizer(), "First. Second.", [5, 6], require_offsets=True)
+
+
+def test_sentence_evidence_uses_only_visible_truncated_target_tokens() -> None:
+    class DecodeTokenizer:
+        def decode(self, token_ids, **kwargs):
+            values = {10: "Objective.", 11: "Result", 12: " continued."}
+            return " ".join(values[token_id] for token_id in token_ids)
+
+    # The final reference sentence is intentionally cut after token 11.  Its
+    # oracle evidence must see "Result", never the absent "continued" token.
+    assert visible_target_sentences(DecodeTokenizer(), [10, 11], [1, 2]) == ["Objective.", "Result"]
+
+
+def test_visible_target_sentences_preserve_sentence_id_rows_when_a_span_is_empty() -> None:
+    class DecodeTokenizer:
+        def decode(self, token_ids, **kwargs):
+            return "" if token_ids == [11] else "First sentence."
+
+    assert visible_target_sentences(DecodeTokenizer(), [10, 11, 12], [1, 2, 3]) == [
+        "First sentence.",
+        "",
+        "First sentence.",
+    ]
+
+
+def test_source_prefix_must_leave_article_token_budget() -> None:
+    class SourceTokenizer:
+        eos_token_id = 2
+
+        def __call__(self, text, **kwargs):
+            return {"input_ids": [3, 4, 5]}
+
+    with pytest.raises(ValueError, match="leaves no room"):
+        encode_source(
+            SourceTokenizer(),
+            "article",
+            {"source_prefix": "too long", "max_source_length": 4},
+        )
+
+
+def test_gpu_generation_constraints_match_scalar_reference() -> None:
+    torch.manual_seed(0)
+    base = torch.randn(2, 11)
+    tokens = torch.tensor([[2, 5, 2, 5], [1, 3, 4, 3]])
+    actual = base.clone()
+    _apply_repetition_penalty(actual, tokens, 1.05)
+    _apply_no_repeat_ngram(actual, tokens, 3)
+
+    expected = base.clone()
+    for row in range(tokens.shape[0]):
+        previous = torch.unique(tokens[row])
+        scores = expected[row, previous]
+        expected[row, previous] = torch.where(scores < 0, scores * 1.05, scores / 1.05)
+        blocked = _blocked_tokens(tokens[row].tolist(), 3)
+        if blocked:
+            expected[row, blocked] = float("-inf")
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
 
 
 def test_length_bucket_sampler_covers_each_example_once() -> None:

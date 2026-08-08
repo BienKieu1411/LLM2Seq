@@ -61,6 +61,10 @@ class QwenCopiedCrossAttention(nn.Module):
         self.memory_norm = copy.deepcopy(input_norm)
         self.dropout = float(dropout)
         self._memory_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+        # PyTorch 2.1+ can run grouped-query attention without materialising
+        # num_heads / num_kv_heads copies of every 4K-token memory at every
+        # generated token.  Keep a compatibility fallback for older runtimes.
+        self._sdpa_gqa_supported: Optional[bool] = None
         if not initialize_from_self:
             initializer_range = float(getattr(config, "initializer_range", 0.02))
             for module in (self.q_proj, self.k_proj, self.v_proj, self.o_proj):
@@ -99,13 +103,6 @@ class QwenCopiedCrossAttention(nn.Module):
             key, value = cached
             if key.shape[0] != batch:
                 raise RuntimeError("Stale cross-attention cache; rebuild it for the current batch")
-        repeats = self.num_heads // self.num_kv_heads
-        if repeats > 1:
-            key = key.repeat_interleave(repeats, dim=1)
-            value = value.repeat_interleave(repeats, dim=1)
-        key = key.contiguous()
-        value = value.contiguous()
-
         mask = None
         if encoder_attention_bias is not None:
             mask = encoder_attention_bias.to(query.dtype)[:, None, None, :]
@@ -116,14 +113,25 @@ class QwenCopiedCrossAttention(nn.Module):
                 )
         elif encoder_attention_mask is not None:
             mask = encoder_attention_mask.bool()[:, None, None, :]
-        attended = F.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            attn_mask=mask,
-            dropout_p=self.dropout if self.training else 0.0,
-            is_causal=False,
-        )
+        repeats = self.num_heads // self.num_kv_heads
+        attention_kwargs = {
+            "attn_mask": mask,
+            "dropout_p": self.dropout if self.training else 0.0,
+            "is_causal": False,
+        }
+        if repeats > 1 and self._sdpa_gqa_supported is not False:
+            try:
+                attended = F.scaled_dot_product_attention(query, key, value, enable_gqa=True, **attention_kwargs)
+                self._sdpa_gqa_supported = True
+            except (RuntimeError, TypeError):
+                # Some older PyTorch builds expose no GQA kernel for a given
+                # device/backend.  The expanded implementation is equivalent.
+                self._sdpa_gqa_supported = False
+        if repeats == 1 or self._sdpa_gqa_supported is False:
+            if repeats > 1:
+                key = key.repeat_interleave(repeats, dim=1)
+                value = value.repeat_interleave(repeats, dim=1)
+            attended = F.scaled_dot_product_attention(query, key, value, **attention_kwargs)
         attended = attended.transpose(1, 2).reshape(batch, query_length, self.num_heads * self.head_dim)
         return self.o_proj(attended)
 

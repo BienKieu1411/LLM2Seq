@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
 import logging
 import os
@@ -19,7 +20,11 @@ import torch
 from ..configuration import load_config, resolve_data_path
 from ..data.dataset import clean_text, decoder_seed_ids, encode_source, read_jsonl
 from ..modeling.architecture import EviSeq as RuntimeModel
-from ..training.checkpoint import load_checkpoint
+from ..training.checkpoint import (
+    assert_evaluation_config_matches_checkpoint,
+    evaluation_config_fingerprint,
+    load_checkpoint,
+)
 from ..training.engine import _device, _tokenizers
 from .generation import generate
 from .metrics import task_scores
@@ -52,7 +57,7 @@ def _load_resume_records(
     if not output.is_file() or output.stat().st_size == 0:
         return [], set()
 
-    row_ids = {_row_id(row) for row in rows}
+    rows_by_id = {_row_id(row): row for row in rows}
     records: List[Dict[str, Any]] = []
     seen: set[str] = set()
     valid_end = 0
@@ -69,13 +74,15 @@ def _load_resume_records(
             if not isinstance(record, dict):
                 break
             record_id = record.get("id")
-            if record_id is None or str(record_id) not in row_ids:
+            if record_id is None or str(record_id) not in rows_by_id:
                 raise ValueError("Cannot resume evaluation: prediction file contains an unknown or empty id")
             record_id = str(record_id)
             if record_id in seen:
                 raise ValueError(f"Cannot resume evaluation: duplicate prediction id {record_id!r}")
             if "prediction" not in record or "reference" not in record:
                 raise ValueError("Cannot resume evaluation: every record needs prediction and reference fields")
+            if str(record["reference"]).strip() != str(rows_by_id[record_id]["target"]).strip():
+                raise ValueError("Cannot resume evaluation: prediction reference differs from the current dataset")
             records.append(record)
             seen.add(record_id)
             valid_end = next_end
@@ -85,6 +92,58 @@ def _load_resume_records(
         with output.open("r+b") as handle:
             handle.truncate(valid_end)
     return records, seen
+
+
+def _resume_manifest_path(output: Path) -> Path:
+    return output.with_suffix(".resume.json")
+
+
+def _dataset_fingerprint(rows: List[Dict[str, Any]]) -> str:
+    material = [{"id": _row_id(row), "source": str(row["source"]), "target": str(row["target"])} for row in rows]
+    encoded = json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _resume_manifest(
+    checkpoint: Path, payload: Dict[str, Any], config: Dict[str, Any], rows: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    return {
+        "checkpoint_path": str(checkpoint.resolve()),
+        "checkpoint_role": payload.get("checkpoint_role"),
+        "checkpoint_epoch": int(payload.get("epoch", 0)),
+        "checkpoint_global_step": int(payload.get("global_step", 0)),
+        "evaluation_config": evaluation_config_fingerprint(config),
+        "dataset": _dataset_fingerprint(rows),
+    }
+
+
+def _verify_or_write_resume_manifest(
+    output: Path,
+    *,
+    resume: bool,
+    checkpoint: Path,
+    payload: Dict[str, Any],
+    config: Dict[str, Any],
+    rows: List[Dict[str, Any]],
+) -> None:
+    manifest_path = _resume_manifest_path(output)
+    expected = _resume_manifest(checkpoint, payload, config, rows)
+    if resume and output.is_file() and output.stat().st_size > 0:
+        if not manifest_path.is_file():
+            raise RuntimeError(
+                f"Cannot safely resume {output}: missing {manifest_path.name}. "
+                "Start a fresh evaluation or retain the manifest written with the prediction file."
+            )
+        try:
+            saved = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"Cannot safely resume {output}: invalid {manifest_path.name}") from error
+        if saved != expected:
+            raise RuntimeError(
+                "Cannot safely resume evaluation: checkpoint, resolved decoding configuration, or test dataset differs"
+            )
+        return
+    manifest_path.write_text(json.dumps(expected, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _diagnostics(predictions: List[str], references: List[str], sources: List[str]) -> Dict[str, float]:
@@ -167,6 +226,7 @@ def evaluate(
     encoder_tokenizer, decoder_tokenizer = _tokenizers(config)
     model = RuntimeModel(config)
     payload = load_checkpoint(model, checkpoint)
+    assert_evaluation_config_matches_checkpoint(payload, config)
     model.to(device).eval()
     data = config["data"]
     configured_limit = int(config.get("limits", {}).get("max_test_examples", 0))
@@ -185,6 +245,14 @@ def evaluate(
     decoder_seed = decoder_seed_ids(decoder_tokenizer, data)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
+    _verify_or_write_resume_manifest(
+        output,
+        resume=resume,
+        checkpoint=checkpoint,
+        payload=payload,
+        config=config,
+        rows=rows,
+    )
     resume_records: List[Dict[str, Any]] = []
     processed_ids: set[str] = set()
     if resume:
@@ -316,6 +384,11 @@ def evaluate(
         "encoder_name": config["model"]["encoder_name"],
         "decoder_name": config["model"]["decoder_name"],
         "final_graph": "one_encoder_one_adapter_one_decoder",
+        # Fixed to the baseline-compatible decoding protocol: no beam search,
+        # sampling, candidate selection, or reranking.
+        "decode_mode": "greedy_argmax",
+        "num_beams": 1,
+        "do_sample": False,
     }
     benchmark_root = config.get("benchmark", {})
     benchmark = benchmark_root.get("paper", benchmark_root)
@@ -323,10 +396,21 @@ def evaluate(
         name in metrics for name in ("rouge1", "rouge2", "rougeL")
     ):
         metrics["benchmark_name"] = str(benchmark.get("name", "T5Gemma"))
-        metrics["gap_to_t5gemma"] = {
-            name: round(float(metrics[name]) - float(benchmark[name]), 4) for name in ("rouge1", "rouge2", "rougeL")
-        }
-        metrics["rouge2_target_reached"] = float(metrics["rouge2"]) >= float(benchmark["rouge2"])
+        candidate_backend = "rouge==1.0.0 (built-in Python diagnostic)"
+        target_backend = str(benchmark.get("backend", "unspecified"))
+        metrics["diagnostic_rouge_backend"] = candidate_backend
+        metrics["benchmark_rouge_backend"] = target_backend
+        if "perl rouge-1.5.5" in target_backend.lower():
+            # ``rouge==1.0.0`` is intentionally retained for fast training
+            # diagnostics, but its scores are not interchangeable with the
+            # paper protocol.  Never turn an incomparable score into a paper
+            # gap or a pass/fail claim.
+            metrics["paper_comparison_status"] = "pending_perl_rouge155"
+        else:
+            metrics["gap_to_t5gemma"] = {
+                name: round(float(metrics[name]) - float(benchmark[name]), 4) for name in ("rouge1", "rouge2", "rougeL")
+            }
+            metrics["rouge2_target_reached"] = float(metrics["rouge2"]) >= float(benchmark["rouge2"])
     metrics_path = output.with_suffix(".metrics.json")
     metrics_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
     if "gap_to_t5gemma" in metrics:
