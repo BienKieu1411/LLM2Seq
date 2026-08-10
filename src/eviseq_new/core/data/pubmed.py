@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Any, Dict, Iterator
@@ -106,6 +107,7 @@ def prepare(
     output_dir: Path,
     *,
     dataset_name: str = "pubmed",
+    allow_cross_split_content: bool = False,
 ) -> Dict[str, Any]:
     input_dir = input_dir.expanduser().resolve()
     raw_copy_dir = raw_copy_dir.expanduser().resolve()
@@ -129,7 +131,10 @@ def prepare(
                 details.append(f"duplicate ids={duplicate_ids[:5]}")
             if duplicate_sources:
                 details.append(f"duplicate source texts={len(duplicate_sources)}")
-            raise ValueError(f"Cross-split content leakage while preparing {dataset_name}: " + "; ".join(details))
+            message = f"Cross-split content leakage while preparing {dataset_name}: " + "; ".join(details)
+            if not allow_cross_split_content:
+                raise ValueError(message)
+            print(f"WARNING: {message}; continuing because cross-split checks were explicitly disabled")
         seen_identifiers.update(stats["ids"])
         seen_source_hashes.update(stats["source_hashes"])
         stats.pop("ids")
@@ -154,8 +159,19 @@ def main() -> None:
     parser.add_argument("--input-dir", required=True)
     parser.add_argument("--raw-copy-dir", default="data/raw/pubmed")
     parser.add_argument("--output-dir", default="data/pubmed")
+    parser.add_argument(
+        "--allow-cross-split-content",
+        action="store_true",
+        default=os.environ.get("EVISEQ_ALLOW_CROSS_SPLIT_CONTENT", "").lower() in {"1", "true", "yes"},
+        help="Allow duplicate IDs/source texts across splits (debug only; not valid for paper evaluation)",
+    )
     args = parser.parse_args()
-    report = prepare(Path(args.input_dir), Path(args.raw_copy_dir), Path(args.output_dir))
+    report = prepare(
+        Path(args.input_dir),
+        Path(args.raw_copy_dir),
+        Path(args.output_dir),
+        allow_cross_split_content=args.allow_cross_split_content,
+    )
     for split, stats in report["splits"].items():
         print(f"{split}: {stats['kept']} examples (skipped {stats['skipped']}) -> {stats['processed_path']}")
 

@@ -69,3 +69,21 @@ def test_prepare_pubmed_rejects_cross_split_source_leakage_with_different_ids(tm
 
     with pytest.raises(ValueError, match="Cross-split content leakage.*duplicate source texts"):
         prepare(source, tmp_path / "raw", tmp_path / "processed")
+
+
+def test_prepare_pubmed_can_explicitly_allow_cross_split_content_for_debug(tmp_path: Path) -> None:
+    source = tmp_path / "pubmed"
+    duplicate = _source_row("same")
+    _write(source / "train.label.jsonl", duplicate)
+    _write(source / "val.label.jsonl", _source_row("validation"))
+    _write(source / "test.label.jsonl", duplicate)
+
+    report = prepare(
+        source,
+        tmp_path / "raw",
+        tmp_path / "processed",
+        allow_cross_split_content=True,
+    )
+
+    assert report["splits"]["train"]["kept"] == 1
+    assert report["splits"]["test"]["kept"] == 1
