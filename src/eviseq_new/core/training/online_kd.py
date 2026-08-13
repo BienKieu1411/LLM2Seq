@@ -222,9 +222,9 @@ class GoldPrefixTeacher:
                 destination = slice(prefix_width, prefix_width + len(gold))
                 ids[index, destination] = top_ids.to(output_device)
                 values[index, destination] = top_values.to(output_device)
-                normalizers[index, destination] = torch.logsumexp(
-                    target_logits / self.temperature, dim=-1
-                ).to(output_device)
+                normalizers[index, destination] = torch.logsumexp(target_logits / self.temperature, dim=-1).to(
+                    output_device
+                )
                 valid[index, destination] = True
             del logits
         return {
