@@ -1,4 +1,4 @@
-_base_: pplx_pubmed_aligned.yaml
+_base_: pplx_pubmed_aligned_corrected.yaml
 
 # Ablation A: replace only the aligned per-summary-sentence query with the
 # original whole-abstract query.  It deliberately inherits the aligned

@@ -1,0 +1,12 @@
+_base_: pplx_pubmed_aligned_corrected.yaml
+
+# Main architecture ablation: retain one PPLX encoder, one EvidenceBridge,
+# and one Qwen decoder, but let the bridge learn a residual coordinate
+# correction.  It is exactly identity at initialization, so the pretrained
+# PPLX memory is unchanged before training.
+experiment:
+  name: eviseq_pubmed_pplx_aligned_bridgeproj_0_6b_to_qwen3_0_6b
+  output_dir: runs/eviseq/pubmed_pplx_aligned_bridgeproj_0_6b
+
+bridge:
+  trainable_identity_projection: true

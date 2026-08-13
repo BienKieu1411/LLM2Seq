@@ -99,7 +99,11 @@ class EviSeq(nn.Module):
             raise ValueError("evidence_contrastive_salience_bias must be non-negative")
         if self.use_evidence_contrastive:
             self.evidence_contrastive_head: Optional[EvidenceContrastiveHead] = EvidenceContrastiveHead(
-                encoder_hidden_size=expected_encoder,
+                # Evidence keys are pooled from ``bridge.memory`` below,
+                # which is in decoder coordinates after the bridge
+                # projection.  This must not be the raw encoder width: some
+                # supported recipes intentionally use e.g. 2048 -> 1024.
+                key_hidden_size=decoder_hidden,
                 decoder_hidden_size=decoder_hidden,
                 projection_size=int(objectives.get("evidence_contrastive_projection_size", 256)),
             )
@@ -226,10 +230,13 @@ class EviSeq(nn.Module):
             and encoded.unit_logits is not None
             and encoded.valid_units is not None
         ):
-            # Get sentence-level representations from encoder
+            # Get sentence-level representations from the exact memory that
+            # the decoder cross-attends to.  This leaves the identity baseline
+            # unchanged and gives a trainable bridge projection a direct
+            # evidence-contrastive gradient when it is enabled.
             unit_count = int(unit_ids.max().item()) if unit_ids is not None else 0
             if unit_count > 0:
-                sentence_reprs, valid_units = pool_units(encoded.memory, unit_ids, unit_count)
+                sentence_reprs, valid_units = pool_units(bridge.memory, unit_ids, unit_count)
 
                 if self.evidence_contrastive_mode == "sentence_aligned":
                     if target_sentence_ids is None or sentence_evidence_labels is None:
@@ -313,6 +320,11 @@ class EviSeq(nn.Module):
             "evidence_hard_negatives": states.new_tensor(self.evidence_hard_negatives),
             "cross_gate_mean": self.decoder.cross_gate_mean().detach(),
             "cross_residual_ratio": self.decoder.cross_residual_ratio_mean().detach(),
+            "bridge_projection_residual_ratio": bridge.projection_residual_ratio.detach(),
+            "bridge_salience_gate": bridge.salience_attention_gate.detach(),
+            "positive_attention_prior": bridge.positive_attention_prior.detach(),
+            "negative_attention_prior": bridge.negative_attention_prior.detach(),
+            "positive_attention_prior_gap": bridge.positive_attention_prior_gap.detach(),
             "bidirectional_gate_mean": encoded.native_gate_mean.detach(),
             "projection_gate": encoded.native_gate_mean.detach(),
             "evidence_view_gate": encoded.native_gate_mean.detach(),

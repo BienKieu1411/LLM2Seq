@@ -223,6 +223,25 @@ bash eviseq/scripts/run.sh prepare-pubmed /absolute/path/to/pubmed
 bash eviseq/scripts/run.sh prepare-arxiv /absolute/path/to/arxiv
 ```
 
-The ready-to-run PubMed GPU queue runs the paper PPLX-encoder,
-sentence-aligned-EviSeq recipe and is isolated in `scripts/gpu_0.sh` instead
-of being mixed with the Python package.
+The ready-to-run PubMed GPU queue first reruns a corrected PPLX-encoder,
+sentence-aligned-EviSeq reference, then its two pre-registered architecture
+variants: identity-initialized PPLX-to-Qwen bridge projection and the same
+bridge with `cross_gate_init: 0.20`. The historical aligned artifact is not
+overwritten. The queue is isolated in `scripts/gpu_0.sh` instead of being
+mixed with the Python package.
+
+The corrected bridge keeps the inference graph unchanged:
+
+```text
+PPLX encoder -> trainable evidence bridge -> Qwen decoder -> greedy summary
+```
+
+During training, reference-derived source positives supervise the bridge
+salience head and sentence-level contrastive loss. At inference no reference
+or label is read: the trained salience head predicts the soft additive
+cross-attention prior from the source alone. For the corrected recipes that
+prior is non-negative and unit-length invariant, so a higher predicted
+positive score favours that source unit over an otherwise equal negative unit
+(until the deliberate numerical clipping saturates). The decoder may still
+access every source token; the bridge is a preference, not a hard extractive
+mask.

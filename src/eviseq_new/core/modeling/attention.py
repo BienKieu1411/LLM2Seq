@@ -83,13 +83,16 @@ def unit_evidence_token_bias(
     attention_mask: torch.Tensor,
     *,
     scale: float = 1.0,
+    evidence_gate: torch.Tensor | float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Distribute unit evidence over tokens without a sentence-length prior.
 
     For unit ``u`` with ``n_u`` visible subwords, every token receives
-    ``scale * logit_u - log(n_u)``. Consequently, if token-content scores are
-    equal, the unit contributes total unnormalised mass
-    ``exp(scale * logit_u)`` regardless of its token count.
+    ``gate * scale * logit_u - log(n_u)``. Consequently, if token-content
+    scores are equal, the unit contributes total unnormalised mass
+    ``exp(gate * scale * logit_u)`` regardless of its token count.  The gate
+    controls evidence preference only; it must not weaken the length
+    normalization, otherwise long source sentences receive a hidden prior.
     """
 
     if unit_logits.ndim != 2 or unit_logits.shape != valid_units.shape:
@@ -118,7 +121,8 @@ def unit_evidence_token_bias(
     token_counts.scatter_add_(1, capped_ids, source_keys.float())
     length_penalty = token_counts.gather(1, capped_ids).clamp_min(1.0).log()
     key_logits = padded_logits.gather(1, capped_ids).clamp(-5.0, 5.0)
-    return float(scale) * key_logits - length_penalty, source_keys
+    gate = torch.as_tensor(evidence_gate, dtype=key_logits.dtype, device=key_logits.device)
+    return gate * float(scale) * key_logits - length_penalty, source_keys
 
 
 def evidence_key_attention_bias(

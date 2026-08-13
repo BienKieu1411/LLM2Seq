@@ -143,8 +143,22 @@ def validate_config(config: Dict[str, Any]) -> None:
 
     if int(bridge.get("salience_hidden_size", 0)) <= 0:
         raise ValueError("bridge.salience_hidden_size must be positive")
+    if not isinstance(bridge.get("trainable_identity_projection", False), bool):
+        raise ValueError("bridge.trainable_identity_projection must be boolean")
+    if bool(bridge.get("trainable_identity_projection", False)) and encoder_hidden != decoder_hidden:
+        raise ValueError("bridge.trainable_identity_projection requires equal encoder and decoder hidden sizes")
+    gate_parameterization = str(bridge.get("salience_gate_parameterization", "signed_tanh"))
+    if gate_parameterization not in {"signed_tanh", "sigmoid"}:
+        raise ValueError("bridge.salience_gate_parameterization must be signed_tanh or sigmoid")
     if not 0.0 <= float(bridge.get("salience_gate_init", 0.0)) < 1.0:
         raise ValueError("bridge.salience_gate_init must be in [0, 1)")
+    if gate_parameterization == "sigmoid" and float(bridge.get("salience_gate_init", 0.0)) <= 0.0:
+        raise ValueError("sigmoid bridge.salience_gate_init must be in (0, 1)")
+    if float(bridge.get("salience_bias_scale", 0.0)) <= 0.0:
+        raise ValueError("bridge.salience_bias_scale must be positive")
+    length_normalization = str(bridge.get("salience_length_normalization", "legacy_gated"))
+    if length_normalization not in {"legacy_gated", "unit_invariant"}:
+        raise ValueError("bridge.salience_length_normalization must be legacy_gated or unit_invariant")
     if float(bridge.get("salience_ranking_weight", 0.0)) < 0.0:
         raise ValueError("bridge.salience_ranking_weight must be non-negative")
     if int(decoder.get("cross_attention_every", 1)) != 1:

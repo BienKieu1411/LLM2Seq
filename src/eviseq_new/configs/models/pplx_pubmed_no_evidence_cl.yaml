@@ -1,4 +1,4 @@
-_base_: pplx_pubmed_aligned.yaml
+_base_: pplx_pubmed_aligned_corrected.yaml
 
 # Ablation C: CE plus the existing salience loss only.  Keep the aligned
 # recipe's union salience labels and source serialization fixed; otherwise the

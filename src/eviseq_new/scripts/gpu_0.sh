@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Train the paper EviSeq recipe (PPLX encoder, sentence-aligned evidence CL)
-# on PubMed, evaluate last.pt on the test split, then compute Perl ROUGE-1.5.5.
+# Run a corrected PubMed baseline, then two isolated architecture variants:
+# identity-initialized PPLX->Qwen bridge projection, then the same bridge
+# with cross-gate 0.20.  Each run evaluates its own last.pt with Perl
+# ROUGE-1.5.5.  The corrected baseline has a separate output directory, so
+# historical legacy artifacts are retained for reference.
 #
 # Run from the repository src directory:
-#   CUDA_VISIBLE_DEVICES=0 bash eviseq/scripts/gpu_0.sh
+#   CUDA_VISIBLE_DEVICES=0 bash eviseq_new/scripts/gpu_0.sh
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${PROJECT_ROOT}"
@@ -19,9 +22,6 @@ export PYROUGE_HOME_DIR="${PYROUGE_HOME_DIR:-/workspace/storage-shared/nlp/dungd
 
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-8}"
 PUBMED_SOURCE_DIR="${PUBMED_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/datasets/pubmed}"
-RUN_DIR="runs/eviseq/pubmed_pplx_aligned_0_6b"
-LAST_PREDICTIONS="${RUN_DIR}/last_test_predictions.jsonl"
-BEST_PREDICTIONS="${RUN_DIR}/best_test_predictions.jsonl"
 PROCESSED_DATA_DIR="datasets/pubmed"
 
 if [[ ! -f "${PYROUGE_HOME_DIR}/ROUGE-1.5.5.pl" ]]; then
@@ -34,7 +34,7 @@ mkdir -p logs/gpu_queues
 LOG_FILE="logs/gpu_queues/gpu_0_pubmed_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "${LOG_FILE}") 2>&1
 
-echo "=== GPU 0: EviSeq PPLX-aligned PubMed train, test, and ROUGE-1.5.5 ==="
+echo "=== GPU 0: corrected PPLX baseline -> bridge projection -> gate 0.20 ==="
 echo "=== CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ==="
 echo "=== PYROUGE_HOME_DIR=${PYROUGE_HOME_DIR} ==="
 echo "=== Log: ${LOG_FILE} ==="
@@ -54,28 +54,31 @@ else
   bash scripts/run.sh prepare-pubmed "${PUBMED_SOURCE_DIR}"
 fi
 
-bash scripts/run.sh pplx-pubmed-aligned --overwrite-output-dir
+run_and_score() {
+  local train_mode="$1"
+  local eval_mode="$2"
+  local run_dir="$3"
+  local predictions="${run_dir}/last_test_predictions.jsonl"
 
-bash scripts/run.sh evaluate-pplx-pubmed-aligned-test \
-  --batch-size "${EVAL_BATCH_SIZE}"
+  echo "=== Starting ${train_mode} ==="
+  bash scripts/run.sh "${train_mode}" --overwrite-output-dir
+  bash scripts/run.sh "${eval_mode}" --batch-size "${EVAL_BATCH_SIZE}"
+  bash scripts/run.sh rouge155 "${PROJECT_ROOT}/${predictions}" --details
+}
 
-bash scripts/run.sh rouge155 \
-  "${PROJECT_ROOT}/${LAST_PREDICTIONS}" \
-  --details
+run_and_score \
+  pplx-pubmed-aligned-corrected \
+  evaluate-pplx-pubmed-aligned-corrected-test \
+  runs/eviseq/pubmed_pplx_aligned_corrected_0_6b
 
-if [[ -f "${RUN_DIR}/best.pt" ]]; then
-  bash scripts/run.sh evaluate \
-    "${RUN_DIR}/resolved_config.yaml" \
-    "${RUN_DIR}/best.pt" \
-    "${BEST_PREDICTIONS}" \
-    --split test \
-    --batch-size "${EVAL_BATCH_SIZE}"
+run_and_score \
+  pplx-pubmed-aligned-bridgeproj \
+  evaluate-pplx-pubmed-aligned-bridgeproj-test \
+  runs/eviseq/pubmed_pplx_aligned_bridgeproj_0_6b
 
-  bash scripts/run.sh rouge155 \
-    "${PROJECT_ROOT}/${BEST_PREDICTIONS}" \
-    --details
-else
-  echo "=== best.pt is disabled or absent; skipping best-checkpoint evaluation ==="
-fi
+run_and_score \
+  pplx-pubmed-aligned-bridgeproj-gate20 \
+  evaluate-pplx-pubmed-aligned-bridgeproj-gate20-test \
+  runs/eviseq/pubmed_pplx_aligned_bridgeproj_gate20_0_6b
 
 echo "=== GPU 0 PubMed queue completed successfully ==="

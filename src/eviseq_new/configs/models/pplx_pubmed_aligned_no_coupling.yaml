@@ -1,4 +1,4 @@
-_base_: pplx_pubmed_aligned.yaml
+_base_: pplx_pubmed_aligned_corrected.yaml
 
 # Ablation B: per-summary-sentence evidence queries, but no direct gradient
 # from evidence contrastive learning to the salience attention-bias logits.

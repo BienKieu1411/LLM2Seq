@@ -235,7 +235,7 @@ class EvidenceContrastiveHead(nn.Module):
 
     Projects:
     - Decoder summary representation → query q = norm(W_q @ z_y)
-    - Encoder sentence representations → keys k_i = norm(W_h @ h_i)
+    - Bridge-memory sentence representations → keys k_i = norm(W_h @ h_i)
 
     These projection heads are training-only; they do not participate in
     inference.
@@ -243,7 +243,7 @@ class EvidenceContrastiveHead(nn.Module):
 
     def __init__(
         self,
-        encoder_hidden_size: int,
+        key_hidden_size: int,
         decoder_hidden_size: int,
         projection_size: int = 256,
     ):
@@ -253,8 +253,8 @@ class EvidenceContrastiveHead(nn.Module):
             nn.Linear(decoder_hidden_size, projection_size, bias=False),
         )
         self.key_projection = nn.Sequential(
-            nn.RMSNorm(encoder_hidden_size),
-            nn.Linear(encoder_hidden_size, projection_size, bias=False),
+            nn.RMSNorm(key_hidden_size),
+            nn.Linear(key_hidden_size, projection_size, bias=False),
         )
         nn.init.xavier_uniform_(self.query_projection[-1].weight)
         nn.init.xavier_uniform_(self.key_projection[-1].weight)
@@ -268,7 +268,7 @@ class EvidenceContrastiveHead(nn.Module):
 
         Args:
             summary_repr: [B, D_dec] decoder summary representation
-            sentence_reprs: [B, U, D_enc] encoder sentence-level representations
+            sentence_reprs: [B, U, D_key] bridge-memory sentence representations
 
         Returns:
             q: [B, P] normalized query

@@ -44,10 +44,18 @@ def evaluation_config_fingerprint(config: Dict[str, Any]) -> str:
 
     data = config.get("data", {})
     generation = config.get("generation", {})
+    bridge = dict(config.get("bridge", {}))
+    # ``trainable_identity_projection: false`` is an identity graph and was
+    # absent from checkpoints created before the option existed.  Canonicalize
+    # that default so old identity-bridge checkpoints remain evaluable while
+    # a real bridge-projection mismatch still fails closed.
+    bridge.setdefault("trainable_identity_projection", False)
+    bridge.setdefault("salience_gate_parameterization", "signed_tanh")
+    bridge.setdefault("salience_length_normalization", "legacy_gated")
     material = {
         "model": config.get("model", {}),
         "native_attention": config.get("native_attention", {}),
-        "bridge": config.get("bridge", {}),
+        "bridge": bridge,
         "decoder": config.get("decoder", {}),
         "data": {name: data.get(name) for name in _RUNTIME_DATA_FIELDS},
         "generation": {name: generation.get(name) for name in _RUNTIME_GENERATION_FIELDS},

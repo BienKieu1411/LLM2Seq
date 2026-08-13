@@ -23,6 +23,9 @@ PUBMED_CONFIG="$PROJECT_ROOT/configs/tasks/pubmed.yaml"
 ARXIV_CONFIG="$PROJECT_ROOT/configs/tasks/arxiv.yaml"
 PPLX_PUBMED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed.yaml"
 PPLX_PUBMED_ALIGNED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_aligned.yaml"
+PPLX_PUBMED_ALIGNED_CORRECTED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_aligned_corrected.yaml"
+PPLX_PUBMED_ALIGNED_BRIDGEPROJ_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_aligned_bridgeproj.yaml"
+PPLX_PUBMED_ALIGNED_BRIDGEPROJ_GATE20_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_aligned_bridgeproj_gate20.yaml"
 PPLX_PUBMED_GLOBAL_MATCHED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_global_matched.yaml"
 PPLX_PUBMED_ALIGNED_NO_COUPLING_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_aligned_no_coupling.yaml"
 PPLX_PUBMED_NO_EVIDENCE_CL_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_no_evidence_cl.yaml"
@@ -163,6 +166,15 @@ case "$MODE" in
   pplx-pubmed-aligned)
     train_and_validate "$PPLX_PUBMED_ALIGNED_CONFIG" "$@"
     ;;
+  pplx-pubmed-aligned-corrected)
+    train_and_validate "$PPLX_PUBMED_ALIGNED_CORRECTED_CONFIG" "$@"
+    ;;
+  pplx-pubmed-aligned-bridgeproj)
+    train_and_validate "$PPLX_PUBMED_ALIGNED_BRIDGEPROJ_CONFIG" "$@"
+    ;;
+  pplx-pubmed-aligned-bridgeproj-gate20)
+    train_and_validate "$PPLX_PUBMED_ALIGNED_BRIDGEPROJ_GATE20_CONFIG" "$@"
+    ;;
   pplx-pubmed-global-matched)
     train_and_validate "$PPLX_PUBMED_GLOBAL_MATCHED_CONFIG" "$@"
     ;;
@@ -225,6 +237,15 @@ case "$MODE" in
   evaluate-pplx-pubmed-aligned-test)
     evaluate_test "$PPLX_PUBMED_ALIGNED_CONFIG" "$@"
     ;;
+  evaluate-pplx-pubmed-aligned-corrected-test)
+    evaluate_test "$PPLX_PUBMED_ALIGNED_CORRECTED_CONFIG" "$@"
+    ;;
+  evaluate-pplx-pubmed-aligned-bridgeproj-test)
+    evaluate_test "$PPLX_PUBMED_ALIGNED_BRIDGEPROJ_CONFIG" "$@"
+    ;;
+  evaluate-pplx-pubmed-aligned-bridgeproj-gate20-test)
+    evaluate_test "$PPLX_PUBMED_ALIGNED_BRIDGEPROJ_GATE20_CONFIG" "$@"
+    ;;
   evaluate-pplx-pubmed-global-matched-test)
     evaluate_test "$PPLX_PUBMED_GLOBAL_MATCHED_CONFIG" "$@"
     ;;
@@ -276,39 +297,42 @@ case "$MODE" in
     cat <<'EOF'
 EviSeq (runs directly from source; no local package install required)
 
-  bash eviseq/scripts/run.sh train CONFIG.yaml --overwrite-output-dir
-  bash eviseq/scripts/run.sh evaluate RESOLVED.yaml last.pt predictions.jsonl --split test
-  bash eviseq/scripts/run.sh validate-data CONFIG.yaml
-  bash eviseq/scripts/run.sh test
-  bash eviseq/scripts/run.sh smoke --overwrite-output-dir
-  bash eviseq/scripts/run.sh wiki --overwrite-output-dir
-  bash eviseq/scripts/run.sh arxiv --overwrite-output-dir
-  bash eviseq/scripts/run.sh pplx --overwrite-output-dir
-  bash eviseq/scripts/run.sh nemotron --overwrite-output-dir
-  bash eviseq/scripts/run.sh c0|c2|c3-no-cl --overwrite-output-dir
-  bash eviseq/scripts/run.sh ablation-all --overwrite-output-dir
-  bash eviseq/scripts/run.sh c1 --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh train CONFIG.yaml --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh evaluate RESOLVED.yaml last.pt predictions.jsonl --split test
+  bash eviseq_new/scripts/run.sh validate-data CONFIG.yaml
+  bash eviseq_new/scripts/run.sh test
+  bash eviseq_new/scripts/run.sh smoke --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh wiki --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh arxiv --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh pplx --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh nemotron --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh c0|c2|c3-no-cl --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh ablation-all --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh c1 --overwrite-output-dir
 
 Data and other datasets:
-  bash eviseq/scripts/run.sh prepare-cnndm /absolute/path/to/cnndm
-  bash eviseq/scripts/run.sh prepare-pubmed /absolute/path/to/pubmed
-  bash eviseq/scripts/run.sh prepare-arxiv /absolute/path/to/arxiv
-  bash eviseq/scripts/run.sh cnndm --overwrite-output-dir
-  bash eviseq/scripts/run.sh pubmed --overwrite-output-dir
-  bash eviseq/scripts/run.sh arxiv --overwrite-output-dir
-  bash eviseq/scripts/run.sh pplx-pubmed --overwrite-output-dir
-  bash eviseq/scripts/run.sh pplx-pubmed-aligned --overwrite-output-dir
-  bash eviseq/scripts/run.sh pplx-pubmed-global-matched --overwrite-output-dir
-  bash eviseq/scripts/run.sh pplx-pubmed-aligned-no-coupling --overwrite-output-dir
-  bash eviseq/scripts/run.sh pplx-pubmed-no-evidence-cl --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh prepare-cnndm /absolute/path/to/cnndm
+  bash eviseq_new/scripts/run.sh prepare-pubmed /absolute/path/to/pubmed
+  bash eviseq_new/scripts/run.sh prepare-arxiv /absolute/path/to/arxiv
+  bash eviseq_new/scripts/run.sh cnndm --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh pubmed --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh arxiv --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh pplx-pubmed --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh pplx-pubmed-aligned --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh pplx-pubmed-aligned-corrected --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh pplx-pubmed-aligned-bridgeproj --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh pplx-pubmed-aligned-bridgeproj-gate20 --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh pplx-pubmed-global-matched --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh pplx-pubmed-aligned-no-coupling --overwrite-output-dir
+  bash eviseq_new/scripts/run.sh pplx-pubmed-no-evidence-cl --overwrite-output-dir
 
 Evaluation commands:
-  bash eviseq/scripts/run.sh evaluate-wiki-test
-  bash eviseq/scripts/run.sh evaluate-arxiv-test --batch-size 96
-  bash eviseq/scripts/run.sh evaluate-test CONFIG.yaml --batch-size 8
+  bash eviseq_new/scripts/run.sh evaluate-wiki-test
+  bash eviseq_new/scripts/run.sh evaluate-arxiv-test --batch-size 96
+  bash eviseq_new/scripts/run.sh evaluate-test CONFIG.yaml --batch-size 8
   # Add --resume to continue an interrupted JSONL evaluation.
-  bash eviseq/scripts/run.sh rouge155 runs/.../last_test_predictions.jsonl --details
-  bash eviseq/scripts/run.sh bootstrap CANDIDATE_ROUGE155 BASELINE_ROUGE155 OUTPUT_JSON
+  bash eviseq_new/scripts/run.sh rouge155 runs/.../last_test_predictions.jsonl --details
+  bash eviseq_new/scripts/run.sh bootstrap CANDIDATE_ROUGE155 BASELINE_ROUGE155 OUTPUT_JSON
 
 Override a local checkpoint path, batch, LR, or epoch in the YAML config. The
 runner uses the active virtual environment (activate bienkieu_env first).

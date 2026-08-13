@@ -11,6 +11,7 @@ from eviseq.configuration import load_config, resolve_data_path, validate_config
 from eviseq.data.dataset import (
     LengthBucketBatchSampler,
     encode_source,
+    greedy_evidence_labels,
     read_jsonl,
     split_units_with_spans,
     target_sentence_ids,
@@ -19,8 +20,8 @@ from eviseq.data.dataset import (
 from eviseq.evaluation.engine import _verify_or_write_resume_manifest
 from eviseq.evaluation.generation import _apply_no_repeat_ngram, _apply_repetition_penalty, _blocked_tokens
 from eviseq.evaluation.metrics import exact_match_score, token_f1_score
-from eviseq.modeling.attention import mix_attention_outputs
-from eviseq.modeling.bridge import balanced_salience_loss
+from eviseq.modeling.attention import mix_attention_outputs, unit_evidence_token_bias
+from eviseq.modeling.bridge import EvidenceBridge, balanced_salience_loss
 from eviseq.training.checkpoint import (
     assert_evaluation_config_matches_checkpoint,
     initialize_from_checkpoint,
@@ -28,7 +29,7 @@ from eviseq.training.checkpoint import (
     save_configured_epoch_checkpoints,
     save_last_checkpoint,
 )
-from eviseq.training.objectives import evidence_info_nce_loss, sentence_evidence_info_nce_loss
+from eviseq.training.objectives import EvidenceContrastiveHead, evidence_info_nce_loss, sentence_evidence_info_nce_loss
 from eviseq.training.trainer import _capture_optimizer_moments, _restore_optimizer_moments
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +62,257 @@ def test_dataset_recipes_share_the_same_model_graph() -> None:
         for name in ("wikilingua.yaml", "cnndm.yaml", "pubmed.yaml", "arxiv.yaml")
     ]
     assert all(_architecture(config) == _architecture(configs[0]) for config in configs[1:])
+
+
+def test_identity_initialized_bridge_projection_preserves_memory_and_learns() -> None:
+    bridge = EvidenceBridge(
+        8,
+        8,
+        {
+            "trainable_identity_projection": True,
+            "salience_gate_init": 0.1,
+            "salience_bias_scale": 1.0,
+            "salience_ranking_weight": 0.0,
+        },
+    )
+    memory = torch.randn(2, 5, 8, requires_grad=True)
+    mask = torch.ones(2, 5, dtype=torch.long)
+    output = bridge(memory, mask, None, None, None, None)
+    torch.testing.assert_close(output.memory, memory)
+    assert output.projection_residual_ratio is not None
+    assert output.projection_residual_ratio.item() == pytest.approx(0.0, abs=1e-7)
+    output.memory.square().mean().backward()
+    assert bridge.projection.update.weight.grad is not None
+    assert bridge.projection.update.weight.grad.abs().sum() > 0
+
+
+def test_identity_initialized_projection_is_rng_neutral() -> None:
+    """A fixed-seed ablation must not randomize later objective heads."""
+
+    torch.manual_seed(17)
+    expected = torch.randn(11)
+    torch.manual_seed(17)
+    EvidenceBridge(
+        8,
+        8,
+        {
+            "trainable_identity_projection": True,
+            "salience_gate_init": 0.1,
+            "salience_bias_scale": 1.0,
+            "salience_ranking_weight": 0.0,
+        },
+    )
+    actual = torch.randn(11)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_identity_initialized_projection_accepts_bfloat16_without_autocast() -> None:
+    bridge = EvidenceBridge(
+        8,
+        8,
+        {
+            "trainable_identity_projection": True,
+            "salience_gate_init": 0.1,
+            "salience_bias_scale": 1.0,
+            "salience_ranking_weight": 0.0,
+        },
+    )
+    memory = torch.randn(2, 5, 8, dtype=torch.bfloat16, requires_grad=True)
+    result = bridge(memory, torch.ones(2, 5, dtype=torch.long), None, None, None, None)
+    assert result.memory.dtype == torch.bfloat16
+    result.memory.float().square().mean().backward()
+    assert bridge.projection.update.weight.grad is not None
+
+
+def test_unequal_width_bridge_accepts_bfloat16_without_autocast() -> None:
+    """General encoder->decoder bridges must not depend on CUDA autocast."""
+
+    bridge = EvidenceBridge(
+        8,
+        4,
+        {
+            "salience_gate_init": 0.1,
+            "salience_bias_scale": 1.0,
+            "salience_ranking_weight": 0.0,
+        },
+    )
+    memory = torch.randn(2, 5, 8, dtype=torch.bfloat16, requires_grad=True)
+    result = bridge(memory, torch.ones(2, 5, dtype=torch.long), None, None, None, None)
+    assert result.memory.dtype == torch.bfloat16
+    result.memory.float().square().mean().backward()
+    assert bridge.projection[1].weight.grad is not None
+
+
+def test_evidence_bias_prefers_positive_units_in_actual_attention_scores() -> None:
+    """Gold-positive salience must become a larger decoder cross-attention prior.
+
+    Query/key content scores are deliberately tied, so the only possible
+    preference comes from the bridge's token evidence bias.
+    """
+
+    logits = torch.tensor([[2.0, -2.0]])
+    valid = torch.ones_like(logits, dtype=torch.bool)
+    unit_ids = torch.tensor([[1, 1, 2, 2]])
+    mask = torch.ones_like(unit_ids)
+    bias, source_keys = unit_evidence_token_bias(
+        logits,
+        valid,
+        unit_ids,
+        mask,
+        scale=1.0,
+        evidence_gate=torch.tensor(0.25),
+    )
+    assert source_keys.all()
+    attention = torch.softmax(bias, dim=-1)
+    positive_mass = attention[:, :2].sum(dim=-1)
+    negative_mass = attention[:, 2:].sum(dim=-1)
+    assert bool((positive_mass > negative_mass).all())
+    # The fixed -log(unit_length) term makes equal-logit units receive equal
+    # total mass even when their numbers of source subwords differ.
+    equal_bias, _ = unit_evidence_token_bias(
+        torch.zeros_like(logits),
+        valid,
+        torch.tensor([[1, 2, 2, 2]]),
+        torch.ones(1, 4, dtype=torch.long),
+        evidence_gate=torch.tensor(0.25),
+    )
+    equal_attention = torch.softmax(equal_bias, dim=-1)
+    assert equal_attention[0, 0].item() == pytest.approx(equal_attention[0, 1:].sum().item(), abs=1e-6)
+
+
+def test_corrected_bridge_prefers_positive_units_in_the_exact_bias_passed_to_decoder() -> None:
+    """Verify the actual bridge output, not only the standalone helper.
+
+    The decoder receives this vector as its additive cross-attention key
+    prior in every copied cross-attention layer.  With tied content scores,
+    the positive source unit must therefore receive more attention mass.
+    """
+
+    bridge = EvidenceBridge(
+        4,
+        4,
+        {
+            "salience_gate_parameterization": "sigmoid",
+            "salience_length_normalization": "unit_invariant",
+            "salience_gate_init": 0.25,
+            "salience_bias_scale": 1.0,
+            "salience_ranking_weight": 0.0,
+        },
+    )
+    output = bridge(
+        torch.zeros(1, 4, 4),
+        torch.ones(1, 4, dtype=torch.long),
+        torch.tensor([[1, 1, 2, 2]]),
+        torch.tensor([[2.0, -2.0]]),
+        torch.ones(1, 2, dtype=torch.bool),
+        torch.tensor([[1.0, 0.0]]),
+    )
+    assert output.attention_bias is not None
+    attention = torch.softmax(output.attention_bias.float(), dim=-1)
+    assert attention[:, :2].sum() > attention[:, 2:].sum()
+    assert output.positive_attention_prior_gap is not None
+    assert output.positive_attention_prior_gap.item() > 0.0
+
+
+def test_legacy_gated_bridge_preserves_legacy_neutral_bias_semantics() -> None:
+    """Legacy checkpoints must retain their original gated neutral group."""
+
+    bridge = EvidenceBridge(
+        4,
+        4,
+        {
+            "salience_gate_parameterization": "signed_tanh",
+            "salience_length_normalization": "legacy_gated",
+            "salience_gate_init": 0.10,
+            "salience_bias_scale": 1.0,
+            "salience_ranking_weight": 0.0,
+        },
+    )
+    output = bridge(
+        torch.zeros(1, 4, 4),
+        torch.ones(1, 4, dtype=torch.long),
+        torch.tensor([[0, 0, 1, 1]]),
+        torch.zeros(1, 1),
+        torch.ones(1, 1, dtype=torch.bool),
+        torch.tensor([[0.0]]),
+    )
+    assert output.attention_bias is not None
+    # With zero source logit and two neutral/two source tokens, the old
+    # implementation applied gate * -log(2) to both groups.
+    torch.testing.assert_close(output.attention_bias[:, :2], output.attention_bias[:, 2:])
+
+
+def test_attention_prior_diagnostic_uses_the_same_clipped_logits_as_sdpa_bias() -> None:
+    bridge = EvidenceBridge(
+        4,
+        4,
+        {
+            "salience_gate_parameterization": "sigmoid",
+            "salience_length_normalization": "unit_invariant",
+            "salience_gate_init": 0.10,
+            "salience_bias_scale": 1.0,
+            "salience_ranking_weight": 0.0,
+        },
+    )
+    output = bridge(
+        torch.zeros(1, 2, 4),
+        torch.ones(1, 2, dtype=torch.long),
+        torch.tensor([[1, 2]]),
+        torch.tensor([[100.0, -100.0]]),
+        torch.ones(1, 2, dtype=torch.bool),
+        torch.tensor([[1.0, 0.0]]),
+    )
+    gate = output.salience_attention_gate
+    assert gate is not None and output.positive_attention_prior_gap is not None
+    assert output.positive_attention_prior_gap.item() == pytest.approx(10.0 * gate.item(), abs=1e-6)
+
+
+def test_evidence_projection_keys_accept_decoder_width_after_unequal_width_bridge() -> None:
+    """EviCL keys are pooled from bridge memory, not raw encoder memory."""
+
+    head = EvidenceContrastiveHead(key_hidden_size=8, decoder_hidden_size=8, projection_size=4)
+    query, keys = head(torch.zeros(2, 8), torch.zeros(2, 3, 8))
+    assert query.shape == (2, 4)
+    assert keys.shape == (2, 3, 4)
+
+
+def test_sigmoid_evidence_gate_cannot_reverse_positive_attention_preference() -> None:
+    bridge = EvidenceBridge(
+        8,
+        8,
+        {
+            "trainable_identity_projection": False,
+            "salience_gate_parameterization": "sigmoid",
+            "salience_gate_init": 0.1,
+            "salience_bias_scale": 1.0,
+            "salience_ranking_weight": 0.0,
+        },
+    )
+    with torch.no_grad():
+        bridge.salience_attention_gate.fill_(-100.0)
+    assert bridge.attention_gate().item() >= 0.0
+
+
+def test_bridge_projection_recipe_enables_only_the_identity_initialized_variant() -> None:
+    base = load_config(ROOT / "configs" / "models" / "pplx_pubmed_aligned_corrected.yaml")
+    variant = load_config(ROOT / "configs" / "models" / "pplx_pubmed_aligned_bridgeproj.yaml")
+    assert base["bridge"]["trainable_identity_projection"] is False
+    assert variant["bridge"]["trainable_identity_projection"] is True
+    assert variant["model"] == base["model"]
+    assert variant["objectives"] == base["objectives"]
+
+
+def test_bridge_projection_gate20_recipe_changes_only_cross_gate() -> None:
+    projection = load_config(ROOT / "configs" / "models" / "pplx_pubmed_aligned_bridgeproj.yaml")
+    gate20 = load_config(ROOT / "configs" / "models" / "pplx_pubmed_aligned_bridgeproj_gate20.yaml")
+    assert gate20["bridge"] == projection["bridge"]
+    assert gate20["objectives"] == projection["objectives"]
+    assert gate20["decoder"]["cross_gate_init"] == pytest.approx(0.20)
+    projection_decoder = dict(projection["decoder"])
+    gate20_decoder = dict(gate20["decoder"])
+    gate20_decoder.pop("cross_gate_init")
+    projection_decoder.pop("cross_gate_init")
+    assert gate20_decoder == projection_decoder
 
 
 def test_configured_dataset_paths_resolve_from_repo_or_flattened_package() -> None:
@@ -163,6 +415,19 @@ def test_evaluation_refuses_a_same_shape_checkpoint_with_changed_source_protocol
         assert_evaluation_config_matches_checkpoint(payload, changed)
 
 
+def test_legacy_identity_checkpoint_config_remains_evaluable() -> None:
+    # A checkpoint predating the *identity-projection flag* remains valid
+    # when its effective bridge semantics were otherwise unchanged.  The
+    # corrected aligned recipe intentionally has a different attention-bias
+    # contract and must therefore still fail closed against an old run.
+    current = load_config(ROOT / "configs" / "tasks" / "pubmed.yaml")
+    legacy = copy.deepcopy(current)
+    legacy["bridge"].pop("trainable_identity_projection")
+    legacy["bridge"].pop("salience_gate_parameterization")
+    legacy["bridge"].pop("salience_length_normalization")
+    assert_evaluation_config_matches_checkpoint({"config": legacy}, current)
+
+
 def test_evaluation_resume_is_bound_to_checkpoint_config_and_dataset(tmp_path: Path) -> None:
     config = load_config(ROOT / "configs" / "models" / "pplx_pubmed_aligned.yaml")
     payload = {"checkpoint_role": "last", "epoch": 4, "global_step": 123, "config": copy.deepcopy(config)}
@@ -205,7 +470,7 @@ def test_sentence_aligned_salience_coupling_requires_union_labels() -> None:
 
 
 def test_pubmed_evidence_ablations_hold_prompt_and_salience_labels_fixed() -> None:
-    main = load_config(ROOT / "configs" / "models" / "pplx_pubmed_aligned.yaml")
+    main = load_config(ROOT / "configs" / "models" / "pplx_pubmed_aligned_corrected.yaml")
     for name in ("pplx_pubmed_global_matched.yaml", "pplx_pubmed_no_evidence_cl.yaml"):
         ablation = load_config(ROOT / "configs" / "models" / name)
         for field in (
@@ -214,6 +479,7 @@ def test_pubmed_evidence_ablations_hold_prompt_and_salience_labels_fixed() -> No
             "sentence_evidence_use_union_as_salience",
         ):
             assert ablation["data"][field] == main["data"][field]
+        assert ablation["bridge"] == main["bridge"]
 
 
 def test_builtin_general_metrics() -> None:
@@ -373,6 +639,46 @@ def test_sentence_aligned_salience_does_not_contradict_other_sentence_evidence()
     assert salience.grad[0, 0] < 0.0
     assert salience.grad[0, 1] < 0.0
     assert salience.grad[0, 2] > 0.0
+
+
+def test_sentence_evidence_positive_selection_is_bounded_and_supports_its_target() -> None:
+    """The PubMed recipe selects at most three lexical evidence units/case."""
+
+    units = [
+        "The trial enrolled adults with chronic disease.",
+        "Treatment reduced symptom severity after twelve weeks.",
+        "No serious adverse events were reported.",
+        "A separate imaging cohort used an unrelated protocol.",
+        "Follow-up continued for one year.",
+    ]
+    labels = greedy_evidence_labels(
+        units,
+        "Treatment reduced symptom severity and no serious adverse events were reported.",
+        max_units=3,
+        budget=3,
+    )
+    selected = [index for index, label in enumerate(labels) if label > 0.5]
+    assert 1 <= len(selected) <= 3
+    assert 1 in selected
+    assert 2 in selected
+
+
+def test_sentence_hard_negatives_exclude_positive_and_unknown_evidence() -> None:
+    query = torch.nn.functional.normalize(torch.tensor([[[1.0, 0.0]]]), dim=-1)
+    keys = torch.nn.functional.normalize(torch.tensor([[[1.0, 0.0], [0.99, 0.01], [0.98, 0.02], [0.97, 0.03]]]), dim=-1)
+    # Unit 1 is deliberately most confusable but unknown; it must never be
+    # mined. Unit 0 is the positive. Only units 2/3 are legal negatives.
+    labels = torch.tensor([[[1.0, -1.0, 0.0, 0.0]]])
+    result = sentence_evidence_info_nce_loss(
+        query,
+        torch.ones(1, 1, dtype=torch.bool),
+        keys,
+        labels,
+        torch.ones(1, 4, dtype=torch.bool),
+        num_hard_negatives=2,
+    )
+    assert torch.isfinite(result["evidence_contrastive_loss"])
+    assert result["evidence_valid_examples"].item() == pytest.approx(1.0)
 
 
 def test_target_sentence_ids_follow_sentence_spans() -> None:
