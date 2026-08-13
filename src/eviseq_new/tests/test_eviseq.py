@@ -31,6 +31,7 @@ from eviseq.training.checkpoint import (
 )
 from eviseq.training.objectives import EvidenceContrastiveHead, evidence_info_nce_loss, sentence_evidence_info_nce_loss
 from eviseq.training.online_kd import topk_kl_loss
+from eviseq.training.engine import DistributedLengthBucketBatchSampler
 from eviseq.training.trainer import _capture_optimizer_moments, _restore_optimizer_moments
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -780,9 +781,30 @@ def test_length_bucket_sampler_covers_each_example_once() -> None:
     assert sorted(index for batch in batches for index in batch) == list(range(16))
 
 
+def test_distributed_length_bucket_sampler_shards_whole_batches() -> None:
+    """Ranks must get disjoint batches and execute an equal number of steps."""
+
+    base = LengthBucketBatchSampler(list(range(1, 17)), batch_size=4, seed=7, bucket_size_multiplier=4)
+    rank0 = DistributedLengthBucketBatchSampler(base, rank=0, world_size=2)
+    # A distinct base mirrors the independent process-local sampler on rank 1.
+    rank1 = DistributedLengthBucketBatchSampler(
+        LengthBucketBatchSampler(list(range(1, 17)), batch_size=4, seed=7, bucket_size_multiplier=4),
+        rank=1,
+        world_size=2,
+    )
+    rank0.set_epoch(3)
+    rank1.set_epoch(3)
+    batches0, batches1 = list(rank0), list(rank1)
+    assert len(batches0) == len(batches1) == 2
+    assert not set(map(tuple, batches0)).intersection(map(tuple, batches1))
+    assert sorted(index for batch in (*batches0, *batches1) for index in batch) == list(range(16))
+
+
 def test_run_script_has_no_upload_or_push_operation() -> None:
     script = (ROOT / "scripts" / "run.sh").read_text(encoding="utf-8").lower()
     assert "push_to_hub" not in script
     assert "huggingface-cli upload" not in script
     assert "git push" not in script
     assert "last.pt resolved_config.yaml" in script
+    assert "train-ddp" in script
+    assert "torchrun" in script

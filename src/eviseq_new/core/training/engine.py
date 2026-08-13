@@ -6,18 +6,22 @@ import argparse
 import json
 import logging
 import math
+import os
 import random
 import shutil
 from contextlib import nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import yaml
+from torch.nn.parallel import DistributedDataParallel
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 
 from ..configuration import load_config, resolve_data_path
 from ..data.dataset import (
@@ -32,6 +36,109 @@ from .checkpoint import initialize_from_checkpoint, save_configured_epoch_checkp
 LOGGER = logging.getLogger("eviseq.training.engine")
 
 
+@dataclass(frozen=True)
+class DistributedContext:
+    """Process-local DDP metadata; single-process operation remains unchanged."""
+
+    enabled: bool
+    rank: int = 0
+    local_rank: int = 0
+    world_size: int = 1
+    initialized_here: bool = False
+
+    @property
+    def is_main(self) -> bool:
+        return self.rank == 0
+
+
+def distributed_context() -> DistributedContext:
+    if not dist.is_available() or not dist.is_initialized():
+        return DistributedContext(enabled=False)
+    return DistributedContext(
+        enabled=True,
+        rank=dist.get_rank(),
+        local_rank=int(os.environ.get("LOCAL_RANK", "0")),
+        world_size=dist.get_world_size(),
+    )
+
+
+def initialize_distributed() -> DistributedContext:
+    """Initialize torchrun/NCCL when exactly one process is assigned per GPU."""
+
+    requested_world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    if requested_world_size <= 1:
+        return DistributedContext(enabled=False)
+    if not torch.cuda.is_available():
+        raise RuntimeError("Distributed EviSeq training requires CUDA/NCCL")
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    if local_rank < 0 or local_rank >= torch.cuda.device_count():
+        raise RuntimeError(
+            f"LOCAL_RANK={local_rank} is not a visible GPU; visible CUDA devices={torch.cuda.device_count()}"
+        )
+    if not dist.is_initialized():
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend="nccl")
+        initialized_here = True
+    else:
+        initialized_here = False
+    return DistributedContext(
+        enabled=True,
+        rank=dist.get_rank(),
+        local_rank=local_rank,
+        world_size=dist.get_world_size(),
+        initialized_here=initialized_here,
+    )
+
+
+def distributed_barrier(context: DistributedContext) -> None:
+    if context.enabled:
+        dist.barrier()
+
+
+def cleanup_distributed(context: DistributedContext) -> None:
+    if context.enabled and context.initialized_here and dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
+    return model.module if isinstance(model, DistributedDataParallel) else model
+
+
+class DistributedLengthBucketBatchSampler:
+    """Shard whole length-bucket batches identically across DDP ranks.
+
+    A few final batches can be repeated so every rank executes the same
+    number of backwards calls, which is required by DDP.
+    """
+
+    def __init__(self, base: LengthBucketBatchSampler, rank: int, world_size: int):
+        if not 0 <= rank < world_size:
+            raise ValueError("Distributed batch sampler rank is out of range")
+        self.base = base
+        self.rank = int(rank)
+        self.world_size = int(world_size)
+
+    def __len__(self) -> int:
+        return math.ceil(len(self.base) / self.world_size)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Match DistributedSampler's epoch API without double-advancing RNG."""
+
+        self.base.epoch = int(epoch)
+
+    def __iter__(self):
+        batches = list(iter(self.base))
+        if not batches:
+            return
+        local = batches[self.rank :: self.world_size]
+        target = len(self)
+        if not local:
+            local = [batches[self.rank % len(batches)]]
+        while len(local) < target:
+            local.append(local[-1])
+        yield from local
+
+
 def _set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -42,7 +149,8 @@ def _set_seed(seed: int) -> None:
 
 def _device() -> torch.device:
     if torch.cuda.is_available():
-        return torch.device("cuda")
+        context = distributed_context()
+        return torch.device("cuda", context.local_rank) if context.enabled else torch.device("cuda")
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
@@ -359,20 +467,25 @@ def train(
         training["init_checkpoint"] = initialization_path
     if allow_partial_init:
         training["strict_initial_checkpoint"] = False
+    distributed = initialize_distributed()
     output_dir = Path(config["experiment"]["output_dir"])
-    _prepare_output(output_dir, overwrite_output_dir)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(output_dir / "train.log", encoding="utf-8"),
-        ],
-        force=True,
-    )
+    if distributed.is_main:
+        _prepare_output(output_dir, overwrite_output_dir)
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s | %(levelname)s | %(message)s",
+            handlers=[
+                logging.StreamHandler(),
+                logging.FileHandler(output_dir / "train.log", encoding="utf-8"),
+            ],
+            force=True,
+        )
+    else:
+        logging.basicConfig(level=logging.ERROR, force=True)
+    distributed_barrier(distributed)
     try:
         seed = int(training.get("seed", 42))
-        _set_seed(seed)
+        _set_seed(seed + distributed.rank)
         device = _device()
         if device.type == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = bool(training.get("tf32", True))
@@ -386,12 +499,13 @@ def train(
                 initialization_path,
                 strict=bool(training.get("strict_initial_checkpoint", True)),
             )
-            LOGGER.info(
-                "initialized checkpoint=%s loaded_tensors=%d skipped_tensors=%d",
-                initialization_path,
-                initialization["loaded_tensors"],
-                len(initialization["skipped_tensors"]),
-            )
+            if distributed.is_main:
+                LOGGER.info(
+                    "initialized checkpoint=%s loaded_tensors=%d skipped_tensors=%d",
+                    initialization_path,
+                    initialization["loaded_tensors"],
+                    len(initialization["skipped_tensors"]),
+                )
         model.to(device)
         collator = _collator(config, encoder_tokenizer, decoder_tokenizer)
         batch_size = int(training.get("batch_size", 32))
@@ -403,21 +517,40 @@ def train(
         }
         length_bucketing = bool(training.get("length_bucketing", False))
         if length_bucketing:
+            batch_sampler: Any = LengthBucketBatchSampler(
+                train_dataset.source_length_estimates(),
+                batch_size,
+                seed=int(training.get("seed", 42)),
+                bucket_size_multiplier=int(training.get("length_bucket_multiplier", 50)),
+            )
+            if distributed.enabled:
+                batch_sampler = DistributedLengthBucketBatchSampler(
+                    batch_sampler,
+                    rank=distributed.rank,
+                    world_size=distributed.world_size,
+                )
             loader = DataLoader(
                 train_dataset,
-                batch_sampler=LengthBucketBatchSampler(
-                    train_dataset.source_length_estimates(),
-                    batch_size,
-                    seed=int(training.get("seed", 42)),
-                    bucket_size_multiplier=int(training.get("length_bucket_multiplier", 50)),
-                ),
+                batch_sampler=batch_sampler,
                 **loader_kwargs,
             )
         else:
+            sampler = (
+                DistributedSampler(
+                    train_dataset,
+                    num_replicas=distributed.world_size,
+                    rank=distributed.rank,
+                    shuffle=True,
+                    drop_last=False,
+                )
+                if distributed.enabled
+                else None
+            )
             loader = DataLoader(
                 train_dataset,
                 batch_size=batch_size,
-                shuffle=True,
+                shuffle=sampler is None,
+                sampler=sampler,
                 drop_last=False,
                 **loader_kwargs,
             )
@@ -430,19 +563,27 @@ def train(
             pin_memory=device.type == "cuda",
             persistent_workers=int(training.get("validation_num_workers", 2)) > 0,
         )
-        (output_dir / "resolved_config.yaml").write_text(
-            yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
-        LOGGER.info("device=%s model=%s", device, json.dumps(model.parameter_summary()))
-        LOGGER.info(
-            "data train=%d validation=%d batch=%d accumulation=%d length_bucketing=%s",
-            len(train_dataset),
-            len(validation_dataset),
-            int(training.get("batch_size", 32)),
-            int(training.get("gradient_accumulation_steps", 1)),
-            length_bucketing,
-        )
+        if distributed.is_main:
+            (output_dir / "resolved_config.yaml").write_text(
+                yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            LOGGER.info("device=%s ddp_world_size=%d model=%s", device, distributed.world_size, json.dumps(model.parameter_summary()))
+            per_gpu_batch = int(training.get("batch_size", 32))
+            accumulation = int(training.get("gradient_accumulation_steps", 1))
+            global_microbatch = per_gpu_batch * distributed.world_size
+            LOGGER.info(
+                "data train=%d validation=%d per_gpu_batch=%d global_microbatch=%d "
+                "global_effective_batch=%d accumulation=%d length_bucketing=%s",
+                len(train_dataset),
+                len(validation_dataset),
+                per_gpu_batch,
+                global_microbatch,
+                global_microbatch * accumulation,
+                accumulation,
+                length_bucketing,
+            )
+        distributed_barrier(distributed)
         epoch, global_step = 0, 0
         epoch, global_step = _run_stage(
             model,
@@ -471,12 +612,16 @@ def train(
             config,
         )
         last_path = output_dir / "last.pt"
-        save_last_checkpoint(model, last_path, config, epoch, global_step)
-        LOGGER.info("Training complete: last=%s epoch=%d step=%d", last_path, epoch, global_step)
+        if distributed.is_main:
+            save_last_checkpoint(model, last_path, config, epoch, global_step)
+            LOGGER.info("Training complete: last=%s epoch=%d step=%d", last_path, epoch, global_step)
+        distributed_barrier(distributed)
         return last_path
     except Exception:
         LOGGER.exception("Training failed")
         raise
+    finally:
+        cleanup_distributed(distributed)
 
 
 def main() -> None:

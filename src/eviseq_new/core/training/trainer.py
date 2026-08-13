@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -190,7 +191,7 @@ def _virtual_duplicate_mask(batches: list[Dict[str, torch.Tensor]]) -> torch.Ten
 
 
 def _build_virtual_contrastive_cache(
-    model: EviSeq,
+    model: torch.nn.Module,
     batches: list[Dict[str, torch.Tensor]],
     device: torch.device,
     training: Dict[str, Any],
@@ -219,13 +220,14 @@ def _build_virtual_contrastive_cache(
     sizes = [int(value.shape[0]) for value in source_chunks]
     source = torch.cat(source_chunks, dim=0).requires_grad_(True)
     prompt = torch.cat(prompt_chunks, dim=0).requires_grad_(True)
+    raw_model = stable.unwrap_model(model)
     loss, accuracy = info_nce_loss(
         source,
         prompt,
-        model.contrastive_temperature,
+        raw_model.contrastive_temperature,
         duplicate_mask=_virtual_duplicate_mask(batches),
     )
-    weighted = model.contrastive_weight * float(scale) * loss
+    weighted = raw_model.contrastive_weight * float(scale) * loss
     source_gradient, prompt_gradient = torch.autograd.grad(
         weighted,
         (source, prompt),
@@ -319,14 +321,25 @@ def _run_stage(
 
     if stage_epochs <= 0:
         return epoch_offset, global_step
-    model.set_training_stage(stage)
+    raw_model = stable.unwrap_model(model)
+    distributed = stable.distributed_context()
+    raw_model.set_training_stage(stage)
+    active_model: torch.nn.Module = raw_model
+    if distributed.enabled:
+        active_model = torch.nn.parallel.DistributedDataParallel(
+            raw_model,
+            device_ids=[distributed.local_rank],
+            output_device=distributed.local_rank,
+            broadcast_buffers=False,
+            find_unused_parameters=False,
+        )
     accumulation = int(training.get("gradient_accumulation_steps", 1))
-    use_virtual_gradcache = _uses_virtual_gradcache(model, accumulation)
+    use_virtual_gradcache = _uses_virtual_gradcache(raw_model, accumulation)
     optimizer_steps_per_epoch = math.ceil(len(loader) / accumulation)
     total_steps = max(1, optimizer_steps_per_epoch * stage_epochs)
-    optimizer, scheduler = stable.build_optimizer(model, training, stage, total_steps)
-    carried = getattr(model, "_carried_optimizer_moments", None)
-    restored_moments = _restore_optimizer_moments(model, optimizer, carried)
+    optimizer, scheduler = stable.build_optimizer(raw_model, training, stage, total_steps)
+    carried = getattr(raw_model, "_carried_optimizer_moments", None)
+    restored_moments = _restore_optimizer_moments(raw_model, optimizer, carried)
     use_fp16_scaler = (
         device.type == "cuda" and bool(training.get("fp16", False)) and not bool(training.get("bf16", True))
     )
@@ -344,11 +357,17 @@ def _run_stage(
         "Starting stage=%s epochs=%d trainable=%s restored_optimizer_states=%d evidence_hard_negatives=%d",
         stage,
         stage_epochs,
-        f"{sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad):,}",
+        f"{sum(parameter.numel() for parameter in raw_model.parameters() if parameter.requires_grad):,}",
         restored_moments,
-        model.evidence_hard_negatives if model.use_evidence_contrastive else 0,
+        raw_model.evidence_hard_negatives if raw_model.use_evidence_contrastive else 0,
     )
     for stage_epoch in range(1, stage_epochs + 1):
+        batch_sampler = getattr(loader, "batch_sampler", None)
+        if hasattr(batch_sampler, "set_epoch"):
+            batch_sampler.set_epoch(epoch_offset + stage_epoch - 1)
+        sampler = getattr(loader, "sampler", None)
+        if hasattr(sampler, "set_epoch"):
+            sampler.set_epoch(epoch_offset + stage_epoch - 1)
         model.train()
         running: Dict[str, float] = {}
         metric_count = 0
@@ -364,9 +383,9 @@ def _run_stage(
                 stage_epoch,
                 window_end,
                 len(loader),
-                model.contrastive_warmup_epochs,
+                raw_model.contrastive_warmup_epochs,
             )
-            model.set_contrastive_scale(scale)
+            raw_model.set_contrastive_scale(scale)
 
             # Evidence contrastive scale.
             evi_scale = _evidence_contrastive_scale(
@@ -374,32 +393,39 @@ def _run_stage(
                 stage_epoch,
                 window_end,
                 len(loader),
-                model.evidence_contrastive_warmup_epochs,
+                raw_model.evidence_contrastive_warmup_epochs,
             )
-            model.set_evidence_contrastive_scale(evi_scale)
+            raw_model.set_evidence_contrastive_scale(evi_scale)
 
             # Document-level GradCache, only if enabled.
             cache = None
             if use_virtual_gradcache:
-                cache = _build_virtual_contrastive_cache(model, batches, device, training, scale)
+                cache = _build_virtual_contrastive_cache(active_model, batches, device, training, scale)
 
             for microbatch_index, batch in enumerate(batches):
                 if cache is not None:
                     _restore_rng_state(cache["rng_states"][microbatch_index], device)
-                with stable._autocast(device, training):
-                    outputs = model(
-                        **batch,
-                        contrastive_mode="deferred" if cache is not None else "local",
-                    )
-                    backward_loss = outputs["loss"] / window_size
-                    if cache is not None:
-                        source_surrogate = (
-                            outputs["source_repr"].float() * cache["source_gradients"][microbatch_index]
-                        ).sum()
-                        prompt_surrogate = (
-                            outputs["prompt_repr"].float() * cache["prompt_gradients"][microbatch_index]
-                        ).sum()
-                        backward_loss = backward_loss + source_surrogate + prompt_surrogate
+                is_last_microbatch = microbatch_index + 1 == window_size
+                sync_context = (
+                    active_model.no_sync()
+                    if distributed.enabled and not is_last_microbatch
+                    else nullcontext()
+                )
+                with sync_context:
+                    with stable._autocast(device, training):
+                        outputs = active_model(
+                            **batch,
+                            contrastive_mode="deferred" if cache is not None else "local",
+                        )
+                        backward_loss = outputs["loss"] / window_size
+                        if cache is not None:
+                            source_surrogate = (
+                                outputs["source_repr"].float() * cache["source_gradients"][microbatch_index]
+                            ).sum()
+                            prompt_surrogate = (
+                                outputs["prompt_repr"].float() * cache["prompt_gradients"][microbatch_index]
+                            ).sum()
+                            backward_loss = backward_loss + source_surrogate + prompt_surrogate
                 scaler.scale(backward_loss).backward()
                 metric_count += 1
                 examples_since_log += int(batch["input_ids"].shape[0])
@@ -414,7 +440,7 @@ def _run_stage(
                             "contrastive_examples": outputs["loss"].new_tensor(cache["effective_batch_size"]),
                         }
                     )
-                elif model.alignment_head is not None:
+                elif raw_model.alignment_head is not None:
                     metrics["contrastive_examples"] = outputs["loss"].new_tensor(batch["input_ids"].shape[0])
                 for name in (*_TRAIN_AVERAGE_METRICS, *_SALIENCE_COUNT_METRICS):
                     value = metrics.get(name)
@@ -466,7 +492,7 @@ def _run_stage(
                     "grad": _rounded(float(grad_norm)),
                     "lr": {str(group["component"]): float(group["lr"]) for group in optimizer.param_groups},
                 }
-                if model.alignment_head is not None:
+                if raw_model.alignment_head is not None:
                     payload.update(
                         {
                             "doc_cl": _rounded(running.get("loss_contrastive", 0.0) / divisor),
@@ -475,7 +501,7 @@ def _run_stage(
                     )
                 if stage == "interface_warmup":
                     payload["evi_scale"] = _rounded(evi_scale)
-                    if model.alignment_head is not None:
+                    if raw_model.alignment_head is not None:
                         payload["doc_cl_scale"] = _rounded(scale)
                 LOGGER.info("train %s", json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
                 running.clear()
@@ -490,8 +516,8 @@ def _run_stage(
             absolute_epoch % validation_every == 0 or stage_epoch == stage_epochs
         )
         metrics = None
-        if save_best or scheduled_validation:
-            metrics = validation_loss(model, validation_loader, device, training)
+        if distributed.is_main and (save_best or scheduled_validation):
+            metrics = validation_loss(raw_model, validation_loader, device, training)
             payload = {
                 "epoch": absolute_epoch,
                 "ce": _rounded(metrics["eval_loss_ce"]),
@@ -509,12 +535,12 @@ def _run_stage(
                 "bidir": _rounded(metrics["eval_bidirectional_gate_mean"]),
                 "examples": int(metrics["eval_examples"]),
             }
-            if model.alignment_head is not None:
+            if raw_model.alignment_head is not None:
                 payload["doc_cl_acc"] = _rounded(metrics["eval_prompt_retrieval_accuracy"])
             LOGGER.info("validation %s", json.dumps(payload, separators=(",", ":")))
-        if checkpoint_dir is not None and checkpoint_config is not None:
+        if distributed.is_main and checkpoint_dir is not None and checkpoint_config is not None:
             saved = save_configured_epoch_checkpoints(
-                model,
+                raw_model,
                 checkpoint_dir,
                 checkpoint_config,
                 absolute_epoch,
@@ -523,9 +549,11 @@ def _run_stage(
             )
             if saved:
                 LOGGER.info("checkpoint %s", json.dumps(saved, separators=(",", ":")))
-    model._carried_optimizer_moments = (  # type: ignore[attr-defined]
-        _capture_optimizer_moments(model, optimizer) if stage == "interface_warmup" else {}
+        stable.distributed_barrier(distributed)
+    raw_model._carried_optimizer_moments = (  # type: ignore[attr-defined]
+        _capture_optimizer_moments(raw_model, optimizer) if stage == "interface_warmup" else {}
     )
+    del active_model
     return epoch_offset + stage_epochs, global_step
 
 

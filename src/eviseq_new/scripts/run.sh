@@ -12,6 +12,12 @@ if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
 else
   PYTHON_BIN="${PYTHON_BIN:-python3}"
 fi
+PYTHON_DIR="$(cd "$(dirname "$PYTHON_BIN")" && pwd)"
+if [[ -z "${TORCHRUN_BIN:-}" && -x "$PYTHON_DIR/torchrun" ]]; then
+  TORCHRUN_BIN="$PYTHON_DIR/torchrun"
+else
+  TORCHRUN_BIN="${TORCHRUN_BIN:-torchrun}"
+fi
 export HF_HUB_DISABLE_TELEMETRY=1
 export TOKENIZERS_PARALLELISM=false
 export PYTHONUNBUFFERED=1
@@ -105,6 +111,28 @@ train_and_validate() {
     --split validation
 }
 
+train_and_validate_ddp() {
+  local config="$1"
+  shift
+  local output_dir
+  output_dir="$(config_value "$config" experiment.output_dir)"
+  output_dir="$(resolved_output_dir "$output_dir" "$@")"
+  local processes="${DDP_NPROC_PER_NODE:-2}"
+  if [[ "$processes" -lt 2 ]]; then
+    echo "ERROR: DDP_NPROC_PER_NODE must be at least 2" >&2
+    return 2
+  fi
+  "$TORCHRUN_BIN" --standalone --nproc_per_node="$processes" "$RUNNER" train --config "$config" "$@"
+  select_committed_checkpoint "$output_dir" validation
+  # Generation is deliberately single-process: the complete last.pt is
+  # written by DDP rank 0 and greedy outputs remain deterministic.
+  "$PYTHON_BIN" "$RUNNER" evaluate \
+    --config "$SELECTED_RESOLVED" \
+    --checkpoint "$SELECTED_CHECKPOINT" \
+    --output "$SELECTED_PREDICTIONS" \
+    --split validation
+}
+
 evaluate_test() {
   local config="$1"
   shift
@@ -138,6 +166,11 @@ case "$MODE" in
     CONFIG="$(absolute_path "${1:?Pass a task config YAML}")"
     shift
     "$PYTHON_BIN" "$RUNNER" train --config "$CONFIG" "$@"
+    ;;
+  train-ddp)
+    CONFIG="$(absolute_path "${1:?Pass a task config YAML}")"
+    shift
+    train_and_validate_ddp "$CONFIG" "$@"
     ;;
   evaluate)
     CONFIG="$(absolute_path "${1:?Pass a resolved config YAML}")"
@@ -187,6 +220,9 @@ case "$MODE" in
     ;;
   pplx-pubmed-aligned-bridgeproj-gate20)
     train_and_validate "$PPLX_PUBMED_ALIGNED_BRIDGEPROJ_GATE20_CONFIG" "$@"
+    ;;
+  pplx-pubmed-aligned-bridgeproj-gate20-ddp)
+    train_and_validate_ddp "$PPLX_PUBMED_ALIGNED_BRIDGEPROJ_GATE20_CONFIG" "$@"
     ;;
   pplx-pubmed-aligned-bridgeproj-gate20-kd)
     # Phase 3: strict initialization from the completed gate20 phase-2 run.
@@ -324,6 +360,7 @@ case "$MODE" in
 EviSeq (runs directly from source; no local package install required)
 
   bash eviseq_new/scripts/run.sh train CONFIG.yaml --overwrite-output-dir
+  CUDA_VISIBLE_DEVICES=0,1 bash eviseq_new/scripts/run.sh train-ddp CONFIG.yaml --overwrite-output-dir
   bash eviseq_new/scripts/run.sh evaluate RESOLVED.yaml last.pt predictions.jsonl --split test
   bash eviseq_new/scripts/run.sh validate-data CONFIG.yaml
   bash eviseq_new/scripts/run.sh test
@@ -348,6 +385,8 @@ Data and other datasets:
   bash eviseq_new/scripts/run.sh pplx-pubmed-aligned-corrected --overwrite-output-dir
   bash eviseq_new/scripts/run.sh pplx-pubmed-aligned-bridgeproj --overwrite-output-dir
   bash eviseq_new/scripts/run.sh pplx-pubmed-aligned-bridgeproj-gate20 --overwrite-output-dir
+  CUDA_VISIBLE_DEVICES=0,1 bash eviseq_new/scripts/run.sh \
+    pplx-pubmed-aligned-bridgeproj-gate20-ddp --overwrite-output-dir
   # Phase 3: requires a local Qwen3-4B teacher and the completed gate20 last.pt.
   CUDA_VISIBLE_DEVICES=0,1 bash eviseq_new/scripts/run.sh \
     pplx-pubmed-aligned-bridgeproj-gate20-kd \
