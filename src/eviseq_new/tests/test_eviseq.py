@@ -29,6 +29,7 @@ from eviseq.training.checkpoint import (
     save_configured_epoch_checkpoints,
     save_last_checkpoint,
 )
+from eviseq.training.online_kd import topk_kl_loss
 from eviseq.training.objectives import EvidenceContrastiveHead, evidence_info_nce_loss, sentence_evidence_info_nce_loss
 from eviseq.training.trainer import _capture_optimizer_moments, _restore_optimizer_moments
 
@@ -679,6 +680,23 @@ def test_sentence_hard_negatives_exclude_positive_and_unknown_evidence() -> None
     )
     assert torch.isfinite(result["evidence_contrastive_loss"])
     assert result["evidence_valid_examples"].item() == pytest.approx(1.0)
+
+
+def test_online_kd_topk_other_bucket_is_finite_and_backpropagates() -> None:
+    """KD trains the student's full logits while teacher targets stay detached."""
+
+    student = torch.randn(2, 3, 7, requires_grad=True)
+    teacher_ids = torch.tensor([[[0, 1], [2, 3], [1, 4]], [[0, 6], [3, 5], [2, 4]]])
+    teacher_logits = torch.tensor(
+        [[[4.0, 3.0], [2.0, 1.0], [3.0, 2.0]], [[5.0, 1.0], [1.0, 0.5], [2.0, 1.0]]]
+    )
+    normalizers = torch.logsumexp(teacher_logits / 2.0, dim=-1) + 0.2
+    mask = torch.tensor([[True, True, False], [True, False, True]])
+    loss = topk_kl_loss(student, teacher_ids, teacher_logits, normalizers, mask, temperature=2.0)
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert student.grad is not None
+    assert student.grad.abs().sum() > 0
 
 
 def test_target_sentence_ids_follow_sentence_spans() -> None:

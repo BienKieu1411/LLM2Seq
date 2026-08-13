@@ -154,6 +154,7 @@ class EviSeq(nn.Module):
         labels: Optional[torch.Tensor] = None,
         compute_source_diagnostics: bool = False,
         contrastive_mode: str = "local",
+        return_full_logits: bool = False,
     ) -> Dict[str, torch.Tensor]:
         if contrastive_mode not in {"local", "representations_only", "deferred"}:
             raise ValueError(f"Unknown contrastive mode: {contrastive_mode}")
@@ -204,7 +205,8 @@ class EviSeq(nn.Module):
             return representations
 
         # --- CE loss ---
-        logits = self.lm_head(states[supervised])
+        full_logits = self.lm_head(states) if return_full_logits else None
+        logits = full_logits[supervised] if full_logits is not None else self.lm_head(states[supervised])
         loss_ce = F.cross_entropy(logits.float(), labels[supervised])
 
         # --- Document-level contrastive loss ---
@@ -329,6 +331,8 @@ class EviSeq(nn.Module):
             "projection_gate": encoded.native_gate_mean.detach(),
             "evidence_view_gate": encoded.native_gate_mean.detach(),
         }
+        if full_logits is not None:
+            result["logits"] = full_logits
 
         # Evidence contrastive diagnostics
         for key in (

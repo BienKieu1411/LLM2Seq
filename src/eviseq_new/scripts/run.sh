@@ -26,6 +26,7 @@ PPLX_PUBMED_ALIGNED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_aligned.yam
 PPLX_PUBMED_ALIGNED_CORRECTED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_aligned_corrected.yaml"
 PPLX_PUBMED_ALIGNED_BRIDGEPROJ_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_aligned_bridgeproj.yaml"
 PPLX_PUBMED_ALIGNED_BRIDGEPROJ_GATE20_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_aligned_bridgeproj_gate20.yaml"
+PPLX_PUBMED_ALIGNED_BRIDGEPROJ_GATE20_KD_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_aligned_bridgeproj_gate20_kd.yaml"
 PPLX_PUBMED_GLOBAL_MATCHED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_global_matched.yaml"
 PPLX_PUBMED_ALIGNED_NO_COUPLING_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_aligned_no_coupling.yaml"
 PPLX_PUBMED_NO_EVIDENCE_CL_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_no_evidence_cl.yaml"
@@ -117,6 +118,18 @@ evaluate_test() {
     --split test "$@"
 }
 
+run_online_kd() {
+  local config="$1"
+  local checkpoint="$2"
+  local output_dir="$3"
+  shift 3
+  "$PYTHON_BIN" -m core.training.online_kd \
+    --config "$config" \
+    --init-checkpoint "$(absolute_path "$checkpoint")" \
+    --output-dir "$output_dir" \
+    "$@"
+}
+
 MODE="${1:-help}"
 if [[ $# -gt 0 ]]; then shift; fi
 
@@ -174,6 +187,16 @@ case "$MODE" in
     ;;
   pplx-pubmed-aligned-bridgeproj-gate20)
     train_and_validate "$PPLX_PUBMED_ALIGNED_BRIDGEPROJ_GATE20_CONFIG" "$@"
+    ;;
+  pplx-pubmed-aligned-bridgeproj-gate20-kd)
+    # Phase 3: strict initialization from the completed gate20 phase-2 run.
+    # Pass --teacher-model /absolute/path/to/Qwen3-4B, optionally --epochs 2.
+    PHASE2_DIR="$(config_value "$PPLX_PUBMED_ALIGNED_BRIDGEPROJ_GATE20_CONFIG" experiment.output_dir)"
+    run_online_kd \
+      "$PPLX_PUBMED_ALIGNED_BRIDGEPROJ_GATE20_KD_CONFIG" \
+      "${PHASE2_DIR}/last.pt" \
+      "$(config_value "$PPLX_PUBMED_ALIGNED_BRIDGEPROJ_GATE20_KD_CONFIG" experiment.output_dir)" \
+      "$@"
     ;;
   pplx-pubmed-global-matched)
     train_and_validate "$PPLX_PUBMED_GLOBAL_MATCHED_CONFIG" "$@"
@@ -245,6 +268,9 @@ case "$MODE" in
     ;;
   evaluate-pplx-pubmed-aligned-bridgeproj-gate20-test)
     evaluate_test "$PPLX_PUBMED_ALIGNED_BRIDGEPROJ_GATE20_CONFIG" "$@"
+    ;;
+  evaluate-pplx-pubmed-aligned-bridgeproj-gate20-kd-test)
+    evaluate_test "$PPLX_PUBMED_ALIGNED_BRIDGEPROJ_GATE20_KD_CONFIG" "$@"
     ;;
   evaluate-pplx-pubmed-global-matched-test)
     evaluate_test "$PPLX_PUBMED_GLOBAL_MATCHED_CONFIG" "$@"
@@ -322,6 +348,11 @@ Data and other datasets:
   bash eviseq_new/scripts/run.sh pplx-pubmed-aligned-corrected --overwrite-output-dir
   bash eviseq_new/scripts/run.sh pplx-pubmed-aligned-bridgeproj --overwrite-output-dir
   bash eviseq_new/scripts/run.sh pplx-pubmed-aligned-bridgeproj-gate20 --overwrite-output-dir
+  # Phase 3: requires a local Qwen3-4B teacher and the completed gate20 last.pt.
+  CUDA_VISIBLE_DEVICES=0,1 bash eviseq_new/scripts/run.sh \
+    pplx-pubmed-aligned-bridgeproj-gate20-kd \
+    --teacher-model /absolute/path/to/Qwen3-4B --teacher-device cuda:1 \
+    --overwrite-output-dir
   bash eviseq_new/scripts/run.sh pplx-pubmed-global-matched --overwrite-output-dir
   bash eviseq_new/scripts/run.sh pplx-pubmed-aligned-no-coupling --overwrite-output-dir
   bash eviseq_new/scripts/run.sh pplx-pubmed-no-evidence-cl --overwrite-output-dir

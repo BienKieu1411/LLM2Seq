@@ -273,6 +273,19 @@ def validate_config(config: Dict[str, Any]) -> None:
         raise ValueError("data lengths are invalid")
     if int(data.get("sentence_evidence_max_units", 1)) <= 0:
         raise ValueError("data.sentence_evidence_max_units must be positive")
+
+    online_kd = config.get("online_kd", {})
+    if online_kd and bool(online_kd.get("enabled", False)):
+        if int(online_kd.get("epochs", 1)) <= 0:
+            raise ValueError("online_kd.epochs must be positive")
+        if float(online_kd.get("weight", 0.1)) <= 0.0:
+            raise ValueError("online_kd.weight must be positive")
+        if float(online_kd.get("temperature", 2.0)) <= 0.0:
+            raise ValueError("online_kd.temperature must be positive")
+        if int(online_kd.get("topk", 32)) <= 0:
+            raise ValueError("online_kd.topk must be positive")
+        if int(online_kd.get("teacher_batch_size", 4)) <= 0:
+            raise ValueError("online_kd.teacher_batch_size must be positive")
     for field in ("source_field", "target_field", "id_field"):
         if not str(data.get(field, field.removesuffix("_field"))).strip():
             raise ValueError(f"data.{field} cannot be empty")
