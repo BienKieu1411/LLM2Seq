@@ -1,0 +1,57 @@
+_base_: pplx_pubmed.yaml
+
+# Prompt-Conditioned Evidence Bridge (PCEB).
+#
+# The model remains one PPLX encoder -> one EvidenceBridge -> one Qwen3
+# decoder.  PCEB changes training supervision only: a query formed from the
+# target-free decoder prompt state and pooled bridge memory contrasts the
+# three global evidence units against within-document hard negatives.  No
+# target/reference/evidence label enters greedy inference.
+experiment:
+  name: eviseq_pubmed_pceb_pplx_0_6b_to_qwen3_0_6b
+  output_dir: runs/eviseq/pubmed_pceb_pplx_0_6b
+
+bridge:
+  # Preserve PPLX memory at step zero while letting the bridge learn the
+  # PPLX-space -> Qwen-space coordinate correction during fine-tuning.
+  trainable_identity_projection: true
+  # Positive salience may strengthen, but never invert, the decoder prior;
+  # units also have no hidden sentence-length advantage.
+  salience_gate_parameterization: sigmoid
+  salience_length_normalization: unit_invariant
+
+objectives:
+  evidence_contrastive_mode: prompt_conditioned
+  # Directly train the salience logits that are converted to the decoder's
+  # cross-attention key bias by the bridge.
+  # Match the prior successful PubMed evidence recipe.  Unlike the previous
+  # sentence-aligned objective, PCEB has one global evidence set, so this
+  # direct salience gradient has no cross-summary-sentence sign conflict.
+  evidence_contrastive_salience_bias: 0.15
+  evidence_contrastive_weight: 0.10
+  evidence_contrastive_temperature: 0.07
+  # Start with four while copied cross-attention and the bridge align, then
+  # use eight confusable source units once full fine-tuning begins.  This is
+  # the validated 4 -> 8 curriculum used by the prior PubMed recipe.
+  evidence_hard_negatives: 4
+  evidence_hard_negatives_full: 8
+  evidence_prompt_context_gate_init: 0.50
+
+training:
+  # 1 warm-up + 4 full passes.  The full stage—not warm-up—updates both LLMs.
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 4
+  batch_size: 32
+  gradient_accumulation_steps: 1
+
+data:
+  # Lock the same PubMed source serialization as the T5Gemma baseline.
+  source_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
+  # One document-level evidence set: exactly up to three complementary units,
+  # chosen greedily for whole-abstract ROUGE coverage.  This avoids the broad
+  # union of up to three positives per reference sentence.
+  oracle_max_units: 3
+  sentence_evidence_supervision: false
+  sentence_evidence_use_union_as_salience: false
+  precompute_evidence: true
+  precompute_validation_evidence: true
