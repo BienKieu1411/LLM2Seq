@@ -44,6 +44,15 @@ training:
   batch_size: 32
   gradient_accumulation_steps: 1
 
+checkpoint:
+  # Save best.pt from validation *loss* after each epoch.  This never runs
+  # autoregressive validation prediction; the queue decodes test only.
+  save_best: true
+  # Keep recovery points: epoch_001.pt through epoch_005.pt and last.pt can
+  # be used to resume or evaluate later.
+  save_each_epoch: true
+  save_last: true
+
 data:
   # Lock the same PubMed source serialization as the T5Gemma baseline.
   source_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
@@ -54,4 +63,6 @@ data:
   sentence_evidence_supervision: false
   sentence_evidence_use_union_as_salience: false
   precompute_evidence: true
+  # Cache validation evidence once because validation loss is used to choose
+  # best.pt; this does not generate validation summaries.
   precompute_validation_evidence: true

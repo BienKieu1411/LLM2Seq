@@ -29,6 +29,8 @@ from eviseq.training.checkpoint import (
     save_configured_epoch_checkpoints,
     save_last_checkpoint,
 )
+from eviseq.training.engine import DistributedLengthBucketBatchSampler
+from eviseq.training.engine import _parameter_component as engine_parameter_component
 from eviseq.training.objectives import (
     EvidenceContrastiveHead,
     PromptConditionedEvidenceHead,
@@ -37,7 +39,6 @@ from eviseq.training.objectives import (
     sentence_evidence_info_nce_loss,
 )
 from eviseq.training.online_kd import topk_kl_loss
-from eviseq.training.engine import DistributedLengthBucketBatchSampler, _parameter_component as engine_parameter_component
 from eviseq.training.trainer import _capture_optimizer_moments, _parameter_component, _restore_optimizer_moments
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -313,6 +314,38 @@ def test_pceb_recipe_uses_target_free_global_evidence_supervision() -> None:
     assert config["bridge"]["trainable_identity_projection"] is True
     assert config["bridge"]["salience_gate_parameterization"] == "sigmoid"
     assert config["bridge"]["salience_length_normalization"] == "unit_invariant"
+    # Validation supplies only teacher-forced loss for best.pt; only the
+    # subsequent locked greedy test command produces predictions.
+    assert config["checkpoint"]["save_best"] is True
+    assert config["checkpoint"]["save_each_epoch"] is True
+    assert config["checkpoint"]["save_last"] is True
+    assert config["data"]["precompute_validation_evidence"] is True
+
+
+def test_pceb_sensitivity_recipes_change_one_main_axis_only() -> None:
+    main = load_config(ROOT / "configs" / "models" / "pplx_pubmed_pceb.yaml")
+    pos4 = load_config(ROOT / "configs" / "models" / "pplx_pubmed_pceb_pos4.yaml")
+    gate20 = load_config(ROOT / "configs" / "models" / "pplx_pubmed_pceb_gate20.yaml")
+
+    main_data = dict(main["data"])
+    pos4_data = dict(pos4["data"])
+    assert pos4_data.pop("oracle_max_units") == 4
+    assert main_data.pop("oracle_max_units") == 3
+    assert pos4_data == main_data
+    assert pos4["bridge"] == main["bridge"]
+    assert pos4["objectives"] == main["objectives"]
+    assert pos4["training"] == main["training"]
+    assert pos4["decoder"] == main["decoder"]
+
+    main_decoder = dict(main["decoder"])
+    gate20_decoder = dict(gate20["decoder"])
+    assert main_decoder.pop("cross_gate_init") == pytest.approx(0.10)
+    assert gate20_decoder.pop("cross_gate_init") == pytest.approx(0.20)
+    assert gate20_decoder == main_decoder
+    assert gate20["data"] == main["data"]
+    assert gate20["bridge"] == main["bridge"]
+    assert gate20["objectives"] == main["objectives"]
+    assert gate20["training"] == main["training"]
 
 
 def test_configured_dataset_paths_resolve_from_repo_or_flattened_package() -> None:

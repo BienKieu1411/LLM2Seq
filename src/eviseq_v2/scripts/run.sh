@@ -29,6 +29,8 @@ PUBMED_CONFIG="$PROJECT_ROOT/configs/tasks/pubmed.yaml"
 ARXIV_CONFIG="$PROJECT_ROOT/configs/tasks/arxiv.yaml"
 PPLX_PUBMED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed.yaml"
 PCEB_PUBMED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_pceb.yaml"
+PCEB_PUBMED_POS4_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_pceb_pos4.yaml"
+PCEB_PUBMED_GATE20_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_pceb_gate20.yaml"
 SMOKE_CONFIG="$PROJECT_ROOT/configs/tasks/smoke.yaml"
 
 absolute_path() {
@@ -205,6 +207,12 @@ case "$MODE" in
   pceb-pubmed)
     train_and_validate "$PCEB_PUBMED_CONFIG" "$@"
     ;;
+  pceb-pubmed-pos4)
+    train_and_validate "$PCEB_PUBMED_POS4_CONFIG" "$@"
+    ;;
+  pceb-pubmed-gate20)
+    train_and_validate "$PCEB_PUBMED_GATE20_CONFIG" "$@"
+    ;;
   pceb-pubmed-ddp)
     train_and_validate_ddp "$PCEB_PUBMED_CONFIG" "$@"
     ;;
@@ -261,6 +269,12 @@ case "$MODE" in
   evaluate-pceb-pubmed-test)
     evaluate_test "$PCEB_PUBMED_CONFIG" "$@"
     ;;
+  evaluate-pceb-pubmed-pos4-test)
+    evaluate_test "$PCEB_PUBMED_POS4_CONFIG" "$@"
+    ;;
+  evaluate-pceb-pubmed-gate20-test)
+    evaluate_test "$PCEB_PUBMED_GATE20_CONFIG" "$@"
+    ;;
   evaluate-test)
     CONFIG="${1:-$WIKI_CONFIG}"
     if [[ $# -gt 0 ]]; then shift; fi
@@ -303,40 +317,40 @@ case "$MODE" in
     cat <<'EOF'
 EviSeq (runs directly from source; no local package install required)
 
-  bash eviseq_new/scripts/run.sh train CONFIG.yaml --overwrite-output-dir
-  CUDA_VISIBLE_DEVICES=0,1 bash eviseq_new/scripts/run.sh train-ddp CONFIG.yaml --overwrite-output-dir
-  bash eviseq_new/scripts/run.sh evaluate RESOLVED.yaml last.pt predictions.jsonl --split test
-  bash eviseq_new/scripts/run.sh validate-data CONFIG.yaml
-  bash eviseq_new/scripts/run.sh test
-  bash eviseq_new/scripts/run.sh smoke --overwrite-output-dir
-  bash eviseq_new/scripts/run.sh wiki --overwrite-output-dir
-  bash eviseq_new/scripts/run.sh arxiv --overwrite-output-dir
-  bash eviseq_new/scripts/run.sh pplx --overwrite-output-dir
-  bash eviseq_new/scripts/run.sh nemotron --overwrite-output-dir
-  bash eviseq_new/scripts/run.sh c0|c2|c3-no-cl --overwrite-output-dir
-  bash eviseq_new/scripts/run.sh ablation-all --overwrite-output-dir
-  bash eviseq_new/scripts/run.sh c1 --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh train CONFIG.yaml --overwrite-output-dir
+  CUDA_VISIBLE_DEVICES=0,1 bash eviseq_v2/scripts/run.sh train-ddp CONFIG.yaml --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh evaluate RESOLVED.yaml last.pt predictions.jsonl --split test
+  bash eviseq_v2/scripts/run.sh validate-data CONFIG.yaml
+  bash eviseq_v2/scripts/run.sh test
+  bash eviseq_v2/scripts/run.sh smoke --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh wiki --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh arxiv --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh pplx --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh nemotron --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh c0|c2|c3-no-cl --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh ablation-all --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh c1 --overwrite-output-dir
 
 Data and other datasets:
-  bash eviseq_new/scripts/run.sh prepare-cnndm /absolute/path/to/cnndm
-  bash eviseq_new/scripts/run.sh prepare-pubmed /absolute/path/to/pubmed
-  bash eviseq_new/scripts/run.sh prepare-arxiv /absolute/path/to/arxiv
-  bash eviseq_new/scripts/run.sh cnndm --overwrite-output-dir
-  bash eviseq_new/scripts/run.sh pubmed --overwrite-output-dir
-  bash eviseq_new/scripts/run.sh arxiv --overwrite-output-dir
-  bash eviseq_new/scripts/run.sh pplx-pubmed --overwrite-output-dir
-  bash eviseq_new/scripts/run.sh pceb-pubmed --overwrite-output-dir
-  CUDA_VISIBLE_DEVICES=0,1 bash eviseq_new/scripts/run.sh \
+  bash eviseq_v2/scripts/run.sh prepare-cnndm /absolute/path/to/cnndm
+  bash eviseq_v2/scripts/run.sh prepare-pubmed /absolute/path/to/pubmed
+  bash eviseq_v2/scripts/run.sh prepare-arxiv /absolute/path/to/arxiv
+  bash eviseq_v2/scripts/run.sh cnndm --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh pubmed --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh arxiv --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh pplx-pubmed --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh pceb-pubmed --overwrite-output-dir
+  CUDA_VISIBLE_DEVICES=0,1 bash eviseq_v2/scripts/run.sh \
     pceb-pubmed-ddp --overwrite-output-dir
 
 Evaluation commands:
-  bash eviseq_new/scripts/run.sh evaluate-wiki-test
-  bash eviseq_new/scripts/run.sh evaluate-arxiv-test --batch-size 96
-  bash eviseq_new/scripts/run.sh evaluate-pceb-pubmed-test --batch-size 96
-  bash eviseq_new/scripts/run.sh evaluate-test CONFIG.yaml --batch-size 8
+  bash eviseq_v2/scripts/run.sh evaluate-wiki-test
+  bash eviseq_v2/scripts/run.sh evaluate-arxiv-test --batch-size 96
+  bash eviseq_v2/scripts/run.sh evaluate-pceb-pubmed-test --batch-size 96
+  bash eviseq_v2/scripts/run.sh evaluate-test CONFIG.yaml --batch-size 8
   # Add --resume to continue an interrupted JSONL evaluation.
-  bash eviseq_new/scripts/run.sh rouge155 runs/.../last_test_predictions.jsonl --details
-  bash eviseq_new/scripts/run.sh bootstrap CANDIDATE_ROUGE155 BASELINE_ROUGE155 OUTPUT_JSON
+  bash eviseq_v2/scripts/run.sh rouge155 runs/.../last_test_predictions.jsonl --details
+  bash eviseq_v2/scripts/run.sh bootstrap CANDIDATE_ROUGE155 BASELINE_ROUGE155 OUTPUT_JSON
 
 Override a local checkpoint path, batch, LR, or epoch in the YAML config. The
 runner uses the active virtual environment (activate bienkieu_env first).

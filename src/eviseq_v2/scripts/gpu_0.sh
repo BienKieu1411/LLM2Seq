@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Run the single current PubMed recipe: Prompt-Conditioned Evidence Bridge
-# (PCEB).  It evaluates its own last.pt with Perl ROUGE-1.5.5.  Historical
-# experiment artifacts are left untouched but their stale configs are not
-# part of this production queue.
+# Run the current PubMed PCEB main recipe and two one-axis sensitivities.
+# Training runs teacher-forced validation loss to preserve best.pt, but never
+# generates validation summaries; each run is decoded directly on test once
+# from last.pt.  These three test scores are exploratory, not a
+# valid basis for selecting a final paper configuration.
 #
 # Run from the repository src directory:
-#   CUDA_VISIBLE_DEVICES=0 bash eviseq_new/scripts/gpu_0.sh
+#   CUDA_VISIBLE_DEVICES=0 bash eviseq_v2/scripts/gpu_0.sh
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${PROJECT_ROOT}"
@@ -17,6 +18,10 @@ export PYTHONUNBUFFERED=1
 export HF_HUB_DISABLE_TELEMETRY=1
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+# The supplied PubMed label files may intentionally reuse records/IDs across
+# splits.  Permit conversion to continue on this supplied benchmark copy;
+# export EVISEQ_ALLOW_CROSS_SPLIT_CONTENT=false to restore the strict gate.
+export EVISEQ_ALLOW_CROSS_SPLIT_CONTENT="${EVISEQ_ALLOW_CROSS_SPLIT_CONTENT:-true}"
 export PYROUGE_HOME_DIR="${PYROUGE_HOME_DIR:-/workspace/storage-shared/nlp/dungdx4/textsum_platform_eval/pyrouge-master/tools/ROUGE-1.5.5}"
 
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-8}"
@@ -35,6 +40,7 @@ exec > >(tee -a "${LOG_FILE}") 2>&1
 
 echo "=== GPU 0: PCEB PubMed (PPLX 0.6B -> Qwen3 0.6B) ==="
 echo "=== CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ==="
+echo "=== EVISEQ_ALLOW_CROSS_SPLIT_CONTENT=${EVISEQ_ALLOW_CROSS_SPLIT_CONTENT} ==="
 echo "=== PYROUGE_HOME_DIR=${PYROUGE_HOME_DIR} ==="
 echo "=== Log: ${LOG_FILE} ==="
 
@@ -54,20 +60,28 @@ else
 fi
 
 run_and_score() {
-  local train_mode="$1"
-  local eval_mode="$2"
-  local run_dir="$3"
+  local config="$1"
+  local run_dir="$2"
   local predictions="${run_dir}/last_test_predictions.jsonl"
 
-  echo "=== Starting ${train_mode} ==="
-  bash scripts/run.sh "${train_mode}" --overwrite-output-dir
-  bash scripts/run.sh "${eval_mode}" --batch-size "${EVAL_BATCH_SIZE}"
+  echo "=== Training ${config}; saving best.pt by validation loss (no valid predictions) ==="
+  bash scripts/run.sh train "${config}" --overwrite-output-dir
+  echo "=== Evaluating last.pt directly on the test split ==="
+  bash scripts/run.sh evaluate-test "${config}" --batch-size "${EVAL_BATCH_SIZE}"
   bash scripts/run.sh rouge155 "${PROJECT_ROOT}/${predictions}" --details
 }
 
 run_and_score \
-  pceb-pubmed \
-  evaluate-pceb-pubmed-test \
+  configs/models/pplx_pubmed_pceb.yaml \
   runs/eviseq/pubmed_pceb_pplx_0_6b
+
+# Controlled PubMed sensitivity runs.  Each differs from PCEB along only one
+# source-selection/source-uptake axis, and each skips validation generation.
+run_and_score \
+  configs/models/pplx_pubmed_pceb_pos4.yaml \
+  runs/eviseq/pubmed_pceb_pplx_0_6b_pos4
+run_and_score \
+  configs/models/pplx_pubmed_pceb_gate20.yaml \
+  runs/eviseq/pubmed_pceb_pplx_0_6b_gate20
 
 echo "=== GPU 0 PubMed queue completed successfully ==="

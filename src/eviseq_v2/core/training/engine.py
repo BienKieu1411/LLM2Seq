@@ -579,7 +579,12 @@ def train(
                 yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
                 encoding="utf-8",
             )
-            LOGGER.info("device=%s ddp_world_size=%d model=%s", device, distributed.world_size, json.dumps(model.parameter_summary()))
+            LOGGER.info(
+                "device=%s ddp_world_size=%d model=%s",
+                device,
+                distributed.world_size,
+                json.dumps(model.parameter_summary()),
+            )
             per_gpu_batch = int(training.get("batch_size", 32))
             accumulation = int(training.get("gradient_accumulation_steps", 1))
             global_microbatch = per_gpu_batch * distributed.world_size

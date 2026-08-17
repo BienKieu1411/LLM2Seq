@@ -407,9 +407,7 @@ def _run_stage(
                     _restore_rng_state(cache["rng_states"][microbatch_index], device)
                 is_last_microbatch = microbatch_index + 1 == window_size
                 sync_context = (
-                    active_model.no_sync()
-                    if distributed.enabled and not is_last_microbatch
-                    else nullcontext()
+                    active_model.no_sync() if distributed.enabled and not is_last_microbatch else nullcontext()
                 )
                 with sync_context:
                     with stable._autocast(device, training):
