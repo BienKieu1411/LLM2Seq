@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections import Counter
 from collections.abc import Mapping
@@ -16,6 +17,7 @@ from torch.utils.data import Dataset, Sampler
 _WORD = re.compile(r"\w+", flags=re.UNICODE)
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 _WIKIHOW_IMAGE = re.compile(r'\{\s*"\s*smallUrl\s*"[^{}]*\}', flags=re.IGNORECASE)
+LOGGER = logging.getLogger("eviseq.data.dataset")
 
 
 class _TemplateValues(dict):
@@ -412,7 +414,10 @@ class Text2TextDataset(Dataset):
             and not (self.sentence_evidence_supervision and self.sentence_evidence_use_union_as_salience)
         ):
             self.evidence_cache = []
-            for row in self.examples:
+            total_examples = len(self.examples)
+            progress_interval = max(1, total_examples // 20)
+            LOGGER.info("precomputing evidence labels: 0/%d", total_examples)
+            for index, row in enumerate(self.examples, start=1):
                 source = clean_text(row["source"], self.clean_metadata)
                 target = clean_text(row["target"], self.clean_metadata)
                 self.evidence_cache.append(
@@ -422,6 +427,8 @@ class Text2TextDataset(Dataset):
                         max_units=int(data_config.get("oracle_max_units", 12)),
                     )
                 )
+                if index % progress_interval == 0 or index == total_examples:
+                    LOGGER.info("precomputing evidence labels: %d/%d", index, total_examples)
 
     def __len__(self) -> int:
         return len(self.examples)
