@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
+import sqlite3
 import unicodedata
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, Sequence
@@ -158,34 +160,88 @@ def copy_raw_file(source: Path, raw_copy_dir: Path, split: str) -> Path:
     return destination
 
 
-def prepare(input_dir: Path, raw_copy_dir: Path, output_dir: Path) -> Dict[str, Any]:
+def _register_processed_sources(path: Path, split: str, connection: sqlite3.Connection) -> int:
+    duplicates = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, raw in enumerate(handle, start=1):
+            if not raw.strip():
+                continue
+            try:
+                source = json.loads(raw)["source"]
+            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                raise ValueError(f"Invalid processed CNN/DM record at {path}:{line_number}") from exc
+            existing = connection.execute(
+                "SELECT split FROM source_registry WHERE source = ?",
+                (str(source),),
+            ).fetchone()
+            if existing is not None:
+                if str(existing[0]) != split:
+                    duplicates += 1
+                continue
+            connection.execute(
+                "INSERT INTO source_registry(source, split) VALUES (?, ?)",
+                (str(source), split),
+            )
+    connection.commit()
+    return duplicates
+
+
+def prepare(
+    input_dir: Path,
+    raw_copy_dir: Path,
+    output_dir: Path,
+    *,
+    allow_cross_split_content: bool = False,
+) -> Dict[str, Any]:
     input_dir = input_dir.expanduser().resolve()
     raw_copy_dir = raw_copy_dir.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
     if not input_dir.is_dir():
         raise NotADirectoryError(input_dir)
 
-    report: Dict[str, Any] = {"dataset": "cnndm", "input_dir": str(input_dir), "splits": {}}
-    for split in ("train", "validation", "test"):
-        source_path = find_split(input_dir, split)
-        copied_path = copy_raw_file(source_path, raw_copy_dir, split)
-        output_name = "validation.jsonl" if split == "validation" else f"{split}.jsonl"
-        output_path = output_dir / output_name
-        stats = convert_split(copied_path, output_path, split)
-        stats.pop("ids")
-        report["splits"][split] = {
-            **stats,
-            "source_path": str(source_path),
-            "raw_copy": str(copied_path),
-            "processed_path": str(output_path),
-        }
-
     output_dir.mkdir(parents=True, exist_ok=True)
-    report_path = output_dir / "preparation_report.json"
-    temporary = report_path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(report_path)
-    return report
+    report: Dict[str, Any] = {"dataset": "cnndm", "input_dir": str(input_dir), "splits": {}}
+    seen_identifiers: set[str] = set()
+    registry_path = output_dir / ".cross_split_sources.sqlite3"
+    registry_path.unlink(missing_ok=True)
+    connection = sqlite3.connect(registry_path)
+    try:
+        connection.execute("CREATE TABLE source_registry (source TEXT PRIMARY KEY, split TEXT NOT NULL)")
+        for split in ("train", "validation", "test"):
+            source_path = find_split(input_dir, split)
+            copied_path = copy_raw_file(source_path, raw_copy_dir, split)
+            output_name = "validation.jsonl" if split == "validation" else f"{split}.jsonl"
+            output_path = output_dir / output_name
+            stats = convert_split(copied_path, output_path, split)
+            duplicate_ids = sorted(stats["ids"] & seen_identifiers)
+            duplicate_source_count = _register_processed_sources(output_path, split, connection)
+            if duplicate_ids or duplicate_source_count:
+                details = []
+                if duplicate_ids:
+                    details.append(f"duplicate ids={duplicate_ids[:5]}")
+                if duplicate_source_count:
+                    details.append(f"duplicate source texts={duplicate_source_count}")
+                message = "Cross-split content leakage while preparing cnndm: " + "; ".join(details)
+                if not allow_cross_split_content:
+                    raise ValueError(message)
+                print(f"WARNING: {message}; continuing because cross-split checks were explicitly disabled")
+            seen_identifiers.update(stats["ids"])
+            stats.pop("ids")
+            report["splits"][split] = {
+                **stats,
+                "source_path": str(source_path),
+                "raw_copy": str(copied_path),
+                "processed_path": str(output_path),
+            }
+
+        report_path = output_dir / "preparation_report.json"
+        temporary = report_path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(report_path)
+        return report
+    finally:
+        connection.close()
+        registry_path.unlink(missing_ok=True)
 
 
 def main() -> None:
@@ -193,8 +249,19 @@ def main() -> None:
     parser.add_argument("--input-dir", required=True)
     parser.add_argument("--raw-copy-dir", default="data/raw/cnndm")
     parser.add_argument("--output-dir", default="data/cnndm")
+    parser.add_argument(
+        "--allow-cross-split-content",
+        action="store_true",
+        default=os.environ.get("EVISEQ_ALLOW_CROSS_SPLIT_CONTENT", "").lower() in {"1", "true", "yes"},
+        help="Allow duplicate IDs/source texts across splits (debug only; not valid for paper evaluation)",
+    )
     args = parser.parse_args()
-    report = prepare(Path(args.input_dir), Path(args.raw_copy_dir), Path(args.output_dir))
+    report = prepare(
+        Path(args.input_dir),
+        Path(args.raw_copy_dir),
+        Path(args.output_dir),
+        allow_cross_split_content=args.allow_cross_split_content,
+    )
     for split, stats in report["splits"].items():
         print(f"{split}: {stats['kept']} examples (skipped {stats['skipped']}) -> {stats['processed_path']}")
 

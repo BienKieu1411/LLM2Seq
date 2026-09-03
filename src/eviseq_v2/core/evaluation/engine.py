@@ -11,13 +11,12 @@ import os
 import statistics
 import time
 from collections import Counter
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, List
 
 import torch
 
-from ..configuration import load_config, resolve_data_path
+from ..config import load_config, resolve_data_path
 from ..data.dataset import clean_text, decoder_seed_ids, encode_source, read_jsonl
 from ..modeling.architecture import EviSeq as RuntimeModel
 from ..training.checkpoint import (
@@ -25,7 +24,7 @@ from ..training.checkpoint import (
     evaluation_config_fingerprint,
     load_checkpoint,
 )
-from ..training.engine import _device, _tokenizers
+from ..training.engine import _autocast, _device, _tokenizers
 from .generation import generate
 from .metrics import task_scores
 
@@ -51,6 +50,8 @@ def _row_id(row: Dict[str, Any]) -> str:
 def _load_resume_records(
     output: Path,
     rows: List[Dict[str, Any]],
+    *,
+    clean_metadata: bool = False,
 ) -> tuple[List[Dict[str, Any]], set[str]]:
     """Read completed JSONL records and discard an incomplete trailing line."""
 
@@ -81,14 +82,14 @@ def _load_resume_records(
                 raise ValueError(f"Cannot resume evaluation: duplicate prediction id {record_id!r}")
             if "prediction" not in record or "reference" not in record:
                 raise ValueError("Cannot resume evaluation: every record needs prediction and reference fields")
-            if str(record["reference"]).strip() != str(rows_by_id[record_id]["target"]).strip():
+            expected_reference = clean_text(rows_by_id[record_id]["target"], clean_metadata).strip()
+            if str(record["reference"]).strip() != expected_reference:
                 raise ValueError("Cannot resume evaluation: prediction reference differs from the current dataset")
             records.append(record)
             seen.add(record_id)
             valid_end = next_end
 
     if valid_end < output.stat().st_size:
-        # A process killed during a write may leave a partial final JSON line.
         with output.open("r+b") as handle:
             handle.truncate(valid_end)
     return records, seen
@@ -98,10 +99,20 @@ def _resume_manifest_path(output: Path) -> Path:
     return output.with_suffix(".resume.json")
 
 
-def _dataset_fingerprint(rows: List[Dict[str, Any]]) -> str:
-    material = [{"id": _row_id(row), "source": str(row["source"]), "target": str(row["target"])} for row in rows]
-    encoded = json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+def _dataset_record(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return an ordered resume guard for both references and source inputs."""
+
+    identifiers = [_row_id(row) for row in rows]
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError("Evaluation resume requires unique dataset ids")
+    return {
+        "num_examples": len(rows),
+        "first_id": identifiers[0] if identifiers else None,
+        "last_id": identifiers[-1] if identifiers else None,
+        "ids": identifiers,
+        "source_hashes": [hashlib.sha256(str(row["source"]).encode("utf-8")).hexdigest() for row in rows],
+        "references": [str(row["target"]).strip() for row in rows],
+    }
 
 
 def _resume_manifest(
@@ -113,7 +124,7 @@ def _resume_manifest(
         "checkpoint_epoch": int(payload.get("epoch", 0)),
         "checkpoint_global_step": int(payload.get("global_step", 0)),
         "evaluation_config": evaluation_config_fingerprint(config),
-        "dataset": _dataset_fingerprint(rows),
+        "dataset": _dataset_record(rows),
     }
 
 
@@ -128,21 +139,21 @@ def _verify_or_write_resume_manifest(
 ) -> None:
     manifest_path = _resume_manifest_path(output)
     expected = _resume_manifest(checkpoint, payload, config, rows)
-    if resume and output.is_file() and output.stat().st_size > 0:
-        if not manifest_path.is_file():
-            raise RuntimeError(
-                f"Cannot safely resume {output}: missing {manifest_path.name}. "
-                "Start a fresh evaluation or retain the manifest written with the prediction file."
-            )
+    if resume and manifest_path.is_file():
         try:
             saved = json.loads(manifest_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as error:
             raise RuntimeError(f"Cannot safely resume {output}: invalid {manifest_path.name}") from error
         if saved != expected:
             raise RuntimeError(
-                "Cannot safely resume evaluation: checkpoint, resolved decoding configuration, or test dataset differs"
+                "Cannot safely resume evaluation: checkpoint, decoding settings, or test dataset differs"
             )
         return
+    if resume and output.is_file() and output.stat().st_size > 0:
+        raise RuntimeError(
+            f"Cannot safely resume {output}: missing {manifest_path.name}. "
+            "Start a fresh evaluation or retain the manifest written with the prediction file."
+        )
     manifest_path.write_text(json.dumps(expected, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -256,24 +267,19 @@ def evaluate(
     resume_records: List[Dict[str, Any]] = []
     processed_ids: set[str] = set()
     if resume:
-        resume_records, processed_ids = _load_resume_records(output, rows)
+        resume_records, processed_ids = _load_resume_records(
+            output,
+            rows,
+            clean_metadata=bool(data.get("clean_wikihow_metadata", False)),
+        )
 
     row_by_id = {_row_id(row): row for row in rows}
     predictions: List[str] = [str(record["prediction"]).strip() for record in resume_records]
     references: List[str] = [str(record["reference"]).strip() for record in resume_records]
     sources: List[str] = [str(row_by_id[str(record["id"])]["source"]) for record in resume_records]
     latencies: List[float] = []
-    # Stream completed batches so long evaluations remain observable and a
-    # partial prediction file survives an interruption.
     output_handle = output.open("a" if resume else "w", encoding="utf-8")
     generation_started = time.perf_counter()
-    bf16 = device.type == "cuda" and bool(config.get("training", {}).get("bf16", True))
-
-    def autocast():
-        if bf16:
-            return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
-        return nullcontext()
-
     pending_rows = [row for row in rows if _row_id(row) not in processed_ids]
     cursor = 0
     active_batch_size = batch_size
@@ -297,7 +303,7 @@ def evaluate(
             if device.type == "cuda":
                 torch.cuda.synchronize()
             began = time.perf_counter()
-            with autocast():
+            with _autocast(device, config.get("training", {})):
                 generated = generate(
                     model,
                     input_ids,
@@ -362,9 +368,6 @@ def evaluate(
             f"eta={_format_duration(eta)}"
         )
         LOGGER.info(progress)
-        # Keep long evaluations observable even when an embedding application
-        # has already installed a WARNING-only logging handler. The explicit
-        # flush is also required for live `tee`/`tail -f` monitoring.
         print(progress, flush=True)
     output_handle.close()
     metrics: Dict[str, Any] = {
@@ -384,52 +387,12 @@ def evaluate(
         "encoder_name": config["model"]["encoder_name"],
         "decoder_name": config["model"]["decoder_name"],
         "final_graph": "one_encoder_one_adapter_one_decoder",
-        # Fixed to the baseline-compatible decoding protocol: no beam search,
-        # sampling, candidate selection, or reranking.
         "decode_mode": "greedy_argmax",
         "num_beams": 1,
         "do_sample": False,
     }
-    benchmark_root = config.get("benchmark", {})
-    benchmark = benchmark_root.get("paper", benchmark_root)
-    if all(name in benchmark for name in ("rouge1", "rouge2", "rougeL")) and all(
-        name in metrics for name in ("rouge1", "rouge2", "rougeL")
-    ):
-        metrics["benchmark_name"] = str(benchmark.get("name", "T5Gemma"))
-        candidate_backend = "rouge==1.0.0 (built-in Python diagnostic)"
-        target_backend = str(benchmark.get("backend", "unspecified"))
-        metrics["diagnostic_rouge_backend"] = candidate_backend
-        metrics["benchmark_rouge_backend"] = target_backend
-        if "perl rouge-1.5.5" in target_backend.lower():
-            # ``rouge==1.0.0`` is intentionally retained for fast training
-            # diagnostics, but its scores are not interchangeable with the
-            # paper protocol.  Never turn an incomparable score into a paper
-            # gap or a pass/fail claim.
-            metrics["paper_comparison_status"] = "pending_perl_rouge155"
-        else:
-            metrics["gap_to_t5gemma"] = {
-                name: round(float(metrics[name]) - float(benchmark[name]), 4) for name in ("rouge1", "rouge2", "rougeL")
-            }
-            metrics["rouge2_target_reached"] = float(metrics["rouge2"]) >= float(benchmark["rouge2"])
     metrics_path = output.with_suffix(".metrics.json")
     metrics_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
-    if "gap_to_t5gemma" in metrics:
-        gap_path = output.parent / "t5gemma_gap_report.json"
-        gap_path.write_text(
-            json.dumps(
-                {
-                    "candidate_checkpoint": str(checkpoint),
-                    "candidate": {name: metrics[name] for name in ("rouge1", "rouge2", "rougeL")},
-                    "target_name": metrics["benchmark_name"],
-                    "target": {name: float(benchmark[name]) for name in ("rouge1", "rouge2", "rougeL")},
-                    "candidate_minus_target": metrics["gap_to_t5gemma"],
-                    "rouge2_target_reached": metrics["rouge2_target_reached"],
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
     print(json.dumps(metrics, ensure_ascii=False, indent=2))
     return metrics
 

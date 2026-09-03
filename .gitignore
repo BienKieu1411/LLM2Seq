@@ -1,65 +1,39 @@
 __pycache__/
 *.py[cod]
-*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
 .venv/
 .env
 env.txt
-llm2seq/.env
-T5Gemma/.env
-T5Gemma/env.txt
-*.egg-info/
 dist/
 build/
+node_modules/
 
-# Training outputs
 runs/
 outputs/
 *.pt
 *.bin
-
-# Data (large files)
+*.jsonl
 data/raw/
 data/processed/
 data/teacher_outputs/
-*.jsonl
+
 T5Gemma/data/processed/
 T5Gemma/logs/
 T5Gemma/eval_outputs/
 T5Gemma/wikilingua/*.json
-src/llm2seq_v5/data/raw/cnndm/
-src/llm2seq_v5/data/cnndm/
-src/llm2seq_v4/data/raw/cnndm/
-src/llm2seq_v4/data/cnndm/
 
-# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
-
-# Jupyter
 .ipynb_checkpoints/
 
-node_modules/
-dist/
-
-__pycache__/
-
-.ruff_cache/
-
-# Qwen3Baseline
-Qwen3Baseline/
-
 *.bib
-
 *.tex
-
 *.sty
-
 *.bst
-
 reports/

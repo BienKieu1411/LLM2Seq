@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 from torch.utils.data import DataLoader
 
-from ..configuration import load_config, resolve_data_path
+from ..config import load_config, resolve_data_path
 from ..data.dataset import (
     Text2TextDataset,
 )
@@ -29,11 +29,29 @@ _TRAIN_AVERAGE_METRICS = (
     "loss",
     "loss_ce",
     "loss_salience",
+    "loss_bridge_geometry",
+    "weighted_bridge_geometry",
+    "bridge_geometry_to_ce_ratio",
     "loss_contrastive",
+    "loss_source_swap",
+    "weighted_source_swap",
+    "source_swap_to_ce_ratio",
+    "source_swap_nll_gap",
+    "source_swap_accuracy",
+    "source_swap_negative_similarity",
     "loss_evidence_contrastive",
     "weighted_evidence_contrastive",
     "evidence_contrastive_to_ce_ratio",
     "evidence_hard_negatives",
+    "prompt_context_gate",
+    "prompt_bridge_fusion_gate",
+    "prompt_bridge_dynamic_logit_rms",
+    "prompt_bridge_dynamic_logit_clip_fraction",
+    "prompt_bridge_effective_delta_rms",
+    "prompt_bridge_effective_delta_nonzero_fraction",
+    "prompt_bridge_probe_layers",
+    "evidence_attention_aligned",
+    "attention_prior_clip_fraction",
     "prompt_retrieval_accuracy",
     "contrastive_examples",
     "cross_residual_ratio",
@@ -260,8 +278,13 @@ def validation_loss(
     names = (
         "loss_ce",
         "loss_salience",
+        "loss_bridge_geometry",
         "prompt_retrieval_accuracy",
         "contrastive_examples",
+        "loss_source_swap",
+        "source_swap_nll_gap",
+        "source_swap_accuracy",
+        "source_swap_negative_similarity",
         "cross_residual_ratio",
         "bridge_projection_residual_ratio",
         "positive_attention_prior",
@@ -274,9 +297,20 @@ def validation_loss(
         "positive_similarity",
         "hard_negative_similarity",
         "evidence_similarity_gap",
+        "evidence_valid_examples",
+        "prompt_context_gate",
+        "prompt_bridge_fusion_gate",
+        "prompt_bridge_dynamic_logit_rms",
+        "prompt_bridge_dynamic_logit_clip_fraction",
+        "prompt_bridge_effective_delta_rms",
+        "prompt_bridge_effective_delta_nonzero_fraction",
+        "prompt_bridge_probe_layers",
+        "evidence_attention_aligned",
+        "attention_prior_clip_fraction",
     )
     totals = {name: 0.0 for name in names}
     totals.update({name: 0.0 for name in _SALIENCE_COUNT_METRICS})
+    count_names = {"contrastive_examples", "evidence_valid_examples"}
     examples = 0
     for batch in loader:
         batch = stable._move(batch, device)
@@ -285,7 +319,8 @@ def validation_loss(
         batch_size = int(batch["input_ids"].shape[0])
         for name in names:
             if name in outputs:
-                totals[name] += float(outputs[name].detach().float()) * batch_size
+                value = float(outputs[name].detach().float())
+                totals[name] += value if name in count_names else value * batch_size
         for name in _SALIENCE_COUNT_METRICS:
             if name in outputs:
                 totals[name] += float(outputs[name].detach().float())
@@ -316,13 +351,14 @@ def _run_stage(
     global_step: int,
     checkpoint_dir: Path | None = None,
     checkpoint_config: Dict[str, Any] | None = None,
+    distributed: stable.DistributedContext | None = None,
 ) -> Tuple[int, int]:
     """Train evidence contrastive with optional document-level InfoNCE."""
 
     if stage_epochs <= 0:
         return epoch_offset, global_step
     raw_model = stable.unwrap_model(model)
-    distributed = stable.distributed_context()
+    distributed = distributed or stable.distributed_context()
     raw_model.set_training_stage(stage)
     active_model: torch.nn.Module = raw_model
     if distributed.enabled:
@@ -368,7 +404,7 @@ def _run_stage(
         sampler = getattr(loader, "sampler", None)
         if hasattr(sampler, "set_epoch"):
             sampler.set_epoch(epoch_offset + stage_epoch - 1)
-        model.train()
+        active_model.train()
         running: Dict[str, float] = {}
         metric_count = 0
         iterator = iter(loader)
@@ -377,7 +413,6 @@ def _run_stage(
             batches = [stable._move(next(iterator), device) for _ in range(window_size)]
             window_end = window_start + window_size - 1
 
-            # Document-level contrastive scale.
             scale = _contrastive_scale(
                 stage,
                 stage_epoch,
@@ -387,7 +422,6 @@ def _run_stage(
             )
             raw_model.set_contrastive_scale(scale)
 
-            # Evidence contrastive scale.
             evi_scale = _evidence_contrastive_scale(
                 stage,
                 stage_epoch,
@@ -397,7 +431,6 @@ def _run_stage(
             )
             raw_model.set_evidence_contrastive_scale(evi_scale)
 
-            # Document-level GradCache, only if enabled.
             cache = None
             if use_virtual_gradcache:
                 cache = _build_virtual_contrastive_cache(active_model, batches, device, training, scale)
@@ -468,9 +501,17 @@ def _run_stage(
                     "loss": _rounded(running.get("loss", 0.0) / divisor),
                     "ce": _rounded(running.get("loss_ce", 0.0) / divisor),
                     "sal": _rounded(running.get("loss_salience", 0.0) / divisor),
+                    "geo": _rounded(running.get("loss_bridge_geometry", 0.0) / divisor),
+                    "geo_w": _rounded(running.get("weighted_bridge_geometry", 0.0) / divisor),
+                    "geo_ce_ratio": _rounded(running.get("bridge_geometry_to_ce_ratio", 0.0) / divisor),
                     "sal_f1": _rounded(salience_f1),
                     "sal_rank": _rounded(_salience_ranking_accuracy(running)),
                     "evi_cl": _rounded(running.get("loss_evidence_contrastive", 0.0) / divisor),
+                    "swap": _rounded(running.get("loss_source_swap", 0.0) / divisor),
+                    "swap_w": _rounded(running.get("weighted_source_swap", 0.0) / divisor),
+                    "swap_ce_ratio": _rounded(running.get("source_swap_to_ce_ratio", 0.0) / divisor),
+                    "swap_gap": _rounded(running.get("source_swap_nll_gap", 0.0) / divisor),
+                    "swap_acc": _rounded(running.get("source_swap_accuracy", 0.0) / divisor),
                     "evi_w": _rounded(running.get("weighted_evidence_contrastive", 0.0) / divisor),
                     "evi_ce_ratio": _rounded(running.get("evidence_contrastive_to_ce_ratio", 0.0) / divisor),
                     "evi_k": int(round(running.get("evidence_hard_negatives", 0.0) / divisor)),
@@ -479,6 +520,17 @@ def _run_stage(
                     "evi_neg_sim": _rounded(running.get("hard_negative_similarity", 0.0) / divisor),
                     "evi_gap": _rounded(running.get("evidence_similarity_gap", 0.0) / divisor),
                     "evi_queries": int(round(running.get("evidence_valid_examples", 0.0) / divisor)),
+                    "prompt_ctx": _rounded(running.get("prompt_context_gate", 0.0) / divisor),
+                    "bridge_fuse": _rounded(running.get("prompt_bridge_fusion_gate", 0.0) / divisor),
+                    "dyn_logit_rms": _rounded(running.get("prompt_bridge_dynamic_logit_rms", 0.0) / divisor),
+                    "dyn_clip": _rounded(running.get("prompt_bridge_dynamic_logit_clip_fraction", 0.0) / divisor),
+                    "dyn_attn_rms": _rounded(running.get("prompt_bridge_effective_delta_rms", 0.0) / divisor),
+                    "dyn_attn_nz": _rounded(
+                        running.get("prompt_bridge_effective_delta_nonzero_fraction", 0.0) / divisor
+                    ),
+                    "probe_layers": int(round(running.get("prompt_bridge_probe_layers", 0.0) / divisor)),
+                    "attn_aligned": bool(round(running.get("evidence_attention_aligned", 0.0) / divisor)),
+                    "attn_clip": _rounded(running.get("attention_prior_clip_fraction", 0.0) / divisor),
                     "cross_res": _rounded(running.get("cross_residual_ratio", 0.0) / divisor),
                     "bridge_proj_res": _rounded(running.get("bridge_projection_residual_ratio", 0.0) / divisor),
                     "attn_pos_prior": _rounded(running.get("positive_attention_prior", 0.0) / divisor),
@@ -520,11 +572,24 @@ def _run_stage(
                 "epoch": absolute_epoch,
                 "ce": _rounded(metrics["eval_loss_ce"]),
                 "sal": _rounded(metrics["eval_loss_salience"]),
+                "geo": _rounded(metrics.get("eval_loss_bridge_geometry", 0.0)),
                 "sal_f1": _rounded(metrics["eval_salience_f1"]),
                 "sal_rank": _rounded(metrics["eval_salience_ranking_accuracy"]),
                 "evi_cl": _rounded(metrics.get("eval_loss_evidence_contrastive", 0.0)),
+                "swap": _rounded(metrics.get("eval_loss_source_swap", 0.0)),
+                "swap_gap": _rounded(metrics.get("eval_source_swap_nll_gap", 0.0)),
+                "swap_acc": _rounded(metrics.get("eval_source_swap_accuracy", 0.0)),
                 "evi_acc": _rounded(metrics.get("eval_evidence_top1_accuracy", 0.0)),
                 "evi_gap": _rounded(metrics.get("eval_evidence_similarity_gap", 0.0)),
+                "prompt_ctx": _rounded(metrics.get("eval_prompt_context_gate", 0.0)),
+                "bridge_fuse": _rounded(metrics.get("eval_prompt_bridge_fusion_gate", 0.0)),
+                "dyn_logit_rms": _rounded(metrics.get("eval_prompt_bridge_dynamic_logit_rms", 0.0)),
+                "dyn_clip": _rounded(metrics.get("eval_prompt_bridge_dynamic_logit_clip_fraction", 0.0)),
+                "dyn_attn_rms": _rounded(metrics.get("eval_prompt_bridge_effective_delta_rms", 0.0)),
+                "dyn_attn_nz": _rounded(metrics.get("eval_prompt_bridge_effective_delta_nonzero_fraction", 0.0)),
+                "probe_layers": int(round(metrics.get("eval_prompt_bridge_probe_layers", 0.0))),
+                "attn_aligned": bool(round(metrics.get("eval_evidence_attention_aligned", 0.0))),
+                "attn_clip": _rounded(metrics.get("eval_attention_prior_clip_fraction", 0.0)),
                 "cross_res": _rounded(metrics["eval_cross_residual_ratio"]),
                 "bridge_proj_res": _rounded(metrics.get("eval_bridge_projection_residual_ratio", 0.0)),
                 "attn_pos_prior": _rounded(metrics.get("eval_positive_attention_prior", 0.0)),
@@ -548,7 +613,7 @@ def _run_stage(
             if saved:
                 LOGGER.info("checkpoint %s", json.dumps(saved, separators=(",", ":")))
         stable.distributed_barrier(distributed)
-    raw_model._carried_optimizer_moments = (  # type: ignore[attr-defined]
+    raw_model._carried_optimizer_moments = (
         _capture_optimizer_moments(raw_model, optimizer) if stage == "interface_warmup" else {}
     )
     del active_model
@@ -561,13 +626,21 @@ def _parameter_component(name: str) -> str:
         or name.startswith("alignment_head.")
         or name.startswith("evidence_contrastive_head.")
         or name.startswith("prompt_conditioned_evidence_head.")
+        or name == "prompt_bridge_fusion_logit"
     ):
         return "adapter"
-    if name.startswith("encoder.") and any(
-        marker in name for marker in ("evidence_norm", "evidence_head", "evidence_view_gate", "generic_token_gate")
+    if (
+        name.startswith(
+            (
+                "encoder.evidence_norm.",
+                "encoder.evidence_head.",
+                "encoder.generic_token_gate.",
+            )
+        )
+        or name == "encoder.evidence_view_gate"
     ):
         return "adapter"
-    if ".cross_attn" in name or name.endswith(".cross_gate") or name.endswith(".memory_router_logits"):
+    if ".cross_attn" in name or name.endswith(".cross_gate"):
         return "cross_attention"
     if name.startswith("encoder."):
         return "encoder"
@@ -601,7 +674,7 @@ def build_experiment(
         decoder_tokenizer,
         data,
         max_examples=int(limits.get("max_validation_examples", 0)),
-        precompute_evidence=False,
+        precompute_evidence=bool(data.get("precompute_validation_evidence", False)),
     )
     return model, encoder_tokenizer, decoder_tokenizer, train_dataset, validation_dataset
 
@@ -614,21 +687,21 @@ def train(
     allow_partial_init: bool = False,
 ) -> Path:
     originals = {
-        "load_config": stable.load_config,
         "RuntimeModel": stable.RuntimeModel,
         "build_experiment": stable.build_experiment,
         "_parameter_component": stable._parameter_component,
         "_run_stage": stable._run_stage,
         "validation_loss": stable.validation_loss,
         "LOGGER": stable.LOGGER,
+        "load_config": stable.load_config,
     }
-    stable.load_config = load_config
     stable.RuntimeModel = EviSeq
     stable.build_experiment = build_experiment
     stable._parameter_component = _parameter_component
     stable._run_stage = _run_stage
     stable.validation_loss = validation_loss
     stable.LOGGER = LOGGER
+    stable.load_config = load_config
     try:
         return stable.train(
             config_path,
@@ -645,9 +718,9 @@ def train(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--output-dir", default="")
     parser.add_argument("--overwrite-output-dir", action="store_true")
     parser.add_argument("--init-checkpoint", default="")
-    parser.add_argument("--output-dir", default="")
     parser.add_argument("--allow-partial-init", action="store_true")
     args = parser.parse_args()
     train(

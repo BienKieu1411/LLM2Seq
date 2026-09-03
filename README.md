@@ -1,226 +1,112 @@
 # LLM2Seq
 
-LLM2Seq is a mini-project on Vietnamese abstractive summarization. The project adapts pretrained LLM-based source encoders into an encoder-decoder summarization system through a gated residual memory adapter, then studies faster inference with self-distilled Multi-Token Prediction (MTP).
+LLM2Seq contains the maintained EviSeq text-to-text training pipeline. EviSeq
+combines a pretrained source encoder, an evidence bridge and a pretrained
+causal decoder in one trainable graph:
 
-This repository contains the model code, training/evaluation scripts, ACL-style report, and a small web demo for running summarization with standard autoregressive decoding or verified MTP decoding.
+```text
+source encoder -> evidence bridge -> causal decoder
+```
 
-## What This Project Contains
+The bridge maps encoder memory to decoder coordinates and adds a learned
+source-unit attention prior. Evidence labels and contrastive losses are
+training-only; the optional DualBridge prompt route is target-free and can be
+reused at inference. Inference remains one encoder, one bridge and one decoder
+with greedy generation.
 
-- `src/llm2seq/`: main LLM2Seq implementation, configs, training scripts, evaluation scripts, and WikiLingua data files.
-- `src/T5Gemma/`: T5Gemma baseline code and configs.
-- `App/backend/`: FastAPI backend for the demo app.
-- `App/frontend/`: React/Vite frontend for the demo app.
-- `Report/`: ACL-style LaTeX report, bibliography, figures, and compiled PDF.
-- `Paper/`: reference papers used while writing the report.
-- `deploy/`: Docker and Kubernetes deployment files for the demo app.
+## Project layout
 
-The experimental results and analysis are documented in the report, so this README focuses on setup and repository usage.
+```text
+src/eviseq_v2/
+├── core/           data, modeling, training and evaluation packages
+├── configs/        model, task and reusable task-template YAML files
+├── scripts/        source-tree launchers and data preparation commands
+├── tests/          unit and integration tests
+├── docs/           method notes
+└── run.py          command-line entry point
+```
 
-## Core Idea
+The other top-level source directories are retained for reproducibility of
+earlier experiments. New experiments should use `src/eviseq_v2`.
 
-LLM2Seq uses three main parts:
+## Environment
 
-1. A pretrained LLM-based source encoder reads the input document.
-2. A gated residual memory adapter maps encoder states into decoder cross-attention memory.
-3. A lightweight Transformer decoder generates the summary.
-
-After the main summarizer is trained, Phase 3 freezes the main path and trains MTP heads. At inference time, the MTP heads draft future tokens and the main decoder verifies them.
-
-## Web Demo
-
-The demo lets you paste a Vietnamese source document, choose a decoding mode, set the maximum output length, and view latency/token statistics.
-
-### Install Backend Dependencies
+Use the project environment and make model paths available locally before
+training. The launchers do not issue model or dataset download commands.
 
 ```bash
-cd App/backend
-python3 -m pip install -r requirements.txt
+source /absolute/path/to/bienkieu_env/bin/activate
+cd src/eviseq_v2
+python -m pip install -e .
 ```
 
-The backend loads checkpoints from Hugging Face as configured in:
+## Configure and prepare data
 
-```text
-App/backend/config.yaml
-```
+Copy a template from `src/eviseq_v2/configs/templates/`, then set model names,
+JSONL fields, paths, sequence lengths and training hyperparameters. Each input
+record must provide a source field, a target field and an optional stable id.
 
-If the model repository requires authentication, set:
+For the built-in biomedical converters:
 
 ```bash
-export HF_TOKEN=your_huggingface_token
+cd src/eviseq_v2
+bash scripts/run.sh prepare-pubmed /absolute/path/to/pubmed
+bash scripts/run.sh prepare-arxiv /absolute/path/to/arxiv
+bash scripts/run.sh prepare-cnndm /absolute/path/to/cnndm
 ```
 
-### Install Frontend Dependencies
+The PubMed and ArXiv converters preserve supplied sentence-index labels. The
+preparation step rejects duplicate ids or source texts across splits unless
+`EVISEQ_ALLOW_CROSS_SPLIT_CONTENT=true` is explicitly set for debugging.
+
+## Train
 
 ```bash
-cd App/frontend
-npm install
+cd src/eviseq_v2
+bash scripts/run.sh train configs/tasks/wikilingua.yaml --overwrite-output-dir
+bash scripts/run.sh pceb-pubmed --overwrite-output-dir
 ```
 
-### Run Backend and Frontend Together
+Training writes `resolved_config.yaml`, `last.pt`, optional per-epoch
+checkpoints and a validation-selected `best.pt` in the configured output
+directory.
 
-From the repository root:
+## Evaluate
 
 ```bash
-bash run.sh
+python run.py evaluate \
+  --config runs/eviseq/my_task/resolved_config.yaml \
+  --checkpoint runs/eviseq/my_task/last.pt \
+  --output runs/eviseq/my_task/test_predictions.jsonl \
+  --split test --batch-size 96 --resume
 ```
 
-Default URLs:
+Predictions are flushed after every completed batch, so an interrupted run can
+resume from the existing JSONL. Built-in metrics are `rouge`, `exact_match`
+and `token_f1`. Perl ROUGE-1.5.5 is available through the separate
+`rouge155` command when `PYROUGE_HOME_DIR` is set.
 
-- Backend API: `http://localhost:8000`
-- Frontend web app: `http://localhost:5173`
+## Continue training and optional KD
 
-Stop both servers with `Ctrl+C`.
+`--init-checkpoint` initializes a new run from an existing EviSeq model. The
+optimizer and epoch counters start fresh; use the saved resolved configuration
+to preserve the model and data protocol.
 
-## Docker Deployment
-
-The demo can also run with Docker Compose:
+An optional online gold-prefix KD phase uses a local teacher with the same
+tokenizer vocabulary. Set `online_kd.enabled: true` in the resolved config and
+run:
 
 ```bash
-export HF_TOKEN=your_huggingface_token
-docker compose -f deploy/docker/docker-compose.yml up --build
+bash scripts/run.sh kd \
+  runs/eviseq/my_task/resolved_config.yaml \
+  runs/eviseq/my_task/last.pt \
+  runs/eviseq/my_task_kd \
+  --teacher-model /absolute/path/to/Qwen3-4B \
+  --epochs 1 --overwrite-output-dir
 ```
 
-Open:
-
-```text
-http://localhost:5173
-```
-
-Docker Compose builds:
-
-- `llm2seq-backend:local` from `deploy/docker/backend.Dockerfile`;
-- `llm2seq-frontend:local` from `deploy/docker/frontend.Dockerfile`.
-
-The frontend container serves the React app with Nginx and proxies `/api/*` to the backend.
-
-For Kubernetes deployment, see:
-
-```text
-deploy/README.md
-deploy/docker/
-deploy/k8s/
-```
-
-### Run Separately
-
-Backend:
+## Verification
 
 ```bash
-cd App/backend
-uvicorn main:app --host 0.0.0.0 --port 8000
+bash scripts/run.sh test
 ```
-
-Frontend:
-
-```bash
-cd App/frontend
-npm run dev
-```
-
-## Demo UI Theme
-
-The demo frontend uses a light neo-brutalist academic-tool style: cream background, white cards, thick dark borders, hard offset shadows, and flat accent colors.
-
-The full UI recreation guide is here:
-
-```text
-App/frontend/UI_THEME_SPEC.md
-```
-
-Use that file if another LLM or developer needs to rebuild the same visual style.
-
-## Training and Evaluation
-
-The main training pipeline is under:
-
-```text
-src/llm2seq/
-```
-
-Start by copying the environment template:
-
-```bash
-cd src/llm2seq
-cp env.example.txt env.txt
-```
-
-Edit `env.txt` for local paths, checkpoint locations, Hugging Face settings, and Python executable.
-
-Useful scripts:
-
-```bash
-bash smoke_check.sh
-bash install_deps.sh
-bash run_pipeline.sh
-```
-
-The main configs are:
-
-```text
-src/llm2seq/configs/wikilingua_qwen_phase1.yaml
-src/llm2seq/configs/wikilingua_qwen_phase2.yaml
-src/llm2seq/configs/wikilingua_qwen_phase3.yaml
-```
-
-The Llama-oriented configs and VLSP configs are also kept under `src/llm2seq/configs/`.
-
-## Training Phases
-
-- Phase 1 trains the adapter, decoder, global memory tokens, and LM head while keeping the encoder frozen.
-- Phase 2 adds LoRA adaptation for the source encoder and continues summarization training.
-- Phase 3 freezes the main summarizer and trains only the MTP module.
-
-For implementation details, see:
-
-```text
-src/llm2seq/README.md
-src/llm2seq/src/models/
-src/llm2seq/src/inference/
-```
-
-## Report
-
-The ACL-style report is in:
-
-```text
-Report/VDT_LLM2Seq.tex
-Report/VDT_LLM2Seq.pdf
-```
-
-To compile the report from `Report/` with a local LaTeX setup:
-
-```bash
-cd Report
-tectonic VDT_LLM2Seq.tex --keep-logs --keep-intermediates
-```
-
-The bibliography file is:
-
-```text
-Report/custom.bib
-```
-
-## Data
-
-WikiLingua files used by the project are stored under:
-
-```text
-src/llm2seq/datasets/wikilingua/
-src/T5Gemma/datasets/wikilingua/
-```
-
-The expected split files are:
-
-```text
-train.json
-val.json
-test.json
-```
-
-Each example contains source sentences and target summary sentences. Preprocessing scripts convert them into the format used by training and evaluation.
-
-## Notes
-
-- The demo backend currently loads the Qwen-based LLM2Seq checkpoint from Hugging Face.
-- The app supports two decode modes: `autoregressive` and `mtp_verified`.
-- Quantitative results should be read from the report rather than this README.

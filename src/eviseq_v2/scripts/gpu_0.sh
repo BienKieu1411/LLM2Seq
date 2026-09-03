@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Run the current PubMed PCEB main recipe and two one-axis sensitivities.
+# Run the current PubMed PCEB main recipe.
 # Training runs teacher-forced validation loss to preserve best.pt, but never
 # generates validation summaries; each run is decoded directly on test once
-# from last.pt.  These three test scores are exploratory, not a
-# valid basis for selecting a final paper configuration.
+# from last.pt.  The test score is exploratory until the final ROUGE-1.5.5
+# audit is complete.
 #
 # Run from the repository src directory:
 #   CUDA_VISIBLE_DEVICES=0 bash eviseq_v2/scripts/gpu_0.sh
@@ -74,14 +74,5 @@ run_and_score() {
 run_and_score \
   configs/models/pplx_pubmed_pceb.yaml \
   runs/eviseq/pubmed_pceb_pplx_0_6b
-
-# Controlled PubMed sensitivity runs.  Each differs from PCEB along only one
-# source-selection/source-uptake axis, and each skips validation generation.
-run_and_score \
-  configs/models/pplx_pubmed_pceb_pos4.yaml \
-  runs/eviseq/pubmed_pceb_pplx_0_6b_pos4
-run_and_score \
-  configs/models/pplx_pubmed_pceb_gate20.yaml \
-  runs/eviseq/pubmed_pceb_pplx_0_6b_gate20
 
 echo "=== GPU 0 PubMed queue completed successfully ==="

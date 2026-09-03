@@ -1,0 +1,18 @@
+_base_: ../models/pplx_pubmed_dualbridge.yaml
+
+experiment:
+  name: eviseq_smoke_dualbridge
+  output_dir: runs/eviseq/smoke_dualbridge
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 1
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  num_workers: 0
+  validation_batch_size: 2
+  validation_num_workers: 0
+
+limits:
+  max_train_examples: 2
+  max_validation_examples: 2

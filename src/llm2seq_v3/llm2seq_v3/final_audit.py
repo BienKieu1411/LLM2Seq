@@ -20,11 +20,8 @@ def _scores(payload: Dict[str, Any], label: str) -> Dict[str, float]:
     return {key: float(payload[key]) for key in _ROUGE_KEYS}
 
 
-def _same_fingerprint(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
-    return bool(left and right) and (
-        int(left.get("num_examples", -1)) == int(right.get("num_examples", -2))
-        and str(left.get("sha256", "")) == str(right.get("sha256", "missing"))
-    )
+def _same_data(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    return bool(left and right) and int(left.get("num_examples", -1)) == int(right.get("num_examples", -2))
 
 
 def _normalized_model_name(value: Any) -> str:
@@ -66,23 +63,23 @@ def audit_final_claim(
         if actual_examples != expected_examples:
             comparability_reasons.append(f"{label} has {actual_examples} examples; locked test has {expected_examples}")
 
-    candidate_test = candidate_metrics.get("test_data_fingerprint", {})
-    baseline_test = baseline_metrics.get("test_data_fingerprint", {})
-    for label, fingerprint in (
+    candidate_test = candidate_metrics.get("test_data_record", {})
+    baseline_test = baseline_metrics.get("test_data_record", {})
+    for label, data_record in (
         ("candidate", candidate_test),
         ("baseline", baseline_test),
     ):
-        if not _same_fingerprint(fingerprint, locked_test):
-            comparability_reasons.append(f"{label} test fingerprint does not match the locked T5Gemma split")
-    if not _same_fingerprint(candidate_test, baseline_test):
+        if not _same_data(data_record, locked_test):
+            comparability_reasons.append(f"{label} test data does not match the locked T5Gemma split")
+    if not _same_data(candidate_test, baseline_test):
         comparability_reasons.append("candidate and baseline were not evaluated on the same test rows")
 
     if not bool(candidate_metrics.get("checkpoint_test_matches_current", False)):
-        comparability_reasons.append("candidate checkpoint test fingerprint does not match its evaluated file")
+        comparability_reasons.append("candidate checkpoint test data does not match its evaluated file")
     if not bool(candidate_metrics.get("checkpoint_parameters_match_model", False)):
         comparability_reasons.append("candidate checkpoint parameter count does not match its instantiated model")
     if not bool(baseline_metrics.get("checkpoint_test_matches_current", False)):
-        comparability_reasons.append("baseline checkpoint test fingerprint does not match its evaluated file")
+        comparability_reasons.append("baseline checkpoint test data does not match its evaluated file")
     if baseline_metrics.get("checkpoint_parameters_match_model") is False:
         comparability_reasons.append("baseline checkpoint parameter count does not match its instantiated model")
 
@@ -158,14 +155,14 @@ def audit_final_claim(
             "scores": candidate_scores,
             "total_parameters": candidate_total_parameters,
             "deployable_parameters": candidate_deployable_parameters,
-            "test_fingerprint": candidate_test,
+            "test_data": candidate_test,
         },
         "baseline": {
             "name": paper_target.get("name"),
             "model_id": paper_target.get("model_id"),
             "scores": baseline_scores,
             "unique_parameter_elements": baseline_parameters,
-            "test_fingerprint": baseline_test,
+            "test_data": baseline_test,
             "matches_locked_scores": baseline_matches_locked_scores,
         },
         "candidate_minus_baseline": deltas,

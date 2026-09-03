@@ -172,8 +172,8 @@ the paper claim therefore does not depend on excluding that head.
 - Training diagnostics use `rouge==1.0.0`; paper scores use Perl ROUGE-1.5.5.
   The launcher stores separate diagnostic and paper gap reports and refuses to
   declare a paper win when the backend or test-set size differs from T5Gemma.
-  It also verifies the canonical test fingerprint (`03fba...3558`), that the
-  checkpoint matches the evaluated test manifest, and that the measured
+  It also verifies the evaluated split size, that the checkpoint matches the
+  evaluation manifest, and that the measured
   deployable parameter count is below the declared 2B target.
 
 ## Commands
@@ -245,8 +245,8 @@ detects empty/fixed-prefix/repetitive generation, a disconnected
 cross-attention residual, wrong-source preference, collapsed three-bank
 routing, or a conservative total parameter count above the declared target.
 Passing this gate only proves that the flow is healthy; `pilot-all` remains the
-held-out decision gate. The pilot comparison also requires identical test
-fingerprints, checkpoint integrity, and matched validation scope before it can
+  held-out decision gate. The pilot comparison also requires identical test
+  sizes, checkpoint integrity, and matched validation scope before it can
 recommend HiRoute. The complete 3,901-example test is required for the paper comparison.
 The final audit exits successfully only when both artifacts use Perl
 ROUGE-1.5.5 on the identical locked split, V3 is strictly smaller by actual

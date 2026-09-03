@@ -66,11 +66,17 @@ def pool_units(
             token_states.new_zeros((batch, 0, hidden)),
             torch.zeros((batch, 0), dtype=torch.bool, device=token_states.device),
         )
+    # Out-of-range ids are padding/unknown units, not aliases for the last
+    # configured unit.  Clamping them into ``unit_count`` silently merges
+    # truncated geometry units with the final real unit.
+    in_range = unit_ids.ge(1) & unit_ids.le(unit_count)
     indices = unit_ids.clamp(min=0, max=unit_count)
+    values = token_states * in_range.unsqueeze(-1).to(token_states.dtype)
+    count_values = in_range.unsqueeze(-1).to(token_states.dtype)
     sums = token_states.new_zeros((batch, unit_count + 1, hidden))
     counts = token_states.new_zeros((batch, unit_count + 1, 1))
-    sums.scatter_add_(1, indices.unsqueeze(-1).expand(-1, -1, hidden), token_states)
-    counts.scatter_add_(1, indices.unsqueeze(-1), torch.ones_like(token_states[..., :1]))
+    sums.scatter_add_(1, indices.unsqueeze(-1).expand(-1, -1, hidden), values)
+    counts.scatter_add_(1, indices.unsqueeze(-1), count_values)
     pooled = sums[:, 1:] / counts[:, 1:].clamp_min(1.0)
     valid = counts[:, 1:, 0].gt(0)
     return pooled, valid
@@ -103,6 +109,7 @@ def unit_evidence_token_bias(
         raise ValueError("unit logits and token tensors must have the same batch size")
 
     unit_count = unit_logits.shape[1]
+    in_range = unit_ids.ge(1) & unit_ids.le(unit_count)
     capped_ids = unit_ids.clamp(min=0, max=unit_count)
     padded_logits = torch.cat(
         [unit_logits.float().new_zeros(unit_logits.shape[0], 1), unit_logits.float()],
@@ -112,7 +119,7 @@ def unit_evidence_token_bias(
         [torch.zeros(valid_units.shape[0], 1, dtype=torch.bool, device=valid_units.device), valid_units.bool()],
         dim=1,
     )
-    source_keys = attention_mask.bool() & capped_ids.gt(0) & padded_valid.gather(1, capped_ids)
+    source_keys = attention_mask.bool() & in_range & padded_valid.gather(1, capped_ids)
     token_counts = torch.zeros(
         (unit_ids.shape[0], unit_count + 1),
         dtype=torch.float32,
@@ -122,7 +129,8 @@ def unit_evidence_token_bias(
     length_penalty = token_counts.gather(1, capped_ids).clamp_min(1.0).log()
     key_logits = padded_logits.gather(1, capped_ids).clamp(-5.0, 5.0)
     gate = torch.as_tensor(evidence_gate, dtype=key_logits.dtype, device=key_logits.device)
-    return gate * float(scale) * key_logits - length_penalty, source_keys
+    bias = gate * float(scale) * key_logits - length_penalty
+    return bias.masked_fill(~source_keys, 0.0), source_keys
 
 
 def evidence_key_attention_bias(
@@ -143,9 +151,9 @@ def evidence_key_attention_bias(
 
     The returned additive SDPA mask has broadcast shape ``[B, 1, 1, K]``.
     Avoiding a materialized ``Q x K`` mask is essential at 3072--4096 tokens.
-    Unlike the old scalar suffix-mass gate, it preserves *where* evidence is:
-    two documents with the same total evidence but different selected units
-    therefore induce different noncausal attention distributions.
+    It preserves the location of evidence: two documents with the same total
+    evidence but different selected units therefore induce different
+    noncausal attention distributions.
     """
 
     if not torch.empty((), dtype=dtype).is_floating_point():
@@ -157,7 +165,9 @@ def evidence_key_attention_bias(
         attention_mask,
         scale=scale,
     )
-    bias = bias.masked_fill(~source_keys, torch.finfo(dtype).min)
+    source_rows = source_keys.any(dim=-1, keepdim=True)
+    effective_keys = torch.where(source_rows, source_keys, attention_mask.bool())
+    bias = bias.masked_fill(~effective_keys, torch.finfo(dtype).min)
     return bias.to(dtype=dtype)[:, None, None, :]
 
 

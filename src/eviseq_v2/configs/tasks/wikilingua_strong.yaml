@@ -1,0 +1,31 @@
+_base_: wikilingua.yaml
+
+experiment:
+  name: eviseq_wikilingua_qwen3_strong_source_use
+  output_dir: runs/eviseq/wikilingua_qwen3_strong_source_use
+
+bridge:
+  trainable_identity_projection: true
+
+decoder:
+  cross_gate_init: 0.30
+
+objectives:
+  use_contrastive: true
+  contrastive_weight: 0.05
+  contrastive_temperature: 0.07
+  contrastive_projection_size: 256
+  contrastive_warmup_epochs: 2
+  contrastive_across_accumulation: true
+  contrastive_pooling: mean_last
+  use_source_swap: true
+  source_swap_weight: 0.10
+  source_swap_margin: 0.20
+  source_swap_temperature: 1.0
+  source_swap_strategy: hard_in_batch
+  label_smoothing: 0.10
+
+training:
+  full_encoder_lr: 1.2e-5
+  warmup_ratio: 0.08
+  weight_decay: 0.03

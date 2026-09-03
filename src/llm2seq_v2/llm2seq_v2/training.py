@@ -25,7 +25,7 @@ from .config import load_config
 from .data import (
     Seq2SeqCollator,
     SummarizationDataset,
-    dataset_fingerprint,
+    dataset_record,
     decoder_seed_ids,
 )
 from .model import LLM2SeqV2
@@ -376,7 +376,7 @@ def train(config_path: str, overwrite_output_dir: bool = False) -> Path:
         data = config["data"]
         limits = config.get("limits", {})
         manifest = {
-            split: dataset_fingerprint(
+            split: dataset_record(
                 data[f"{split}_file"],
                 int(limits.get(f"max_{split}_examples", 0)),
             )

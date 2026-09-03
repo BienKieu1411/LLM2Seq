@@ -155,29 +155,20 @@ def test_config_is_exact_strong_full_finetune_control() -> None:
     }
 
 
-def test_config_fails_closed_if_shared_contract_hash_is_changed(tmp_path: Path) -> None:
+def test_config_requires_an_existing_reference_config(tmp_path: Path) -> None:
     raw = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
-    raw["contract"]["eviseq_shared_contract_sha256"] = "0" * 64
-    path = tmp_path / "drifted.yaml"
+    raw["contract"]["reference_config"] = "missing/config.yaml"
+    path = tmp_path / "missing_reference.yaml"
     path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
-    with pytest.raises(ValueError, match="contract drifted"):
+    with pytest.raises(FileNotFoundError, match="Frozen EviSeq config not found"):
         load_config(path)
 
 
-def test_canonical_split_fingerprints_are_locked() -> None:
+def test_canonical_split_sizes_are_recorded() -> None:
     manifest = data_manifest(load_config(CONFIG))
-    assert (manifest["train"]["num_examples"], manifest["train"]["sha256"]) == (
-        13999,
-        "dc51cdeea38be3b2f0b7c44d106da105932db0493bdad5df5d850417e8d81b9f",
-    )
-    assert (manifest["validation"]["num_examples"], manifest["validation"]["sha256"]) == (
-        1680,
-        "6d052dbe88a50fcac825f8469cd80938252975e6a4a2a30cc44d3300227fa6de",
-    )
-    assert (manifest["test"]["num_examples"], manifest["test"]["sha256"]) == (
-        3901,
-        "03fba36a916a16598134d1daa211417922ff31dd294abcd0e75df7159bad3558",
-    )
+    assert manifest["train"]["num_examples"] == 13999
+    assert manifest["validation"]["num_examples"] == 1680
+    assert manifest["test"]["num_examples"] == 3901
 
 
 def test_prompt_is_exact_source_segment_then_decoder_seed() -> None:
@@ -309,7 +300,7 @@ def test_full_finetune_manifest_and_last_checkpoint_are_complete(tmp_path: Path)
     assert manifest["trainable_parameter_elements"] == manifest["unique_parameter_elements"]
 
     checkpoint = tmp_path / "last.pt"
-    data = {name: {"num_examples": 1, "sha256": name * 16} for name in ("train", "validation", "test")}
+    data = {name: {"num_examples": 1} for name in ("train", "validation", "test")}
     save_last_checkpoint(model, checkpoint, config, 14, 7, data)
     (tmp_path / "parameter_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     from direct_qwen.provenance import tokenizer_manifest

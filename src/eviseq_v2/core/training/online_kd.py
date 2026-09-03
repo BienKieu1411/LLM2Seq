@@ -24,7 +24,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
-from ..configuration import load_config, resolve_data_path
+from ..config import load_config, resolve_data_path
 from ..data.dataset import LengthBucketBatchSampler, Seq2SeqCollator, Text2TextDataset, clean_text, decoder_seed_ids
 from . import engine as stable
 from .checkpoint import (
@@ -100,8 +100,6 @@ class OnlineKDCollator:
             ids = item["teacher_input_ids"]
             mask = item["teacher_attention_mask"]
             padding = width - ids.numel()
-            # Right padding leaves each row's teacher prompt at position zero;
-            # the teacher combines rows individually before a left-padded pass.
             rows.append(torch.cat([ids, torch.full((padding,), self.teacher_pad_id, dtype=torch.long)]))
             masks.append(torch.cat([mask, torch.zeros((padding,), dtype=torch.long)]))
         result["teacher_input_ids"] = torch.stack(rows)
@@ -190,13 +188,15 @@ class GoldPrefixTeacher:
         values = torch.zeros((len(gold_rows), labels.shape[1], width_k), dtype=torch.float32, device=output_device)
         normalizers = torch.zeros((len(gold_rows), labels.shape[1]), dtype=torch.float32, device=output_device)
         valid = torch.zeros((len(gold_rows), labels.shape[1]), dtype=torch.bool, device=output_device)
-        prefix_widths = labels.eq(-100).sum(dim=1)
+        supervised = labels.ne(-100)
+        if not bool(supervised.any(dim=1).all()):
+            raise ValueError("Online KD requires at least one supervised target token per example")
+        # Right-padding is also encoded as -100, so counting ignored labels
+        # confuses variable target lengths with the fixed decoder prompt.
+        prefix_widths = supervised.long().argmax(dim=1)
         if prefix_widths.numel() and not bool(prefix_widths.eq(prefix_widths[0]).all()):
             raise ValueError("Student labels must use one fixed decoder prompt width for online KD")
         prefix_width = int(prefix_widths[0].item()) if prefix_widths.numel() else 0
-        # Full teacher logits are by far the largest allocation in this
-        # phase.  Process a physical student batch as teacher microbatches;
-        # teacher and student batch sizes intentionally do not have to match.
         for batch_start in range(0, len(gold_rows), self.batch_size):
             batch_end = min(len(gold_rows), batch_start + self.batch_size)
             combined_rows = [prompt_rows[index] + gold_rows[index] for index in range(batch_start, batch_end)]
@@ -213,8 +213,6 @@ class GoldPrefixTeacher:
             for local_index, index in enumerate(range(batch_start, batch_end)):
                 gold = gold_rows[index]
                 start = left_offsets[local_index] + len(prompt_rows[index]) - 1
-                # Keep logits BF16 except for this exact target slice.  A
-                # full FP32 teacher-vocab tensor is needlessly huge.
                 target_logits = logits[local_index, start : start + len(gold)].float()
                 if target_logits.shape[0] != len(gold):
                     raise RuntimeError("Teacher forward did not yield a logit row for every gold target token")
@@ -255,14 +253,11 @@ def topk_kl_loss(
     ids = teacher_topk_ids.to(device=student_logits.device, dtype=torch.long)
     if ids.numel() and (bool(ids.lt(0).any()) or bool(ids.ge(student_logits.shape[-1]).any())):
         raise ValueError("Online KD teacher token ID is outside student vocabulary")
-    # Keep no full FP32 [B, target, vocab] log-softmax; it can dominate B200
-    # memory even though the KD target is only top-k + OTHER.
     student_normalizer = torch.logsumexp(student_logits / temperature, dim=-1).float()
     student_top = student_logits.gather(-1, ids).float() / temperature - student_normalizer.unsqueeze(-1)
     teacher_top_log = teacher_topk_logits.detach().to(student_logits.device, torch.float32) / temperature
     teacher_top_log = teacher_top_log - teacher_log_normalizers.detach().to(student_logits.device).unsqueeze(-1)
     teacher_top_prob = teacher_top_log.exp()
-    # FP16/BF16 top-k values can have a microscopic mass overshoot.
     teacher_top_prob = teacher_top_prob / teacher_top_prob.sum(dim=-1, keepdim=True).clamp_min(1.0).detach()
     teacher_top_log = teacher_top_prob.clamp_min(1.0e-30).log()
     teacher_tail = (1.0 - teacher_top_prob.sum(dim=-1)).clamp(0.0, 1.0)
@@ -410,8 +405,6 @@ def train(
     from ..modeling.architecture import EviSeq
 
     model = EviSeq(config)
-    # KD is a continuation, not a second pretraining run.  Require the final
-    # checkpoint from the exact phase-2 graph and task/generation contract.
     initialization = load_last_checkpoint(model, checkpoint_path)
     assert_evaluation_config_matches_checkpoint(initialization, config)
     model.to(device)

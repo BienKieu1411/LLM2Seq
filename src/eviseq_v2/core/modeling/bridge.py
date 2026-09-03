@@ -1,4 +1,4 @@
-"""Single-memory evidence bridge; no planner, HiRoute, or scratch transformer."""
+"""Single-memory evidence bridge."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ class BridgeOutput:
     attention_bias: Optional[torch.Tensor]
     salience_logits: Optional[torch.Tensor]
     loss_salience: torch.Tensor
+    unit_ids: Optional[torch.Tensor] = None
+    valid_units: Optional[torch.Tensor] = None
     layer_weights: None = None
     projection_residual_ratio: Optional[torch.Tensor] = None
     salience_attention_gate: Optional[torch.Tensor] = None
@@ -77,36 +79,20 @@ class EvidenceBridge(nn.Module):
         if encoder_hidden == decoder_hidden and not self.trainable_identity_projection:
             self.projection: nn.Module = nn.Identity()
         elif encoder_hidden == decoder_hidden:
-            # PPLX and Qwen happen to have the same width, but their hidden
-            # coordinates are not guaranteed to be aligned.  A random linear
-            # map would destroy the useful pretrained memory at step zero.  A
-            # zero-initialized residual update instead starts as *exactly*
-            # ``memory`` while receiving a non-zero gradient into ``update``
-            # on the first backward pass.
             self.projection = IdentityInitializedResidualProjection(encoder_hidden)
         else:
-            # Preserve the legacy Sequential state-dict keys (``0.weight`` /
-            # ``1.weight``), but make the FP32 master parameters safe when
-            # the memory tensor is BF16/FP16 outside an autocast context.
-            # This matters for general EviSeq pairs such as
-            # Nemotron-2048 -> Qwen-1024, not only the equal-width PPLX run.
             self.projection = nn.Sequential(
                 DtypeSafeRMSNorm(encoder_hidden),
                 DtypeSafeLinear(encoder_hidden, decoder_hidden, bias=False),
             )
             nn.init.xavier_uniform_(self.projection[-1].weight)
         gate_init = float(config.get("salience_gate_init", 0.1))
-        self.salience_gate_parameterization = str(config.get("salience_gate_parameterization", "signed_tanh"))
+        self.salience_gate_parameterization = str(config.get("salience_gate_parameterization", "sigmoid"))
         if self.salience_gate_parameterization == "sigmoid":
-            # The new, safe bridge uses a strictly non-negative evidence
-            # strength.  A positive sentence logit must never become a
-            # negative cross-attention preference merely because a scalar
-            # gate crossed zero during fine-tuning.
             if not 0.0 < gate_init < 1.0:
                 raise ValueError("sigmoid salience_gate_init must be in (0, 1)")
             gate_parameter = math.log(gate_init / (1.0 - gate_init))
         elif self.salience_gate_parameterization == "signed_tanh":
-            # Preserve the legacy checkpoint semantics for existing recipes.
             gate_parameter = math.atanh(gate_init)
         else:
             raise ValueError("bridge.salience_gate_parameterization must be 'signed_tanh' or 'sigmoid'")
@@ -154,60 +140,102 @@ class EvidenceBridge(nn.Module):
                 valid_units,
                 ranking_weight=self.salience_ranking_weight,
             )
-        # Keep the scalar in FP32 until the final SDPA-mask cast.  In an AMP
-        # run ``memory`` can be BF16/FP16 while the salience parameter is an
-        # FP32 master weight; quantising the gate before multiplying the
-        # logits needlessly changes both the prior and its gradient.
-        gate = self.attention_gate()
-        if self.salience_length_normalization == "unit_invariant":
-            token_bias, source_tokens = unit_evidence_token_bias(
-                unit_logits,
-                valid_units,
-                unit_ids,
-                attention_mask,
-                scale=self.salience_bias_scale,
-                evidence_gate=gate,
-            )
-        else:
-            # Legacy checkpoint behavior: the scalar gates all components of
-            # the token bias.  Corrected bridge recipes opt into the
-            # unit-invariant formulation above.
-            token_bias, source_tokens = unit_evidence_token_bias(
-                unit_logits,
-                valid_units,
-                unit_ids,
-                attention_mask,
-                scale=self.salience_bias_scale,
-            )
-        neutral_tokens = attention_mask.bool() & unit_ids.eq(0)
-        neutral_count = neutral_tokens.float().sum(dim=1, keepdim=True).clamp_min(1.0)
-        neutral_bias = -neutral_count.log().expand_as(token_bias)
-        if self.salience_length_normalization == "legacy_gated":
-            # Exact compatibility with the old implementation: the signed
-            # gate scales both source-unit and neutral-group normalisation.
-            # Applying it only before the neutral replacement would change
-            # old checkpoint outputs even though their state dict matches.
-            token_bias = gate.to(token_bias.dtype) * torch.where(neutral_tokens, neutral_bias, token_bias)
-        else:
-            # In the corrected route only the evidence logit is gated; the
-            # fixed -log(length) term keeps group mass length invariant.
-            token_bias = torch.where(neutral_tokens, neutral_bias, token_bias)
-        # In the corrected unit-invariant route, the helper always applies
-        # ``-log(n_tokens)`` and gate affects only the evidence logit.
-        # Prefix/EOS tokens form their own neutral group with total mass one.
-        bias = token_bias
-        routed_tokens = source_tokens | neutral_tokens
-        bias = bias.masked_fill(~routed_tokens, 0).to(memory.dtype)
+        bias, gate = self._build_attention_bias(
+            memory_mask=attention_mask,
+            unit_ids=unit_ids,
+            unit_logits=unit_logits,
+            valid_units=valid_units,
+            memory_dtype=memory.dtype,
+        )
         return BridgeOutput(
             memory,
             attention_mask,
             bias,
             unit_logits,
             loss,
+            unit_ids=unit_ids,
+            valid_units=valid_units,
             projection_residual_ratio=projection_residual_ratio.detach(),
             salience_attention_gate=gate.detach(),
             **self._attention_prior_diagnostics(unit_logits, evidence_labels, valid_units, gate),
         )
+
+    def reroute(
+        self,
+        bridge: BridgeOutput,
+        unit_logits: torch.Tensor,
+        *,
+        evidence_labels: Optional[torch.Tensor] = None,
+        loss_salience: Optional[torch.Tensor] = None,
+    ) -> BridgeOutput:
+        """Replace only the sentence prior of an already projected memory.
+
+        This is the key operation for the dynamic half of DualBridge.  The
+        encoder output and PPLX→Qwen projection are reused exactly once; only
+        the lightweight unit logits are fused and turned into the SDPA bias.
+        """
+
+        if bridge.unit_ids is None or bridge.valid_units is None:
+            raise ValueError("Cannot reroute a bridge without unit routing metadata")
+        bias, gate = self._build_attention_bias(
+            memory_mask=bridge.memory_mask,
+            unit_ids=bridge.unit_ids,
+            unit_logits=unit_logits,
+            valid_units=bridge.valid_units,
+            memory_dtype=bridge.memory.dtype,
+        )
+        return BridgeOutput(
+            bridge.memory,
+            bridge.memory_mask,
+            bias,
+            unit_logits,
+            bridge.loss_salience if loss_salience is None else loss_salience,
+            unit_ids=bridge.unit_ids,
+            valid_units=bridge.valid_units,
+            projection_residual_ratio=bridge.projection_residual_ratio,
+            salience_attention_gate=gate.detach(),
+            **self._attention_prior_diagnostics(unit_logits, evidence_labels, bridge.valid_units, gate),
+        )
+
+    def _build_attention_bias(
+        self,
+        *,
+        memory_mask: torch.Tensor,
+        unit_ids: torch.Tensor,
+        unit_logits: torch.Tensor,
+        valid_units: torch.Tensor,
+        memory_dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Construct the one fused token prior consumed by all decoder layers."""
+        gate = self.attention_gate()
+        if self.salience_length_normalization == "unit_invariant":
+            token_bias, source_tokens = unit_evidence_token_bias(
+                unit_logits,
+                valid_units,
+                unit_ids,
+                memory_mask,
+                scale=self.salience_bias_scale,
+                evidence_gate=gate,
+            )
+        else:
+            token_bias, source_tokens = unit_evidence_token_bias(
+                unit_logits,
+                valid_units,
+                unit_ids,
+                memory_mask,
+                scale=self.salience_bias_scale,
+            )
+        neutral_tokens = memory_mask.bool() & unit_ids.eq(0)
+        neutral_count = neutral_tokens.float().sum(dim=1, keepdim=True).clamp_min(1.0)
+        neutral_bias = -neutral_count.log().expand_as(token_bias)
+        if self.salience_length_normalization == "legacy_gated":
+            token_bias = gate.to(token_bias.dtype) * torch.where(neutral_tokens, neutral_bias, token_bias)
+        else:
+            token_bias = torch.where(neutral_tokens, neutral_bias, token_bias)
+        bias = token_bias
+        routed_tokens = source_tokens | neutral_tokens
+        bias = bias.masked_fill(~routed_tokens, 0).to(memory_dtype)
+        return bias, gate
 
     def bidirectional_gate_mean(self) -> torch.Tensor:
         return self.salience_attention_gate.float().new_zeros(())
@@ -219,6 +247,20 @@ class EvidenceBridge(nn.Module):
         if self.salience_gate_parameterization == "sigmoid":
             return torch.sigmoid(parameter)
         return torch.tanh(parameter)
+
+    def unit_attention_energy(self, unit_logits: torch.Tensor) -> torch.Tensor:
+        """Return the live, relative unit energy consumed by the bridge.
+
+        For the corrected unit-invariant bridge, every token in a unit also
+        receives a ``-log(token_count)`` term.  That term deliberately
+        cancels when the token scores are summed into the unit's total
+        softmax mass.  The remaining relative energy is precisely this
+        gate/scale/clipped-logit value.  Keeping it as a live tensor (rather
+        than reusing a detached diagnostic) lets an attention-aligned
+        contrastive loss update the same gate and clip-bounded quantity.
+        """
+
+        return self.attention_gate().float() * float(self.salience_bias_scale) * unit_logits.float().clamp(-5.0, 5.0)
 
     def _attention_prior_diagnostics(
         self,
@@ -247,26 +289,17 @@ class EvidenceBridge(nn.Module):
         width = min(unit_logits.shape[1], evidence_labels.shape[1], valid_units.shape[1])
         if width <= 0:
             return result
-        # ``unit_evidence_token_bias`` clips the logit at the same boundary
-        # before it becomes an SDPA score.  The diagnostic must report this
-        # consumed value rather than an unbounded training logit.
         logits = unit_logits[:, :width].float().clamp(-5.0, 5.0)
         labels = evidence_labels[:, :width]
         valid = valid_units[:, :width].bool() & labels.ge(0.0)
         positive = valid & labels.gt(0.5)
         negative = valid & labels.le(0.5)
-        # This is the only sentence-level term that changes relative unit
-        # mass in the actual attention softmax for the corrected,
-        # unit-invariant route.  Legacy recipes keep this as a logit-only
-        # diagnostic because their length term is intentionally gated too.
-        prior = gate.detach().float() * float(self.salience_bias_scale) * logits
+        prior = self.unit_attention_energy(logits).detach()
         positive_count = positive.sum()
         negative_count = negative.sum()
         has_both = positive_count.gt(0) & negative_count.gt(0)
         pos = (prior * positive.to(prior.dtype)).sum() / positive_count.to(prior.dtype).clamp_min(1.0)
         neg = (prior * negative.to(prior.dtype)).sum() / negative_count.to(prior.dtype).clamp_min(1.0)
-        # Avoid a host-side ``bool(tensor)`` synchronisation in every
-        # training forward.  This matters on long PubMed batches.
         pos = torch.where(has_both, pos, zero.detach())
         neg = torch.where(has_both, neg, zero.detach())
         return {
@@ -314,18 +347,9 @@ class IdentityInitializedResidualProjection(nn.Module):
     def __init__(self, hidden_size: int):
         super().__init__()
         self.norm = nn.RMSNorm(hidden_size)
-        # Do not instantiate ``nn.Linear`` and zero it afterwards: its
-        # default initializer consumes RNG and makes a fixed-seed projection
-        # ablation start the later contrastive heads differently.  This
-        # zero-linear has the same state-dict name (``update.weight``) but
-        # consumes no random numbers.
         self.update = ZeroInitializedLinear(hidden_size, hidden_size)
 
     def forward(self, memory: torch.Tensor) -> torch.Tensor:
-        # ``model.dtype`` can be BF16/FP16 while newly-added bridge modules
-        # retain FP32 master weights.  Casting the affine weights for the
-        # operation preserves gradients to the master parameters and also
-        # keeps standalone/evaluation forward passes valid without autocast.
         normalized = F.rms_norm(
             memory,
             self.norm.normalized_shape,

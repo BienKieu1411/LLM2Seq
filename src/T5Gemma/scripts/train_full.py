@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import inspect
 import json
 import logging
@@ -72,37 +71,6 @@ def load_jsonl(path: Path) -> List[Dict[str, Any]]:
             if line:
                 examples.append(json.loads(line))
     return examples
-
-
-def jsonl_fingerprint(path: Path) -> Dict[str, Any]:
-    digest = hashlib.sha256()
-    count = 0
-    with path.open("r", encoding="utf-8") as handle:
-        for raw in handle:
-            if not raw.strip():
-                continue
-            row = json.loads(raw)
-            digest.update(
-                json.dumps(
-                    {
-                        "id": row.get("id"),
-                        "source": row.get("source"),
-                        "target": row.get("target"),
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            )
-            digest.update(b"\n")
-            count += 1
-    if count == 0:
-        raise ValueError(f"Dataset is empty: {path}")
-    return {
-        "path": str(path.resolve()),
-        "num_examples": count,
-        "sha256": digest.hexdigest(),
-    }
 
 
 class SummarizationDataset(Dataset):
@@ -307,14 +275,6 @@ def main() -> None:
         raise FileNotFoundError(train_file)
     if eval_file and not eval_file.exists():
         raise FileNotFoundError(eval_file)
-    data_manifest = {"train": jsonl_fingerprint(train_file)}
-    if eval_file:
-        data_manifest["validation"] = jsonl_fingerprint(eval_file)
-    test_file_value = cfg.get("data", {}).get("test_file")
-    if test_file_value and Path(test_file_value).exists():
-        data_manifest["test"] = jsonl_fingerprint(Path(test_file_value))
-    logging.info("Data manifest: %s", json.dumps(data_manifest, ensure_ascii=False))
-
     logging.info("Loading tokenizer: %s", model_name)
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
@@ -419,7 +379,6 @@ def main() -> None:
             "unique_parameter_elements": unique_parameter_elements,
             "metrics": train_result.metrics,
             "data": cfg.get("data", {}),
-            "data_manifest": data_manifest,
             "generation": cfg.get("generation", {}),
         },
     )

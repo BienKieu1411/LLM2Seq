@@ -220,7 +220,7 @@ def test_checkpoint_is_complete_last_only(tmp_path: Path):
     model = nn.Sequential(nn.Linear(3, 4), nn.LayerNorm(4))
     path = tmp_path / "last.pt"
     before = {name: value.detach().clone() for name, value in model.state_dict().items()}
-    save_last_checkpoint(model, path, {"x": 1}, 15, 123, {"train": {"sha256": "x"}})
+    save_last_checkpoint(model, path, {"x": 1}, 15, 123, {"train": {"num_examples": 1}})
     for parameter in model.parameters():
         parameter.data.zero_()
     payload = load_last_checkpoint(model, path)

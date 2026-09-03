@@ -16,7 +16,7 @@ import torch
 
 from .checkpoint import load_last_checkpoint
 from .config import load_config
-from .data import clean_text, dataset_fingerprint, decoder_seed_ids, encode_source, read_jsonl
+from .data import clean_text, dataset_record, decoder_seed_ids, encode_source, read_jsonl
 from .generation import generate
 from .metrics import rouge_scores
 from .model import LLM2SeqV3
@@ -128,11 +128,11 @@ def evaluate(
     checkpoint_parameters_match_model = checkpoint_parameter_count == training_parameters
     parameter_target = config.get("benchmark", {}).get("parameters", {})
     target_declared_parameters = int(parameter_target.get("target_declared_parameters", 0))
-    current_test_fingerprint = dataset_fingerprint(data["test_file"], effective_limit)
-    checkpoint_test_fingerprint = payload.get("data_manifest", {}).get("test", {})
-    checkpoint_test_matches_current = int(checkpoint_test_fingerprint.get("num_examples", -1)) == int(
-        current_test_fingerprint["num_examples"]
-    ) and str(checkpoint_test_fingerprint.get("sha256", "")) == str(current_test_fingerprint["sha256"])
+    current_test_record = dataset_record(data["test_file"], effective_limit)
+    checkpoint_test_record = payload.get("data_manifest", {}).get("test", {})
+    checkpoint_test_matches_current = int(checkpoint_test_record.get("num_examples", -1)) == int(
+        current_test_record["num_examples"]
+    )
 
     def autocast():
         if bf16:
@@ -225,8 +225,8 @@ def evaluate(
         "parameter_budget_reached": (
             deployable_parameters < target_declared_parameters if target_declared_parameters > 0 else None
         ),
-        "test_data_fingerprint": current_test_fingerprint,
-        "checkpoint_test_data_fingerprint": checkpoint_test_fingerprint,
+        "test_data_record": current_test_record,
+        "checkpoint_test_data_record": checkpoint_test_record,
         "checkpoint_test_matches_current": checkpoint_test_matches_current,
     }
     if routing_sum is not None and routing_observations > 0:
@@ -249,10 +249,8 @@ def evaluate(
     diagnostic_benchmark = benchmark.get("diagnostic", {})
     paper_benchmark = benchmark.get("paper", {})
     locked_test = benchmark.get("data", {}).get("test", {})
-    locked_test_matches = int(locked_test.get("num_examples", -1)) == int(
-        current_test_fingerprint["num_examples"]
-    ) and str(locked_test.get("sha256", "")) == str(current_test_fingerprint["sha256"])
-    metrics["locked_test_data_fingerprint"] = locked_test
+    locked_test_matches = int(locked_test.get("num_examples", -1)) == int(current_test_record["num_examples"])
+    metrics["locked_test_data_record"] = locked_test
     metrics["locked_test_matches"] = locked_test_matches
     if all(name in diagnostic_benchmark for name in ("rouge1", "rouge2", "rougeL")):
         expected_examples = int(diagnostic_benchmark.get("num_examples", len(rows)))

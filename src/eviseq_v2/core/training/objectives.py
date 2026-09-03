@@ -1,17 +1,4 @@
-"""Evidence-focused hard contrastive learning for EviSeq.
-
-This module replaces the document-level InfoNCE with within-document
-evidence InfoNCE.  The key difference: positives are oracle evidence
-sentences and negatives are semantically similar but non-evidence
-sentences from the *same* document.  This forces the encoder/bridge
-to distinguish "sounds related" from "actually needs summarising".
-
-The original document-level InfoNCE code is preserved but disabled
-by default (use_contrastive=False in config).
-
-References:
-- Focus-Driven Contrastive Learning for medical question summarisation
-"""
+"""Contrastive objectives for source, prompt and sentence evidence alignment."""
 
 from __future__ import annotations
 
@@ -20,10 +7,6 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-# ---------------------------------------------------------------------------
-# Pooling utilities
-# ---------------------------------------------------------------------------
 
 
 def masked_mean_pool(hidden_states: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -51,6 +34,36 @@ def masked_last_pool(hidden_states: torch.Tensor, mask: torch.Tensor) -> torch.T
     return hidden_states[rows, positions]
 
 
+def pairwise_geometry_preservation_loss(
+    source_units: torch.Tensor,
+    projected_units: torch.Tensor,
+    valid_units: torch.Tensor,
+) -> torch.Tensor:
+    """Preserve relative source-unit geometry across an encoder bridge.
+
+    The PPLX and Qwen hidden spaces are not assumed to share coordinates, so
+    matching each projected vector to its raw input would over-constrain the
+    bridge.  Instead, the detached source-space pairwise cosine matrix is the
+    target and the projected bridge-space matrix receives the gradient.  A
+    document with fewer than two visible units contributes an exact zero.
+    """
+
+    if source_units.ndim != 3 or projected_units.ndim != 3 or valid_units.ndim != 2:
+        raise ValueError("geometry inputs must be [B,U,D], [B,U,D'] and [B,U]")
+    if source_units.shape[:2] != projected_units.shape[:2] or source_units.shape[:2] != valid_units.shape:
+        raise ValueError("geometry inputs must agree on batch and unit dimensions")
+    source = F.normalize(source_units.float().detach(), dim=-1)
+    projected = F.normalize(projected_units.float(), dim=-1)
+    source_sim = torch.matmul(source, source.transpose(1, 2))
+    projected_sim = torch.matmul(projected, projected.transpose(1, 2))
+    valid = valid_units.bool()
+    pair_mask = valid[:, :, None] & valid[:, None, :]
+    pair_mask &= ~torch.eye(valid.shape[1], dtype=torch.bool, device=valid.device)[None]
+    if not bool(pair_mask.any()):
+        return projected_units.float().sum() * 0.0
+    return (source_sim - projected_sim).abs()[pair_mask].mean()
+
+
 def last_prompt_states(decoder_states: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     """Gather the state predicting the first supervised target token.
 
@@ -71,8 +84,9 @@ def last_prompt_states(decoder_states: torch.Tensor, labels: torch.Tensor) -> to
 def exact_duplicate_mask(input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
     """Mark off-diagonal examples with byte-identical tokenized sources.
 
-    Duplicate sources are alternative positives, not valid InfoNCE negatives.
-    The comparison is intentionally exact; near-duplicate mining would add a
+    Duplicate sources are ignored as negatives rather than treated as
+    alternative positives, because their target summaries may differ.
+    The equality check is intentionally exact; near-duplicate mining would add a
     second model and an extra threshold to the training objective.
     """
 
@@ -86,9 +100,74 @@ def exact_duplicate_mask(input_ids: torch.Tensor, attention_mask: torch.Tensor) 
     return duplicates
 
 
-# ---------------------------------------------------------------------------
-# Optional document-level alignment head
-# ---------------------------------------------------------------------------
+def source_memory_for_mining(
+    memory: torch.Tensor,
+    memory_mask: torch.Tensor,
+    *,
+    pooling: str = "mean_last",
+) -> torch.Tensor:
+    """Build a target-free normalized source vector for hard-negative mining."""
+
+    if memory.ndim != 3 or memory_mask.ndim != 2 or memory.shape[:2] != memory_mask.shape:
+        raise ValueError("source memory mining expects [B,S,D] memory and a matching [B,S] mask")
+    if pooling == "mean":
+        pooled = masked_mean_pool(memory, memory_mask)
+    elif pooling == "mean_last":
+        pooled = 0.5 * (masked_mean_pool(memory, memory_mask) + masked_last_pool(memory, memory_mask))
+    else:
+        raise ValueError("source mining pooling must be 'mean' or 'mean_last'")
+    return F.normalize(pooled.float(), dim=-1)
+
+
+@torch.no_grad()
+def hard_negative_indices(source_repr: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Select the most similar non-self source in a physical batch."""
+
+    if source_repr.ndim != 2 or source_repr.shape[0] <= 1:
+        raise ValueError("Hard-negative mining requires [B,D] with B > 1")
+    normalized = F.normalize(source_repr.float(), dim=-1)
+    similarity = normalized @ normalized.T
+    similarity.fill_diagonal_(float("-inf"))
+    indices = similarity.argmax(dim=1)
+    rows = torch.arange(similarity.shape[0], device=similarity.device)
+    return indices, similarity[rows, indices]
+
+
+def per_example_nll(
+    supervised_logits: torch.Tensor,
+    labels: torch.Tensor,
+    supervised: torch.Tensor,
+) -> torch.Tensor:
+    """Reduce flattened teacher-forced token losses to one NLL per example."""
+
+    if supervised_logits.ndim != 2 or labels.ndim != 2 or supervised.shape != labels.shape:
+        raise ValueError("Expected flattened logits plus [B,T] labels/supervision mask")
+    expected = int(supervised.sum().item())
+    if supervised_logits.shape[0] != expected:
+        raise ValueError(f"Expected {expected} supervised logits, received {supervised_logits.shape[0]}")
+    token_losses = F.cross_entropy(supervised_logits.float(), labels[supervised], reduction="none")
+    rows = torch.arange(labels.shape[0], device=labels.device).unsqueeze(1).expand_as(labels)[supervised]
+    totals = token_losses.new_zeros(labels.shape[0])
+    totals.scatter_add_(0, rows, token_losses)
+    counts = supervised.sum(dim=1).to(token_losses.dtype).clamp_min(1.0)
+    return totals / counts
+
+
+def source_swap_contrastive_loss(
+    positive_nll: torch.Tensor,
+    negative_nll: torch.Tensor,
+    *,
+    margin: float = 0.2,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Require the correct source to explain the same target better than a hard swap."""
+
+    if positive_nll.shape != negative_nll.shape:
+        raise ValueError("positive_nll and negative_nll must have equal shapes")
+    if temperature <= 0.0:
+        raise ValueError("source-swap temperature must be positive")
+    logits = (positive_nll - negative_nll + float(margin)) / float(temperature)
+    return F.softplus(logits).mean()
 
 
 class SourcePromptAlignmentHead(nn.Module):
@@ -130,6 +209,7 @@ class SourcePromptAlignmentHead(nn.Module):
             source = (1.0 - last_weight) * source + last_weight * last
         if prompt_states.ndim != 2:
             raise ValueError("prompt_states must be [B, D]")
+        prompt_states = prompt_states.float()
         return {
             "source_repr": F.normalize(self.source_projection(source).float(), dim=-1),
             "prompt_repr": F.normalize(self.prompt_projection(prompt_states).float(), dim=-1),
@@ -163,11 +243,6 @@ def info_nce_loss(
     return loss, accuracy
 
 
-# ---------------------------------------------------------------------------
-# NEW: Evidence-focused hard contrastive learning
-# ---------------------------------------------------------------------------
-
-
 def decoder_summary_representation(
     decoder_states: torch.Tensor,
     labels: torch.Tensor,
@@ -186,15 +261,14 @@ def decoder_summary_representation(
     if decoder_states.shape[:2] != labels.shape:
         raise ValueError("decoder_states and labels must have matching [B, T]")
 
-    supervised = labels.ne(-100).float()  # [B, T]
+    supervised = labels.ne(-100).float()
     if not bool(supervised.any(dim=1).all()):
         raise ValueError("Every example must contain at least one supervised target token")
 
-    # [B, T, 1] mask
     mask = supervised.unsqueeze(-1)
     states_fp32 = decoder_states.float()
     pooled = (states_fp32 * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
-    return pooled  # [B, D]
+    return pooled
 
 
 def decoder_sentence_representations(
@@ -205,10 +279,9 @@ def decoder_sentence_representations(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Pool teacher-forced decoder states separately for every target sentence.
 
-    The old evidence objective compressed an entire biomedical abstract into
-    one query.  Objective, method, result, and conclusion sentences then all
-    competed for the same evidence representation.  Sentence ids are aligned
-    with decoder labels by the dataset and use ``0`` for the fixed prompt.
+    Each reference-summary sentence receives an independent evidence query.
+    Sentence ids are aligned with decoder labels by the dataset and use ``0``
+    for the fixed prompt.
     """
 
     if decoder_states.ndim != 3 or labels.ndim != 2 or sentence_ids.ndim != 2:
@@ -279,8 +352,8 @@ class EvidenceContrastiveHead(nn.Module):
         if sentence_reprs.ndim != 3:
             raise ValueError(f"sentence_reprs must be [B, U, D], got {sentence_reprs.shape}")
 
-        q = F.normalize(self.query_projection(summary_repr).float(), dim=-1)  # [B, P]
-        keys = F.normalize(self.key_projection(sentence_reprs).float(), dim=-1)  # [B, U, P]
+        q = F.normalize(self.query_projection(summary_repr.float()).float(), dim=-1)
+        keys = F.normalize(self.key_projection(sentence_reprs.float()).float(), dim=-1)
         return q, keys
 
 
@@ -292,13 +365,20 @@ class PromptConditionedEvidenceHead(EvidenceContrastiveHead):
     ignores *which* generation task is requested.  This head keeps both
     signals in a common contrastive space:
 
-    ``q = normalize(W_prompt(h_prompt) + sigmoid(g) * W_source(mean(M)))``.
+    ``q = normalize(W_prompt(h_prompt) + sigmoid(g) * W_source(mean(U)))``,
+    where ``U`` is the set of pooled, visible source units.  Passing an
+    equal-weight unit mean rather than a token mean is the caller's contract:
+    it prevents a long sentence from silently dominating the document context
+    of an otherwise unit-invariant evidence bridge.
 
     ``h_prompt`` is the decoder state immediately before the first generated
     summary token, and ``M`` is the same bridge memory consumed by decoder
     cross-attention.  Neither contains a reference-summary token, so this is
-    available under the same conditioning at greedy inference.  The head is
-    training-only; it adds no inference module or decoding pass.
+    available under the same conditioning at greedy inference.  In the
+    static PCEB recipe the head is training-only.  DualBridge additionally
+    uses it in one short prompt prefill to construct a *single fused* source
+    prior before ordinary greedy decoding; it is not a second encoder,
+    decoder, reranker, or generation pass.
     """
 
     def __init__(
@@ -335,10 +415,10 @@ class PromptConditionedEvidenceHead(EvidenceContrastiveHead):
             raise ValueError("prompt_state and source_context must be [B, D]")
         if prompt_state.shape != source_context.shape:
             raise ValueError("prompt_state and source_context must share [B, D]")
-        prompt = self.query_projection(prompt_state).float()
-        source = self.source_projection(source_context).float()
+        prompt = self.query_projection(prompt_state.float()).float()
+        source = self.source_projection(source_context.float()).float()
         query = F.normalize(prompt + self.context_gate() * source, dim=-1)
-        keys = F.normalize(self.key_projection(sentence_reprs).float(), dim=-1)
+        keys = F.normalize(self.key_projection(sentence_reprs.float()).float(), dim=-1)
         return query, keys
 
 
@@ -350,13 +430,15 @@ def _evidence_masks_and_hard_negatives(
     num_hard_negatives: int = 4,
     salience_logits: Optional[torch.Tensor] = None,
     salience_boost: float = 0.1,
+    attention_prior_energy: Optional[torch.Tensor] = None,
+    attention_mining_boost: float = 0.0,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return positive and hard-negative masks without per-example CPU syncs.
 
     Mining is deliberately detached: Top-K chooses the competing sentences,
     while the final contrastive similarities remain differentiable.  A
-    continuous salience boost prioritises current false positives instead of
-    the old thresholded Python loop.
+    continuous salience boost prioritises current false positives without a
+    thresholded Python loop.
     """
 
     if query.ndim != 2 or keys.ndim != 3 or query.shape[0] != keys.shape[0]:
@@ -367,6 +449,8 @@ def _evidence_masks_and_hard_negatives(
         raise ValueError("num_hard_negatives must be positive")
     if salience_boost < 0.0:
         raise ValueError("salience_boost must be non-negative")
+    if attention_mining_boost < 0.0:
+        raise ValueError("attention_mining_boost must be non-negative")
 
     width = min(keys.shape[1], evidence_labels.shape[1], valid_units.shape[1])
     labels = evidence_labels[:, :width]
@@ -387,6 +471,15 @@ def _evidence_masks_and_hard_negatives(
             salience_logits[:, :salience_width].detach().float()
         ).to(hard_score.dtype)
         hard_score = hard_score + float(salience_boost) * salience_probability
+    if attention_prior_energy is not None and attention_mining_boost > 0.0:
+        if attention_prior_energy.ndim != 2 or attention_prior_energy.shape[0] != query.shape[0]:
+            raise ValueError("attention_prior_energy must be [B, U]")
+        attention_width = min(width, attention_prior_energy.shape[1])
+        detached_energy = torch.zeros_like(hard_score)
+        detached_energy[:, :attention_width] = (
+            attention_prior_energy[:, :attention_width].detach().float().to(hard_score.dtype)
+        )
+        hard_score = hard_score + float(attention_mining_boost) * detached_energy
 
     hard_score = hard_score.masked_fill(~negative_mask, -torch.inf)
     hard_negative_mask = torch.zeros_like(negative_mask)
@@ -406,6 +499,8 @@ def mine_hard_negatives(
     num_hard_negatives: int = 4,
     salience_logits: Optional[torch.Tensor] = None,
     salience_boost: float = 0.1,
+    attention_prior_energy: Optional[torch.Tensor] = None,
+    attention_mining_boost: float = 0.0,
 ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
     """Mine hard negatives within each document independently.
 
@@ -436,6 +531,8 @@ def mine_hard_negatives(
         num_hard_negatives=num_hard_negatives,
         salience_logits=salience_logits,
         salience_boost=salience_boost,
+        attention_prior_energy=attention_prior_energy,
+        attention_mining_boost=attention_mining_boost,
     )
     hard_neg_indices = [row.nonzero(as_tuple=False).squeeze(-1) for row in hard_negative_mask]
     positive_indices = [row.nonzero(as_tuple=False).squeeze(-1) for row in positive_mask]
@@ -452,6 +549,8 @@ def evidence_info_nce_loss(
     salience_logits: Optional[torch.Tensor] = None,
     salience_boost: float = 0.1,
     salience_logit_bias: float = 0.0,
+    attention_prior_energy: Optional[torch.Tensor] = None,
+    attention_mining_boost: float = 0.0,
 ) -> Dict[str, torch.Tensor]:
     """Vectorised multi-positive, within-document hard evidence InfoNCE.
 
@@ -472,11 +571,18 @@ def evidence_info_nce_loss(
         num_hard_negatives: number of hard negatives per example
         salience_logits: [B, U] optional for false-positive mining
         salience_boost: continuous hard-mining boost for predicted false positives
-        salience_logit_bias: differentiable coefficient on the bridge's
-            salience logits in the final contrastive scores.  This is useful
-            for a target-free prompt query because the selected global units
-            are also exactly the units whose logits form the inference-time
-            cross-attention prior.
+        salience_logit_bias: differentiable coupling coefficient.  With
+            ``attention_prior_energy`` it is applied inside the same
+            temperature-scaled score as cosine similarity.
+        attention_prior_energy: [B, U] optional pre-BF16 relative unit energy
+            actually consumed by the bridge.  It must include the bridge
+            gate, scale, and the same logit clipping used for SDPA.  This
+            makes the contrastive gradient reach the live attention gate as
+            well as the unit logits.  Without it, raw-logit coupling is
+            retained for compatible runs.
+        attention_mining_boost: detached coefficient for aligning hard-negative
+            selection with ``attention_prior_energy``. Zero keeps cosine and
+            salience-based mining.
 
     Returns:
         Dict with: loss, top1_accuracy, positive_similarity, hard_negative_similarity,
@@ -486,6 +592,8 @@ def evidence_info_nce_loss(
         raise ValueError("evidence contrastive temperature must be positive")
     if salience_logit_bias < 0.0:
         raise ValueError("salience_logit_bias must be non-negative")
+    if attention_mining_boost < 0.0:
+        raise ValueError("attention_mining_boost must be non-negative")
 
     zero = query.sum() * 0.0
     positive_mask, hard_negative_mask, _ = _evidence_masks_and_hard_negatives(
@@ -496,17 +604,27 @@ def evidence_info_nce_loss(
         num_hard_negatives=num_hard_negatives,
         salience_logits=salience_logits,
         salience_boost=salience_boost,
+        attention_prior_energy=attention_prior_energy,
+        attention_mining_boost=attention_mining_boost,
     )
 
     width = positive_mask.shape[1]
     similarity = torch.einsum("bup,bp->bu", keys[:, :width], query)
-    logits = similarity / float(temperature)
-    if salience_logits is not None and salience_logit_bias > 0.0:
+    if attention_prior_energy is not None:
+        if attention_prior_energy.ndim != 2 or attention_prior_energy.shape[0] != similarity.shape[0]:
+            raise ValueError("attention_prior_energy must be [B, U]")
+        attention_width = min(width, attention_prior_energy.shape[1])
+        aligned_energy = torch.zeros_like(similarity)
+        aligned_energy[:, :attention_width] = attention_prior_energy[:, :attention_width].float()
+        selected_units = positive_mask | hard_negative_mask
+        logits = (
+            similarity + float(salience_logit_bias) * aligned_energy * selected_units.to(similarity.dtype)
+        ) / float(temperature)
+    else:
+        logits = similarity / float(temperature)
+    if attention_prior_energy is None and salience_logits is not None and salience_logit_bias > 0.0:
         salience_width = min(width, salience_logits.shape[1])
         aligned_salience = torch.zeros_like(logits)
-        # Mining above is intentionally detached.  The score below is not:
-        # it sends contrastive evidence supervision into the exact salience
-        # logits consumed by the bridge as a token-level attention prior.
         aligned_salience[:, :salience_width] = salience_logits[:, :salience_width].float().clamp(-4.0, 4.0)
         selected_units = positive_mask | hard_negative_mask
         logits = logits + float(salience_logit_bias) * aligned_salience * selected_units.to(logits.dtype)
@@ -518,9 +636,6 @@ def evidence_info_nce_loss(
     valid_examples = positive_count.gt(0) & negative_count.gt(0)
     safe_negative_logsumexp = torch.where(valid_examples, negative_logsumexp, torch.zeros_like(negative_logsumexp))
 
-    # One-vs-hard-negative-set NCE for every positive. Unlike putting all
-    # positives in one softmax denominator, positives never compete with one
-    # another and the optimum remains zero regardless of evidence count.
     positive_losses = F.softplus(safe_negative_logsumexp.unsqueeze(1) - logits)
     loss_per_example = (positive_losses * positive_mask).sum(dim=1) / positive_count.clamp_min(1)
     valid_float = valid_examples.to(loss_per_example.dtype)
@@ -561,7 +676,9 @@ def sentence_evidence_info_nce_loss(
     salience_logits: Optional[torch.Tensor] = None,
     salience_boost: float = 0.1,
     salience_logit_bias: float = 0.0,
+    attention_prior_energy: Optional[torch.Tensor] = None,
     global_evidence_labels: Optional[torch.Tensor] = None,
+    attention_mining_boost: float = 0.0,
 ) -> Dict[str, torch.Tensor]:
     """Sentence-conditioned, attention-aligned evidence InfoNCE.
 
@@ -577,6 +694,8 @@ def sentence_evidence_info_nce_loss(
         raise ValueError("evidence contrastive temperature must be positive")
     if salience_logit_bias < 0.0:
         raise ValueError("salience_logit_bias must be non-negative")
+    if attention_mining_boost < 0.0:
+        raise ValueError("attention_mining_boost must be non-negative")
     if query.ndim != 3 or keys.ndim != 3:
         raise ValueError("sentence evidence contrastive expects query [B,R,P] and keys [B,U,P]")
     if query_valid.shape != query.shape[:2]:
@@ -616,6 +735,15 @@ def sentence_evidence_info_nce_loss(
             salience_logits[:, None, :salience_width].detach().float()
         ).to(mining_score.dtype)
         mining_score = mining_score + float(salience_boost) * detached_salience
+    if attention_prior_energy is not None and attention_mining_boost > 0.0:
+        if attention_prior_energy.ndim != 2 or attention_prior_energy.shape[0] != query.shape[0]:
+            raise ValueError("attention_prior_energy must be [B, U]")
+        attention_width = min(width, attention_prior_energy.shape[1])
+        detached_energy = torch.zeros_like(mining_score)
+        detached_energy[:, :, :attention_width] = (
+            attention_prior_energy[:, None, :attention_width].detach().float().to(mining_score.dtype)
+        )
+        mining_score = mining_score + float(attention_mining_boost) * detached_energy
     mining_score = mining_score.masked_fill(~negative_mask, -torch.inf)
     hard_negative_mask = torch.zeros_like(negative_mask)
     if width > 0:
@@ -624,24 +752,30 @@ def sentence_evidence_info_nce_loss(
         selected = torch.isfinite(top_values)
         hard_negative_mask.scatter_(2, top_indices, selected)
 
-    logits = similarity / float(temperature)
-    if salience_logits is not None and salience_logit_bias > 0.0:
+    if attention_prior_energy is not None:
+        if attention_prior_energy.ndim != 2 or attention_prior_energy.shape[0] != query.shape[0]:
+            raise ValueError("attention_prior_energy must be [B, U]")
+        attention_width = min(width, attention_prior_energy.shape[1])
+        aligned_energy = torch.zeros_like(similarity)
+        aligned_energy[:, :, :attention_width] = attention_prior_energy[:, None, :attention_width].float()
+        if global_evidence_labels is None:
+            global_positive = positive_mask.any(dim=1)
+        else:
+            global_positive = global_evidence_labels[:, :width].gt(0.5) & valid_units[:, :width].bool()
+        attention_coupling = positive_mask | (hard_negative_mask & ~global_positive[:, None, :])
+        logits = (
+            similarity + float(salience_logit_bias) * aligned_energy * attention_coupling.to(similarity.dtype)
+        ) / float(temperature)
+    else:
+        logits = similarity / float(temperature)
+    if attention_prior_energy is None and salience_logits is not None and salience_logit_bias > 0.0:
         salience_width = min(width, salience_logits.shape[1])
         aligned_salience = torch.zeros_like(logits)
-        # This term is intentionally *not* detached: it gives the
-        # contrastive objective a direct gradient into the unit logits that
-        # become the token-level cross-attention bias at generation time.
-        # Bound only this auxiliary path so a transient salience outlier
-        # cannot swamp the cosine/temperature score during warm-up.
         aligned_salience[:, :, :salience_width] = salience_logits[:, None, :salience_width].float().clamp(-4.0, 4.0)
         if global_evidence_labels is None:
             global_positive = positive_mask.any(dim=1)
         else:
             global_positive = global_evidence_labels[:, :width].gt(0.5) & valid_units[:, :width].bool()
-        # Local sentence evidence is always encouraged.  A true document-level
-        # non-evidence hard negative is discouraged.  But a unit selected by a
-        # different summary sentence does not receive a false negative update
-        # to the single global score consumed by bridge attention.
         salience_coupling = positive_mask | (hard_negative_mask & ~global_positive[:, None, :])
         logits = logits + float(salience_logit_bias) * aligned_salience * salience_coupling.to(logits.dtype)
     negative_logits = logits.masked_fill(~hard_negative_mask, -torch.inf)

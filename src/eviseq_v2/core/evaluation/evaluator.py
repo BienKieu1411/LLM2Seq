@@ -7,12 +7,12 @@ import json
 import os
 from typing import Any, Dict
 
-from ..configuration import load_config
+from ..config import load_config
 from . import engine as stable
 
 
-def _evaluation_config(path: str, split: str) -> Dict[str, Any]:
-    config = load_config(path)
+def _evaluation_config(config_path: str, split: str) -> Dict[str, Any]:
+    config = load_config(config_path)
     if split == "validation":
         config["data"]["test_file"] = config["data"]["validation_file"]
         config.setdefault("limits", {})["max_test_examples"] = int(

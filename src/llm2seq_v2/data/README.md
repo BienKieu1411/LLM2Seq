@@ -8,4 +8,4 @@ The runnable folder expects the locked split at:
 
 Every row must contain `id`, `source`, and `target`. The included copies are
 the same files used by the current GenBridge/T5Gemma comparison. Training
-writes their exact SHA-256 fingerprints into `data_manifest.json`.
+records their resolved paths and example counts in `data_manifest.json`.

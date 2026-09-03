@@ -8,10 +8,8 @@ import pytest
 from rouge155.evaluate_rouge import (
     _DETAIL_PATTERN,
     _ROUGE_PROTOCOL,
-    _json_sha256,
     _parse_per_example,
     _prepare_data,
-    _sha256,
 )
 from rouge155.paired_bootstrap import compare
 
@@ -73,16 +71,15 @@ def _write_run(root: Path, name: str, values: list[float], reference_suffix: str
     )
     raw = root / f"{name}.per_example.raw.txt"
     raw.write_text("official raw output\n", encoding="utf-8")
-    contracts = [_json_sha256({"id": row["id"], "reference": row["reference"]}) for row in records]
     rows = []
-    for index, (record, value, contract) in enumerate(zip(records, values, contracts, strict=True)):
+    for index, (record, value) in enumerate(zip(records, values, strict=True)):
         metric = {"recall": value, "precision": value, "f1": value}
         rows.append(
             {
                 "row_index": index,
                 "eval_task_id": index + 1,
                 "id": record["id"],
-                "row_contract_sha256": contract,
+                "reference": record["reference"],
                 "rouge1": dict(metric),
                 "rouge2": dict(metric),
                 "rougeL": dict(metric),
@@ -95,16 +92,12 @@ def _write_run(root: Path, name: str, values: list[float], reference_suffix: str
                 "schema_version": "eviseq.perl_rouge155_details.v1",
                 "num_examples": len(values),
                 "backend": "Perl ROUGE-1.5.5 via pyrouge==0.1.3",
-                "scorer_fingerprint_sha256": "f" * 64,
                 "headline_protocol": _ROUGE_PROTOCOL,
                 "detail_protocol": f"{_ROUGE_PROTOCOL} -d",
                 "prediction_field": "prediction",
                 "reference_field": "reference",
                 "predictions_file": str(predictions),
-                "predictions_sha256": _sha256(predictions),
-                "id_reference_sha256": _json_sha256(contracts),
                 "raw_detail_file": str(raw),
-                "raw_detail_sha256": _sha256(raw),
                 "per_example_f1_mean": {
                     "rouge1": sum(values) / len(values),
                     "rouge2": sum(values) / len(values),
@@ -127,13 +120,9 @@ def _write_run(root: Path, name: str, values: list[float], reference_suffix: str
                 "rougeL": mean,
                 "num_examples": len(values),
                 "backend": "Perl ROUGE-1.5.5 via pyrouge==0.1.3",
-                "scorer_fingerprint_sha256": "f" * 64,
                 "pyrouge_default_args": _ROUGE_PROTOCOL,
                 "predictions_file": str(predictions),
-                "predictions_sha256": _sha256(predictions),
                 "per_example_scores_file": str(details),
-                "per_example_scores_sha256": _sha256(details),
-                "raw_detail_sha256": _sha256(raw),
             },
             indent=2,
         )

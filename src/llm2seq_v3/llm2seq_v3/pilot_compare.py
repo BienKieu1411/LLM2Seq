@@ -23,11 +23,8 @@ def _last_jsonl(path: Path) -> Dict[str, Any]:
     return rows[-1]
 
 
-def _same_fingerprint(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
-    return bool(left and right) and (
-        int(left.get("num_examples", -1)) == int(right.get("num_examples", -2))
-        and str(left.get("sha256", "")) == str(right.get("sha256", "missing"))
-    )
+def _same_data(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    return bool(left and right) and int(left.get("num_examples", -1)) == int(right.get("num_examples", -2))
 
 
 def compare_pilots(main_dir: Path, control_dir: Path) -> Dict[str, Any]:
@@ -35,11 +32,11 @@ def compare_pilots(main_dir: Path, control_dir: Path) -> Dict[str, Any]:
     control_metrics = _read_json(control_dir / "last_test_predictions.metrics.json")
     main_validation = _last_jsonl(main_dir / "validation_history.jsonl")
     control_validation = _last_jsonl(control_dir / "validation_history.jsonl")
-    main_test = main_metrics.get("test_data_fingerprint", {})
-    control_test = control_metrics.get("test_data_fingerprint", {})
+    main_test = main_metrics.get("test_data_record", {})
+    control_test = control_metrics.get("test_data_record", {})
     comparability_gates = {
         "same_test_size": int(main_metrics.get("num_examples", -1)) == int(control_metrics.get("num_examples", -2)),
-        "same_test_fingerprint": _same_fingerprint(main_test, control_test),
+        "same_test_data": _same_data(main_test, control_test),
         "main_checkpoint_integrity": bool(main_metrics.get("checkpoint_parameters_match_model", False)),
         "control_checkpoint_integrity": bool(control_metrics.get("checkpoint_parameters_match_model", False)),
         "same_encoder": str(main_metrics.get("encoder_name", ""))

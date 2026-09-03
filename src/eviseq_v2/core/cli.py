@@ -7,8 +7,8 @@ import json
 import logging
 from typing import Any, Dict
 
-from .configuration import load_config, resolve_data_path
 from .data.dataset import read_jsonl
+from .config import load_config, resolve_data_path
 
 
 def _add_train(subparsers: Any) -> None:
@@ -50,9 +50,6 @@ def _dataset_summary(config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main() -> None:
-    # Evaluation and training emit useful per-batch progress at INFO level.
-    # Configure the source runner explicitly because Python's default logging
-    # threshold is WARNING, which otherwise hides the ETA/progress messages.
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",

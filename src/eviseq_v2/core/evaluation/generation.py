@@ -43,9 +43,6 @@ def _apply_no_repeat_ngram(logits: torch.Tensor, tokens: torch.Tensor, order: in
 
     if order <= 0 or tokens.shape[1] < order:
         return
-    # Every existing n-gram whose prefix matches the current suffix contributes
-    # its final token to the forbidden set.  This is the same condition as
-    # ``_blocked_tokens`` but avoids a ``.tolist()`` synchronisation per row.
     windows = tokens.unfold(1, order, 1)
     prefix_width = order - 1
     if prefix_width:
@@ -76,10 +73,6 @@ def _generate_from_memory(
     batch = adapter_output.memory.shape[0]
     seed = torch.tensor(list(decoder_seed), device=adapter_output.memory.device, dtype=torch.long)
     prompt_length = seed.numel()
-    # ``torch.cat`` on the complete history once per decoded token repeatedly
-    # reallocates and copies a [batch, prompt + step] tensor.  Keep one fixed
-    # greedy-history buffer instead; ``past_key_values`` still ensures the
-    # decoder itself sees only the new token after its first forward pass.
     capacity = prompt_length + int(max_new_tokens)
     fill_value = int(pad_token_id if pad_token_id is not None else (eos_token_id if eos_token_id is not None else 0))
     generated = torch.full(
@@ -163,4 +156,15 @@ def generate(
     **kwargs,
 ) -> torch.Tensor:
     adapter_output = model.encode(input_ids, attention_mask, unit_ids=unit_ids)
+    if getattr(model, "prompt_conditioned_inference_bridge", False):
+        seed = (
+            torch.tensor(
+                list(decoder_seed),
+                device=adapter_output.memory.device,
+                dtype=torch.long,
+            )
+            .unsqueeze(0)
+            .expand(adapter_output.memory.shape[0], -1)
+        )
+        adapter_output = model.prompt_condition_bridge_for_generation(adapter_output, seed)
     return generate_from_memory(model, adapter_output, decoder_seed, **kwargs)

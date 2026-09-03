@@ -191,6 +191,25 @@ def validate_config(config: Dict[str, Any]) -> None:
     elif bool(objectives.get("contrastive_across_accumulation", False)):
         raise ValueError("Disabled contrastive learning cannot enable virtual-batch GradCache")
 
+    label_smoothing = float(objectives.get("label_smoothing", 0.0))
+    if not 0.0 <= label_smoothing < 1.0:
+        raise ValueError("objectives.label_smoothing must be in [0, 1)")
+    use_source_swap = bool(objectives.get("use_source_swap", False))
+    source_swap_weight = float(objectives.get("source_swap_weight", 0.0))
+    if use_source_swap:
+        if not use_contrastive:
+            raise ValueError("Source-swap contrastive learning requires objectives.use_contrastive=true")
+        if source_swap_weight <= 0.0:
+            raise ValueError("Enabled source-swap learning requires a positive source_swap_weight")
+        if float(objectives.get("source_swap_margin", 0.2)) < 0.0:
+            raise ValueError("objectives.source_swap_margin must be non-negative")
+        if float(objectives.get("source_swap_temperature", 1.0)) <= 0.0:
+            raise ValueError("objectives.source_swap_temperature must be positive")
+        if str(objectives.get("source_swap_strategy", "hard_in_batch")) not in {"hard_in_batch", "cyclic"}:
+            raise ValueError("objectives.source_swap_strategy must be hard_in_batch or cyclic")
+    elif source_swap_weight != 0.0:
+        raise ValueError("Disabled source-swap learning requires source_swap_weight=0")
+
     # Evidence-focused contrastive objective.
     use_evidence_contrastive = bool(objectives.get("use_evidence_contrastive", True))
     evi_weight = float(objectives.get("evidence_contrastive_weight", 0.05))
@@ -242,12 +261,7 @@ def validate_config(config: Dict[str, Any]) -> None:
     if data.get("supervise_evidence", True) is not True and float(objectives.get("salience_weight", 0.0)) != 0.0:
         raise ValueError("Tasks without evidence supervision require objectives.salience_weight=0")
 
-    forbidden = (
-        "source_swap_weight",
-        "response_alignment_weight",
-        "phrase_mixture_weight",
-        "label_smoothing",
-    )
+    forbidden = ("response_alignment_weight", "phrase_mixture_weight")
     if any(float(objectives.get(name, 0.0)) != 0.0 for name in forbidden):
         raise ValueError("EviSeq permits CE, salience, evidence contrastive, and optional document InfoNCE only")
 

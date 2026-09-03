@@ -81,8 +81,6 @@ def test_prepare_copies_converts_and_writes_report(tmp_path: Path) -> None:
     ]
     assert validation[0]["id"] == "validation-1"
     assert validation[0]["source"] == "A validation article."
-    # A token list must not become one EviSeq source unit per token; that would
-    # corrupt sentence boundaries used by the bridge's salience supervision.
     assert test[0]["source"] == "This is a tokenized news article with nine tokens"
     assert "\n" not in test[0]["source"]
 
@@ -131,7 +129,7 @@ def test_convert_split_is_atomic_when_duplicate_ids_are_rejected(tmp_path: Path)
     assert not output.with_suffix(".jsonl.tmp").exists()
 
 
-def test_prepare_allows_reused_ids_across_splits(tmp_path: Path) -> None:
+def test_prepare_rejects_cross_split_content_leakage(tmp_path: Path) -> None:
     source_dir = tmp_path / "incoming"
     raw_dir = tmp_path / "raw"
     processed_dir = tmp_path / "processed"
@@ -142,8 +140,36 @@ def test_prepare_allows_reused_ids_across_splits(tmp_path: Path) -> None:
             [{"id": identifier, "article": f"{label} article.", "summary": f"{label} summary."}],
         )
 
-    report = prepare(source_dir, raw_dir, processed_dir)
+    with pytest.raises(ValueError, match="Cross-split content leakage.*duplicate ids"):
+        prepare(source_dir, raw_dir, processed_dir)
+
+
+def test_prepare_can_explicitly_allow_cross_split_content_for_debug(tmp_path: Path) -> None:
+    source_dir = tmp_path / "incoming"
+    raw_dir = tmp_path / "raw"
+    processed_dir = tmp_path / "processed"
+    for filename, label in (("train.txt", "train"), ("val.txt", "validation"), ("test.txt", "test")):
+        identifier = "leaked-id" if label in {"train", "test"} else "validation-id"
+        _write_jsonl(
+            source_dir / filename,
+            [{"id": identifier, "article": f"{label} article.", "summary": f"{label} summary."}],
+        )
+
+    report = prepare(source_dir, raw_dir, processed_dir, allow_cross_split_content=True)
     assert report["splits"]["train"]["kept"] == 1
     assert report["splits"]["test"]["kept"] == 1
     assert (processed_dir / "preparation_report.json").exists()
     assert not list(tmp_path.rglob("*.tmp"))
+
+
+def test_prepare_rejects_duplicate_source_texts_with_different_ids(tmp_path: Path) -> None:
+    source_dir = tmp_path / "incoming"
+    shared = {"article": "The same article.", "summary": "The same summary."}
+    _write_jsonl(source_dir / "train.txt", [{"id": "train-id", **shared}])
+    _write_jsonl(
+        source_dir / "val.txt", [{"id": "validation-id", "article": "Other article.", "summary": "Other summary."}]
+    )
+    _write_jsonl(source_dir / "test.txt", [{"id": "test-id", **shared}])
+
+    with pytest.raises(ValueError, match="Cross-split content leakage.*duplicate source texts"):
+        prepare(source_dir, tmp_path / "raw", tmp_path / "processed")

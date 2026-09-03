@@ -93,7 +93,7 @@ def test_paper_comparison_requires_same_backend_and_full_test_split():
         "training_parameters": 1_528_477_089,
         "checkpoint_test_matches_current": True,
         "checkpoint_parameters_match_model": True,
-        "test_data_fingerprint": config["benchmark"]["data"]["test"],
+        "test_data_record": config["benchmark"]["data"]["test"],
     }
     result = compare_paper_scores(config, scores, candidate_metrics)
     assert result["comparable"] is True
@@ -123,12 +123,12 @@ def test_paper_comparison_rejects_wrong_split_or_oversized_candidate():
         "training_parameters": 2_100_000_000,
         "checkpoint_test_matches_current": True,
         "checkpoint_parameters_match_model": True,
-        "test_data_fingerprint": {"num_examples": 3901, "sha256": "0" * 64},
+        "test_data_record": {"num_examples": 3901},
     }
     result = compare_paper_scores(config, scores, bad_metrics)
     assert result["comparable"] is False
     assert result["parameter_budget_reached"] is False
-    assert any("fingerprint" in reason for reason in result["reasons"])
+    assert any("parameter" in reason for reason in result["reasons"])
 
 
 def _final_audit_artifacts(config):
@@ -146,7 +146,7 @@ def _final_audit_artifacts(config):
         "training_parameters": 1_528_477_089,
         "checkpoint_test_matches_current": True,
         "checkpoint_parameters_match_model": True,
-        "test_data_fingerprint": dict(locked),
+        "test_data_record": {"num_examples": int(locked["num_examples"])},
     }
     baseline_scores = {
         "backend": "Perl ROUGE-1.5.5 via pyrouge==0.1.3",
@@ -160,7 +160,7 @@ def _final_audit_artifacts(config):
         "checkpoint_base_model": "google/t5gemma-2-1b-1b",
         "unique_parameter_elements": 2_012_345_678,
         "checkpoint_test_matches_current": True,
-        "test_data_fingerprint": dict(locked),
+        "test_data_record": {"num_examples": int(locked["num_examples"])},
     }
     return candidate_scores, candidate_metrics, baseline_scores, baseline_metrics
 
@@ -201,10 +201,7 @@ def test_final_audit_rejects_wrong_baseline_or_split():
     baseline_scores = dict(baseline_scores)
     baseline_scores["rouge2"] -= 1.0
     baseline_metrics = dict(baseline_metrics)
-    baseline_metrics["test_data_fingerprint"] = {
-        "num_examples": 3901,
-        "sha256": "0" * 64,
-    }
+    baseline_metrics["test_data_record"] = {"num_examples": 1}
     result = audit_final_claim(
         config,
         candidate_scores,
@@ -214,7 +211,7 @@ def test_final_audit_rejects_wrong_baseline_or_split():
     )
     assert result["passed"] is False
     assert result["comparable"] is False
-    assert any("fingerprint" in reason for reason in result["comparability_reasons"])
+    assert any("test data" in reason for reason in result["comparability_reasons"])
     assert any("does not reproduce" in reason for reason in result["comparability_reasons"])
 
 
@@ -229,7 +226,7 @@ def test_full_training_requires_exact_locked_data_but_pilot_allows_subsets():
         "test": "exact_match",
     }
     broken = copy.deepcopy(manifest)
-    broken["test"]["sha256"] = "0" * 64
+    broken["test"]["num_examples"] = 1
     with pytest.raises(RuntimeError, match="test data differs"):
         verify_locked_data_manifest(full, broken)
 
@@ -520,11 +517,11 @@ def test_pilot_comparison_requires_hiroute_quality_and_utilization(tmp_path: Pat
     control = tmp_path / "control"
     main.mkdir()
     control.mkdir()
-    fingerprint = {"num_examples": 512, "sha256": "a" * 64}
+    data_record = {"num_examples": 512}
     common = {
         "num_examples": 512,
         "checkpoint_parameters_match_model": True,
-        "test_data_fingerprint": fingerprint,
+        "test_data_record": data_record,
         "encoder_name": "Qwen/Qwen3-Embedding-0.6B",
         "decoder_name": "Qwen/Qwen3-0.6B",
         "rouge_backend": "rouge==1.0.0 (diagnostic)",
@@ -580,7 +577,7 @@ def test_pilot_comparison_rejects_different_test_rows(tmp_path: Path):
         json.dumps(
             {
                 **common,
-                "test_data_fingerprint": {"num_examples": 512, "sha256": "a" * 64},
+                "test_data_record": {"num_examples": 512},
             }
         ),
         encoding="utf-8",
@@ -589,7 +586,7 @@ def test_pilot_comparison_rejects_different_test_rows(tmp_path: Path):
         json.dumps(
             {
                 **common,
-                "test_data_fingerprint": {"num_examples": 512, "sha256": "b" * 64},
+                "test_data_record": {"num_examples": 511},
             }
         ),
         encoding="utf-8",
@@ -599,12 +596,12 @@ def test_pilot_comparison_rejects_different_test_rows(tmp_path: Path):
     (control / "validation_history.jsonl").write_text(validation, encoding="utf-8")
     result = compare_pilots(main, control)
     assert result["comparable"] is False
-    assert result["comparability_gates"]["same_test_fingerprint"] is False
+    assert result["comparability_gates"]["same_test_data"] is False
     assert result["recommend_full_hiroute_run"] is False
 
 
 def test_encoder_pilot_comparison_ranks_only_healthy_comparable_runs(tmp_path: Path):
-    fingerprint = {"num_examples": 512, "sha256": "a" * 64}
+    data_record = {"num_examples": 512}
     runs = {}
     for label, encoder, rouge2 in (
         ("qwen3", "Qwen/Qwen3-Embedding-0.6B", 19.0),
@@ -624,7 +621,7 @@ def test_encoder_pilot_comparison_ranks_only_healthy_comparable_runs(tmp_path: P
                     "empty_prediction_rate": 0.0,
                     "checkpoint_parameters_match_model": True,
                     "parameter_budget_reached": True,
-                    "test_data_fingerprint": fingerprint,
+                    "test_data_record": data_record,
                     "encoder_name": encoder,
                     "decoder_name": "Qwen/Qwen3-0.6B",
                     "rouge_backend": "rouge==1.0.0 (diagnostic)",
@@ -1798,7 +1795,7 @@ def test_checkpoint_is_complete_last_only(tmp_path: Path):
     model = nn.Sequential(nn.Linear(3, 4), nn.LayerNorm(4))
     path = tmp_path / "last.pt"
     before = {name: value.detach().clone() for name, value in model.state_dict().items()}
-    save_last_checkpoint(model, path, {"x": 1}, 15, 123, {"train": {"sha256": "x"}})
+    save_last_checkpoint(model, path, {"x": 1}, 15, 123, {"train": {"num_examples": 1}})
     for parameter in model.parameters():
         parameter.data.zero_()
     payload = load_last_checkpoint(model, path)

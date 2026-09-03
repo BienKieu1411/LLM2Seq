@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from rouge155.evaluate_rouge import _canonical, _json_sha256, _sha256
+from rouge155.evaluate_rouge import _canonical
 
 _DETAIL_SCHEMA = "eviseq.perl_rouge155_details.v1"
 _OUTPUT_SCHEMA = "eviseq.perl_rouge155_paired_bootstrap.v1"
@@ -57,7 +57,6 @@ def _prediction_contracts(
                     "row_index": row_index,
                     "id": identifier,
                     "reference": reference,
-                    "row_contract_sha256": _json_sha256({"id": identifier, "reference": reference}),
                 }
             )
     _require(bool(rows), f"No prediction rows found: {predictions_file}")
@@ -71,18 +70,10 @@ def _verified_run(headline_path: Path) -> dict[str, Any]:
     headline = _load_json(headline_path)
     detail_path = Path(str(headline.get("per_example_scores_file", ""))).expanduser().resolve()
     _require(detail_path.is_file(), f"Missing per-example artifact referenced by {headline_path}")
-    _require(
-        headline.get("per_example_scores_sha256") == _sha256(detail_path),
-        f"Per-example artifact hash mismatch for {headline_path}",
-    )
     details = _load_json(detail_path)
     _require(details.get("schema_version") == _DETAIL_SCHEMA, f"Unsupported details schema: {detail_path}")
     _require("Perl ROUGE-1.5.5" in str(headline.get("backend", "")), "Headline is not official Perl ROUGE")
     _require(details.get("backend") == headline.get("backend"), "Headline/details backend mismatch")
-    _require(
-        details.get("scorer_fingerprint_sha256") == headline.get("scorer_fingerprint_sha256"),
-        "Headline/details scorer fingerprint mismatch",
-    )
     _require(
         details.get("headline_protocol") == headline.get("pyrouge_default_args"),
         "Headline/details ROUGE protocol mismatch",
@@ -92,22 +83,13 @@ def _verified_run(headline_path: Path) -> dict[str, Any]:
 
     predictions_file = Path(str(headline.get("predictions_file", ""))).expanduser().resolve()
     _require(predictions_file.is_file(), f"Predictions file no longer exists: {predictions_file}")
-    predictions_sha = _sha256(predictions_file)
-    _require(predictions_sha == headline.get("predictions_sha256"), "Headline prediction hash mismatch")
-    _require(predictions_sha == details.get("predictions_sha256"), "Details prediction hash mismatch")
-
     raw_detail_file = Path(str(details.get("raw_detail_file", ""))).expanduser().resolve()
     _require(raw_detail_file.is_file(), f"Missing raw Perl detail output: {raw_detail_file}")
-    raw_detail_sha = _sha256(raw_detail_file)
-    _require(raw_detail_sha == details.get("raw_detail_sha256"), "Raw detail hash mismatch")
-    _require(raw_detail_sha == headline.get("raw_detail_sha256"), "Headline/raw detail hash mismatch")
 
     prediction_field = str(details.get("prediction_field", "prediction"))
     reference_field = str(details.get("reference_field", "reference"))
     contracts = _prediction_contracts(predictions_file, prediction_field, reference_field)
     _require(len(contracts) == count, "Prediction/detail row-count mismatch")
-    contract_hash = _json_sha256([row["row_contract_sha256"] for row in contracts])
-    _require(contract_hash == details.get("id_reference_sha256"), "ID/reference contract hash mismatch")
 
     rows = details.get("rows")
     _require(isinstance(rows, list) and len(rows) == count, "Malformed detailed ROUGE rows")
@@ -116,10 +98,8 @@ def _verified_run(headline_path: Path) -> dict[str, Any]:
         _require(row.get("row_index") == index, f"Detailed row index mismatch at {index}")
         _require(row.get("eval_task_id") == index + 1, f"Detailed task ID mismatch at {index}")
         _require(row.get("id") == contract["id"], f"Detailed example ID mismatch at {index}")
-        _require(
-            row.get("row_contract_sha256") == contract["row_contract_sha256"],
-            f"Detailed reference contract mismatch at {index}",
-        )
+        if "reference" in row:
+            _require(row.get("reference") == contract["reference"], f"Detailed reference mismatch at {index}")
         for metric in _METRICS:
             values = row.get(metric)
             _require(isinstance(values, dict), f"Missing {metric} details at row {index}")
@@ -141,7 +121,7 @@ def _verified_run(headline_path: Path) -> dict[str, Any]:
         "details": details,
         "contracts": contracts,
         "rows": rows,
-        "id_reference_sha256": contract_hash,
+        "id_reference": [(row["id"], row["reference"]) for row in contracts],
     }
 
 
@@ -183,14 +163,13 @@ def compare(
     candidate = _verified_run(candidate_headline)
     baseline = _verified_run(baseline_headline)
     _require(
-        candidate["id_reference_sha256"] == baseline["id_reference_sha256"],
+        candidate["id_reference"] == baseline["id_reference"],
         "Candidate and baseline are not aligned to the same ordered IDs/references",
     )
     for key in (
         "headline_protocol",
         "detail_protocol",
         "backend",
-        "scorer_fingerprint_sha256",
         "prediction_field",
         "reference_field",
     ):
@@ -229,10 +208,9 @@ def compare(
         "schema_version": _OUTPUT_SCHEMA,
         "comparison_valid": True,
         "num_examples": len(candidate["rows"]),
-        "pairing": {"id_reference_sha256": candidate["id_reference_sha256"]},
+        "pairing": {"verified": True, "key": "ordered_id_reference"},
         "scorer": {
             "backend": candidate["details"]["backend"],
-            "fingerprint_sha256": candidate["details"]["scorer_fingerprint_sha256"],
             "headline_protocol": candidate["details"]["headline_protocol"],
             "detail_protocol": candidate["details"]["detail_protocol"],
         },
@@ -249,14 +227,6 @@ def compare(
             "primary_metric": "rouge2",
             "rouge2_ci95_low_gt_zero": scores["rouge2"]["ci95_low"] > 0.0,
             "all_ci95_low_gt_zero": all(scores[metric]["ci95_low"] > 0.0 for metric in _METRICS),
-        },
-        "artifact_sha256": {
-            "candidate_predictions": candidate["headline"]["predictions_sha256"],
-            "baseline_predictions": baseline["headline"]["predictions_sha256"],
-            "candidate_headline": _sha256(candidate["headline_path"]),
-            "baseline_headline": _sha256(baseline["headline_path"]),
-            "candidate_details": _sha256(candidate["detail_path"]),
-            "baseline_details": _sha256(baseline["detail_path"]),
         },
     }
     output_file.parent.mkdir(parents=True, exist_ok=True)

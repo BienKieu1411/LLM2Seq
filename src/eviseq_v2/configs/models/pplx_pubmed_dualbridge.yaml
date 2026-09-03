@@ -1,0 +1,14 @@
+_base_: pplx_pubmed_pceb_corrected.yaml
+
+experiment:
+  name: eviseq_pubmed_dualbridge_pplx_0_6b_to_qwen3_0_6b
+  output_dir: runs/eviseq/pubmed_dualbridge_pplx_0_6b
+
+objectives:
+  evidence_contrastive_attention_aligned: true
+  prompt_conditioned_inference_bridge: true
+  evidence_prompt_bridge_fusion_init: 0.50
+  prompt_bridge_dynamic_logit_scale: 8.0
+  prompt_bridge_dynamic_logit_clip: 2.0
+  prompt_bridge_dynamic_salience_mix: 0.50
+  prompt_bridge_source_probe_layers: 2

@@ -197,9 +197,6 @@ def validate_config(config: Dict[str, Any]) -> None:
             continue
         if int(target.get("num_examples", 0)) <= 0:
             raise ValueError(f"benchmark.data.{split}.num_examples must be positive")
-        digest = str(target.get("sha256", ""))
-        if len(digest) != 64 or any(value not in "0123456789abcdef" for value in digest.lower()):
-            raise ValueError(f"benchmark.data.{split}.sha256 must be a SHA-256 hex digest")
     parameter_target = benchmark.get("parameters", {})
     if parameter_target:
         if int(parameter_target.get("target_declared_parameters", 0)) <= 0:

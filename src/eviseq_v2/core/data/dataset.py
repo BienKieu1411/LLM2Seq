@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections import Counter
 from collections.abc import Mapping
 from importlib import import_module
 from pathlib import Path
@@ -38,6 +37,17 @@ def _field_value(row: Dict[str, Any], field: str, separator: str) -> str:
     return str(value)
 
 
+def _raw_field_value(row: Dict[str, Any], field: str) -> Any:
+    """Read a configured field without stringifying lists or numeric labels."""
+
+    value: Any = row
+    for part in field.split("."):
+        if not isinstance(value, Mapping) or part not in value:
+            raise KeyError(f"Field {field!r} is missing from the JSON record")
+        value = value[part]
+    return value
+
+
 def normalize_record(row: Dict[str, Any], data_config: Dict[str, Any]) -> Dict[str, Any]:
     """Map an arbitrary JSON object to EviSeq's source/target/id interface."""
 
@@ -47,11 +57,14 @@ def normalize_record(row: Dict[str, Any], data_config: Dict[str, Any]) -> Dict[s
         mapped = getattr(import_module(module_name), function_name)(row, data_config)
         if not isinstance(mapped, Mapping) or "source" not in mapped or "target" not in mapped:
             raise TypeError("Custom record mapper must return a mapping with source and target")
-        return {
+        normalized = {
             "id": mapped.get("id"),
             "source": str(mapped["source"]),
             "target": str(mapped["target"]),
         }
+        if mapped.get("evidence_labels") is not None:
+            normalized["evidence_labels"] = mapped["evidence_labels"]
+        return normalized
 
     list_separator = str(data_config.get("list_separator", "\n"))
     template_values = _TemplateValues(
@@ -75,7 +88,52 @@ def normalize_record(row: Dict[str, Any], data_config: Dict[str, Any]) -> Dict[s
         example_id: Any = _field_value(row, id_field, list_separator)
     except KeyError:
         example_id = None
-    return {"id": example_id, "source": source, "target": target}
+    normalized = {"id": example_id, "source": source, "target": target}
+    label_field = str(data_config.get("evidence_label_field", "")).strip()
+    if label_field:
+        try:
+            evidence_labels = _raw_field_value(row, label_field)
+        except KeyError:
+            evidence_labels = None
+        if evidence_labels is not None:
+            normalized["evidence_labels"] = evidence_labels
+    return normalized
+
+
+def aligned_external_evidence_labels(
+    raw_labels: Any,
+    visible_unit_count: int,
+    full_unit_count: int,
+    *,
+    index_base: int = 0,
+) -> List[float] | None:
+    """Align precomputed extractive sentence indices to visible source units.
+
+    Mentor labels are zero-based sentence indices over the untruncated source.
+    Labels outside the 4096-token visible prefix are ignored.  If no labelled
+    sentence remains visible, callers should fall back to the normal greedy
+    oracle for that example rather than training on an all-negative target.
+    """
+
+    if raw_labels is None:
+        return None
+    if isinstance(raw_labels, (str, bytes)) or not isinstance(raw_labels, Sequence):
+        raise ValueError("evidence labels must be a sequence of sentence indices")
+    if visible_unit_count <= 0 or full_unit_count <= 0:
+        return None
+    if index_base not in (0, 1):
+        raise ValueError("evidence_label_index_base must be 0 or 1")
+    labels = [0.0] * visible_unit_count
+    found = False
+    for value in raw_labels:
+        try:
+            index = int(value) - index_base
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid evidence sentence index: {value!r}") from exc
+        if 0 <= index < min(full_unit_count, visible_unit_count):
+            labels[index] = 1.0
+            found = True
+    return labels if found else None
 
 
 def read_jsonl(
@@ -158,16 +216,25 @@ def _tokens(text: str) -> List[str]:
     return [value.lower() for value in _WORD.findall(text)]
 
 
-def _ngrams(tokens: Sequence[str], order: int) -> Counter[Tuple[str, ...]]:
-    return Counter(tuple(tokens[index : index + order]) for index in range(len(tokens) - order + 1))
+def _ngrams(tokens: Sequence[str], order: int) -> set[Tuple[str, ...]]:
+    """Return unique word n-grams.
+
+    The supplied extractive labels are produced by the common BertSum-style
+    oracle, whose ``_get_ngrams`` returns a set and whose selected sentences
+    are scored after set-union.  Counting repeated n-grams here would create a
+    different training target on repetitive biomedical prose and could make
+    the fallback disagree with the labels stored in ``*.label.jsonl``.
+    """
+
+    return {tuple(tokens[index : index + order]) for index in range(len(tokens) - order + 1)}
 
 
-def _f1(candidate: Counter, reference: Counter) -> float:
-    overlap = sum((candidate & reference).values())
+def _f1(candidate: set[Tuple[str, ...]], reference: set[Tuple[str, ...]]) -> float:
+    overlap = len(candidate & reference)
     if overlap <= 0:
         return 0.0
-    precision = overlap / max(1, sum(candidate.values()))
-    recall = overlap / max(1, sum(reference.values()))
+    precision = overlap / max(1, len(candidate))
+    recall = overlap / max(1, len(reference))
     return 2.0 * precision * recall / max(1e-12, precision + recall)
 
 
@@ -178,11 +245,28 @@ def greedy_evidence_labels(
     rouge1_weight: float = 0.5,
     rouge2_weight: float = 0.5,
     budget: int | None = None,
+    oracle_style: str = "adaptive",
+    mentor_summary_size: int = 3,
 ) -> List[float]:
-    """Greedy sentence coverage labels; reference is used during training only."""
+    """Greedy sentence-coverage labels; reference is used during training only.
+
+    ``adaptive`` preserves the default EviSeq fallback. ``mentor``
+    reproduces the supplied BertSum-style preparation oracle: ASCII cleaning,
+    set 1/2-gram F1, and a fixed three-sentence budget by default. External
+    ``label`` fields bypass this helper entirely.
+    """
 
     if not units:
         return []
+    style = str(oracle_style).strip().lower()
+    if style not in {"adaptive", "mentor"}:
+        raise ValueError("oracle_style must be 'adaptive' or 'mentor'")
+    if style == "mentor":
+        return mentor_greedy_evidence_labels(
+            units,
+            target,
+            summary_size=min(max(1, int(mentor_summary_size)), max(1, int(max_units))),
+        )
     target_tokens = _tokens(target)
     reference = (_ngrams(target_tokens, 1), _ngrams(target_tokens, 2))
     counters = [(_ngrams(_tokens(unit), 1), _ngrams(_tokens(unit), 2)) for unit in units]
@@ -191,9 +275,9 @@ def greedy_evidence_labels(
     budget = min(len(units), max(1, int(budget)), max(1, int(max_units)))
     selected: List[int] = []
     remaining = set(range(len(units)))
-    current = (Counter(), Counter())
+    current = (set(), set())
 
-    def score(pair: Tuple[Counter, Counter]) -> float:
+    def score(pair: Tuple[set[Tuple[str, ...]], set[Tuple[str, ...]]]) -> float:
         return rouge1_weight * _f1(pair[0], reference[0]) + rouge2_weight * _f1(pair[1], reference[1])
 
     current_score = 0.0
@@ -201,7 +285,7 @@ def greedy_evidence_labels(
         winner = None
         winner_score = current_score
         for index in sorted(remaining):
-            candidate = (current[0] + counters[index][0], current[1] + counters[index][1])
+            candidate = (current[0] | counters[index][0], current[1] | counters[index][1])
             value = score(candidate)
             if value > winner_score + 1e-12:
                 winner, winner_score = index, value
@@ -209,7 +293,7 @@ def greedy_evidence_labels(
             break
         selected.append(winner)
         remaining.remove(winner)
-        current = (current[0] + counters[winner][0], current[1] + counters[winner][1])
+        current = (current[0] | counters[winner][0], current[1] | counters[winner][1])
         current_score = winner_score
     if not selected:
         individual = [score(pair) for pair in counters]
@@ -218,6 +302,59 @@ def greedy_evidence_labels(
         selected = [max(range(len(individual)), key=individual.__getitem__)]
     chosen = set(selected)
     return [1.0 if index in chosen else 0.0 for index in range(len(units))]
+
+
+def mentor_greedy_evidence_labels(
+    units: Sequence[str],
+    target: str,
+    *,
+    summary_size: int = 3,
+) -> List[float]:
+    """Reproduce the mentor's extractive oracle exactly.
+
+    The preparation code cleans with ``[^a-zA-Z0-9 ]``, keeps unique n-grams,
+    scores the union of selected sentences with ROUGE-1 F1 + ROUGE-2 F1, and
+    stops after ``summary_size`` improving selections.
+    """
+
+    if not units:
+        return []
+    if int(summary_size) <= 0:
+        raise ValueError("summary_size must be positive")
+
+    def clean(value: str) -> List[str]:
+        return re.sub(r"[^a-zA-Z0-9 ]", "", str(value)).split()
+
+    target_tokens = clean(target)
+    reference_1 = _ngrams(target_tokens, 1)
+    reference_2 = _ngrams(target_tokens, 2)
+    sentence_tokens = [clean(unit) for unit in units]
+    sentence_1 = [_ngrams(tokens, 1) for tokens in sentence_tokens]
+    sentence_2 = [_ngrams(tokens, 2) for tokens in sentence_tokens]
+
+    selected: List[int] = []
+    current_score = 0.0
+    for _ in range(min(int(summary_size), len(units))):
+        winner = -1
+        winner_score = current_score
+        for index in range(len(units)):
+            if index in selected:
+                continue
+            chosen = selected + [index]
+            candidate_1 = set().union(*(sentence_1[item] for item in chosen))
+            candidate_2 = set().union(*(sentence_2[item] for item in chosen))
+            value = _f1(candidate_1, reference_1) + _f1(candidate_2, reference_2)
+            if value > winner_score:
+                winner = index
+                winner_score = value
+        if winner < 0:
+            break
+        selected.append(winner)
+        current_score = winner_score
+    if not selected:
+        return [-1.0] * len(units)
+    selected_set = set(selected)
+    return [1.0 if index in selected_set else 0.0 for index in range(len(units))]
 
 
 def encode_source(
@@ -256,6 +393,8 @@ def encode_source(
         unit_ids.extend([unit_index] * len(encoded))
         if len(encoded) < len(complete):
             break
+    if not visible_units:
+        raise ValueError("Source contains no visible tokenizable units")
     ids = prefix_ids + source_ids
     aligned = [0] * len(prefix_ids) + unit_ids
     if eos_id is not None and len(ids) < max_length:
@@ -283,10 +422,6 @@ def visible_target_sentences(
     for token_id, sentence_id in zip(content_target_ids, sentence_ids):
         if int(sentence_id) > 0:
             grouped.setdefault(int(sentence_id), []).append(int(token_id))
-    # Keep row ``r`` tied to sentence id ``r + 1`` even if decoding a span
-    # yields only special/empty tokens.  Dropping an empty group would shift
-    # every later evidence-label row and train sentence r against sentence
-    # r+1's oracle evidence.
     sentences = [""] * max(grouped, default=0)
     for sentence_id, token_ids in grouped.items():
         sentences[sentence_id - 1] = tokenizer.decode(token_ids, skip_special_tokens=True).strip()
@@ -406,11 +541,28 @@ class Text2TextDataset(Dataset):
         self.sentence_evidence_use_union_as_salience = bool(
             data_config.get("sentence_evidence_use_union_as_salience", False)
         )
+        self.use_external_evidence_labels = bool(data_config.get("use_external_evidence_labels", False))
+        self.evidence_label_index_base = int(data_config.get("evidence_label_index_base", 0))
+        self.evidence_oracle_style = str(data_config.get("evidence_oracle_style", "adaptive")).strip().lower()
+        self.evidence_oracle_summary_size = int(data_config.get("evidence_oracle_summary_size", 3))
+        if self.evidence_oracle_style not in {"adaptive", "mentor"}:
+            raise ValueError("data.evidence_oracle_style must be 'adaptive' or 'mentor'")
+        if self.evidence_oracle_summary_size <= 0:
+            raise ValueError("data.evidence_oracle_summary_size must be positive")
+        if self.use_external_evidence_labels:
+            missing = [index for index, row in enumerate(self.examples) if row.get("evidence_labels") is None]
+            if missing:
+                preview = ", ".join(str(index) for index in missing[:5])
+                raise ValueError(
+                    "data.use_external_evidence_labels=true but evidence labels are missing "
+                    f"from dataset rows {preview}"
+                )
         self.seed = decoder_seed_ids(decoder_tokenizer, data_config)
         self.evidence_cache: List[List[float]] | None = None
         if (
             precompute_evidence
             and self.supervise_evidence
+            and not self.use_external_evidence_labels
             and not (self.sentence_evidence_supervision and self.sentence_evidence_use_union_as_salience)
         ):
             self.evidence_cache = []
@@ -425,6 +577,8 @@ class Text2TextDataset(Dataset):
                         split_units(source),
                         target,
                         max_units=int(data_config.get("oracle_max_units", 12)),
+                        oracle_style=self.evidence_oracle_style,
+                        mentor_summary_size=self.evidence_oracle_summary_size,
                     )
                 )
                 if index % progress_interval == 0 or index == total_examples:
@@ -446,6 +600,14 @@ class Text2TextDataset(Dataset):
         source_ids, unit_ids, visible_units = encode_source(self.encoder_tokenizer, source, self.config)
         full_units = split_units(source)
         cached = self.evidence_cache[index] if self.evidence_cache is not None else None
+        external = None
+        if self.use_external_evidence_labels:
+            external = aligned_external_evidence_labels(
+                row.get("evidence_labels"),
+                len(visible_units),
+                len(full_units),
+                index_base=self.evidence_label_index_base,
+            )
         use_sentence_union = (
             self.sentence_evidence_supervision
             and self.sentence_evidence_use_union_as_salience
@@ -454,9 +616,9 @@ class Text2TextDataset(Dataset):
         if not self.supervise_evidence:
             evidence = [-1.0] * len(visible_units)
         elif use_sentence_union:
-            # Filled after each visible target sentence receives its own
-            # oracle labels.  Avoid computing an unused global greedy oracle.
             evidence = []
+        elif external is not None:
+            evidence = external
         elif cached is not None and visible_units == full_units:
             evidence = cached
         else:
@@ -464,6 +626,8 @@ class Text2TextDataset(Dataset):
                 visible_units,
                 target,
                 max_units=int(self.config.get("oracle_max_units", 12)),
+                oracle_style=self.evidence_oracle_style,
+                mentor_summary_size=self.evidence_oracle_summary_size,
             )
 
         eos_id = self.decoder_tokenizer.eos_token_id
@@ -486,9 +650,6 @@ class Text2TextDataset(Dataset):
             require_offsets=self.sentence_evidence_supervision and self.supervise_evidence,
         )
         if eos_id is not None:
-            # EOS helps CE finish the sequence but carries no semantic
-            # evidence.  Leaving it out of sentence pooling avoids a short
-            # final sentence being dominated by its EOS prediction state.
             sentence_ids.append(0)
         target_tensor = torch.tensor(target_ids, dtype=torch.long)
         decoder_input = torch.cat([torch.tensor(self.seed, dtype=torch.long), target_tensor[:-1]])
@@ -520,6 +681,8 @@ class Text2TextDataset(Dataset):
                     sentence,
                     max_units=self.sentence_evidence_max_units,
                     budget=self.sentence_evidence_max_units,
+                    oracle_style=self.evidence_oracle_style,
+                    mentor_summary_size=min(self.evidence_oracle_summary_size, self.sentence_evidence_max_units),
                 )
                 for sentence in target_units
             ]

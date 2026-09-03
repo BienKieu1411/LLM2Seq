@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from .configuration import load_config, resolve_data_path
+from .config import load_config, resolve_data_path
 
 __all__ = ["EviSeq", "load_config", "resolve_data_path"]
 

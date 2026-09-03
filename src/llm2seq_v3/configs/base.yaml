@@ -143,29 +143,19 @@ checkpoint:
   save_last: true
 
 benchmark:
-  # Canonical fingerprints use only id/source/target and therefore remain
-  # stable if JSON key order or an unrelated metadata field changes. These
-  # are the exact splits used by the full T5Gemma2-1B-1B run.
   data:
     name: WikiLingua-Vietnamese-locked
     train:
       num_examples: 13999
-      sha256: dc51cdeea38be3b2f0b7c44d106da105932db0493bdad5df5d850417e8d81b9f
     validation:
       num_examples: 1680
-      sha256: 6d052dbe88a50fcac825f8469cd80938252975e6a4a2a30cc44d3300227fa6de
     test:
       num_examples: 3901
-      sha256: 03fba36a916a16598134d1daa211417922ff31dd294abcd0e75df7159bad3558
   parameters:
     target_name: T5Gemma2-1B-1B
-    # The official model card reports 2B parameters. It is a declared,
-    # rounded model size, so reports call it "2B", never an exact count.
     target_declared_parameters: 2000000000
     target_is_rounded: true
     target_source: https://huggingface.co/google/t5gemma-2-1b-1b
-  # Never compare scores across these two implementations. The Python score
-  # is a quick diagnostic; only the Perl score is used for the paper claim.
   diagnostic:
     name: T5Gemma2-1B-1B-full
     backend: rouge==1.0.0

@@ -23,7 +23,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, DistributedSampler
 
-from ..configuration import load_config, resolve_data_path
+from ..config import load_config, resolve_data_path
 from ..data.dataset import (
     LengthBucketBatchSampler,
     Seq2SeqCollator,
@@ -217,20 +217,28 @@ def _collator(
 
 
 def _parameter_component(name: str) -> str:
-    # Keep the generic engine usable for every EviSeq training objective.  The
-    # task-specific trainer makes the same classification, but direct users of
-    # this engine must not silently omit an auxiliary evidence head from the
-    # optimizer.
     if name.startswith(
         (
             "adapter.",
             "alignment_head.",
             "evidence_contrastive_head.",
             "prompt_conditioned_evidence_head.",
+            "prompt_bridge_fusion_logit",
         )
     ):
         return "adapter"
-    if ".cross_attn" in name or name.endswith(".cross_gate") or name.endswith(".memory_router_logits"):
+    if (
+        name.startswith(
+            (
+                "encoder.evidence_norm.",
+                "encoder.evidence_head.",
+                "encoder.generic_token_gate.",
+            )
+        )
+        or name == "encoder.evidence_view_gate"
+    ):
+        return "adapter"
+    if ".cross_attn" in name or name.endswith(".cross_gate"):
         return "cross_attention"
     if name.startswith("encoder."):
         return "encoder"
@@ -331,7 +339,7 @@ def validation_loss(
     training: Dict[str, Any],
 ) -> Dict[str, float]:
     model.eval()
-    totals = {"loss": 0.0, "loss_ce": 0.0, "loss_salience": 0.0}
+    totals = {"loss": 0.0, "loss_ce": 0.0, "loss_salience": 0.0, "loss_bridge_geometry": 0.0}
     batches = 0
     for batch in loader:
         batch = _move(batch, device)
@@ -355,10 +363,22 @@ def _run_stage(
     global_step: int,
     checkpoint_dir: Path | None = None,
     checkpoint_config: Dict[str, Any] | None = None,
+    distributed: DistributedContext | None = None,
 ) -> Tuple[int, int]:
     if stage_epochs <= 0:
         return epoch_offset, global_step
     model.set_training_stage(stage)
+    distributed = distributed or distributed_context()
+    training_model: torch.nn.Module = model
+    if distributed.enabled:
+        if device.type != "cuda" or device.index is None:
+            raise RuntimeError("Distributed EviSeq training requires a CUDA device index")
+        training_model = DistributedDataParallel(
+            model,
+            device_ids=[device.index],
+            output_device=device.index,
+            find_unused_parameters=False,
+        )
     accumulation = int(training.get("gradient_accumulation_steps", 1))
     optimizer_steps_per_epoch = math.ceil(len(loader) / accumulation)
     total_steps = max(1, optimizer_steps_per_epoch * stage_epochs)
@@ -378,15 +398,23 @@ def _run_stage(
         f"{sum(p.numel() for p in model.parameters() if p.requires_grad):,}",
     )
     for stage_epoch in range(1, stage_epochs + 1):
-        model.train()
+        if isinstance(loader.sampler, DistributedSampler):
+            loader.sampler.set_epoch(epoch_offset + stage_epoch - 1)
+        batch_sampler = getattr(loader, "batch_sampler", None)
+        if isinstance(batch_sampler, DistributedLengthBucketBatchSampler):
+            batch_sampler.set_epoch(epoch_offset + stage_epoch - 1)
+        elif isinstance(batch_sampler, LengthBucketBatchSampler):
+            batch_sampler.epoch = epoch_offset + stage_epoch - 1
+        training_model.train()
         running: Dict[str, float] = {}
         accumulation_count = 0
         metric_count = 0
         for batch_index, batch in enumerate(loader, start=1):
             batch = _move(batch, device)
+            window_size = min(accumulation, len(loader) - batch_index + 1)
             with _autocast(device, training):
-                outputs = model(**batch)
-                loss = outputs["loss"] / accumulation
+                outputs = training_model(**batch)
+                loss = outputs["loss"] / window_size
             scaler.scale(loss).backward()
             accumulation_count += 1
             metric_count += 1
@@ -433,10 +461,14 @@ def _run_stage(
             absolute_epoch % validation_every == 0 or stage_epoch == stage_epochs
         )
         metrics = None
-        if save_best or scheduled_validation:
+        if distributed.enabled:
+            distributed_barrier(distributed)
+        if distributed.is_main and (save_best or scheduled_validation):
             metrics = validation_loss(model, validation_loader, device, training)
             LOGGER.info("validation %s", json.dumps({"epoch": absolute_epoch, **metrics}))
-        if checkpoint_dir is not None and checkpoint_config is not None:
+        if distributed.enabled:
+            distributed_barrier(distributed)
+        if distributed.is_main and checkpoint_dir is not None and checkpoint_config is not None:
             saved = save_configured_epoch_checkpoints(
                 model,
                 checkpoint_dir,
@@ -447,6 +479,9 @@ def _run_stage(
             )
             if saved:
                 LOGGER.info("checkpoint %s", json.dumps(saved))
+        if distributed.enabled:
+            distributed_barrier(distributed)
+    del training_model
     return epoch_offset + stage_epochs, global_step
 
 
@@ -613,6 +648,7 @@ def train(
             global_step,
             output_dir,
             config,
+            distributed,
         )
         epoch, global_step = _run_stage(
             model,
@@ -626,6 +662,7 @@ def train(
             global_step,
             output_dir,
             config,
+            distributed,
         )
         last_path = output_dir / "last.pt"
         if distributed.is_main:
@@ -643,9 +680,9 @@ def train(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--output-dir", default="")
     parser.add_argument("--overwrite-output-dir", action="store_true")
     parser.add_argument("--init-checkpoint", default="")
-    parser.add_argument("--output-dir", default="")
     parser.add_argument("--allow-partial-init", action="store_true")
     args = parser.parse_args()
     train(

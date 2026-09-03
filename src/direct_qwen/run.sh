@@ -11,7 +11,7 @@ else
   PYTHON_BIN="${PYTHON_BIN:-python3}"
 fi
 
-export PYTHONPATH="$PACKAGE_ROOT:$SRC_ROOT/llm2seq_v2:$SRC_ROOT/eviseq${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$PACKAGE_ROOT:$SRC_ROOT/llm2seq_v2:$SRC_ROOT/eviseq_v2${PYTHONPATH:+:$PYTHONPATH}"
 # These are mandatory, not optional hints: from_pretrained also receives
 # local_files_only=true in Python, so the runner cannot fetch a missing model.
 export HF_HUB_OFFLINE=1

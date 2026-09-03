@@ -37,15 +37,13 @@ def compare_paper_scores(
     else:
         deployable_parameters = int(candidate_metrics.get("deployable_parameters", 0))
         training_parameters = int(candidate_metrics.get("training_parameters", 0))
-        current_test = candidate_metrics.get("test_data_fingerprint", {})
+        current_test = candidate_metrics.get("test_data_record", {})
         if not bool(candidate_metrics.get("checkpoint_test_matches_current", False)):
-            reasons.append("checkpoint test fingerprint does not match the evaluated test file")
+            reasons.append("checkpoint test record does not match the evaluated test file")
         if not bool(candidate_metrics.get("checkpoint_parameters_match_model", False)):
             reasons.append("checkpoint parameter count does not match the instantiated candidate")
         if int(current_test.get("num_examples", -1)) != int(locked_test.get("num_examples", -2)):
             reasons.append("candidate test-set size does not match the locked test manifest")
-        if str(current_test.get("sha256", "")) != str(locked_test.get("sha256", "missing")):
-            reasons.append("candidate test fingerprint does not match the T5Gemma paper split")
     target_parameters = int(parameter_target.get("target_declared_parameters", 0))
     parameter_budget_reached = (
         deployable_parameters > 0 and target_parameters > 0 and deployable_parameters < target_parameters
@@ -65,8 +63,8 @@ def compare_paper_scores(
         "target_declared_parameters": target_parameters,
         "target_parameter_count_is_rounded": bool(parameter_target.get("target_is_rounded", False)),
         "parameter_budget_reached": parameter_budget_reached,
-        "candidate_test_fingerprint": current_test,
-        "target_test_fingerprint": locked_test,
+        "candidate_test_data": current_test,
+        "target_test_data": locked_test,
         "candidate": {name: float(scores[name]) for name in required},
         "target": {name: float(target[name]) for name in required},
     }

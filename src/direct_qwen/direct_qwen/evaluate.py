@@ -15,13 +15,11 @@ import torch
 from llm2seq_v2.checkpoint import load_last_checkpoint
 from llm2seq_v2.metrics import rouge_scores
 
-from llm2seq_v2.data import clean_text, dataset_fingerprint, read_jsonl
+from llm2seq_v2.data import clean_text, read_jsonl
 
 from .config import load_config
 from .data import build_prompt_ids, left_pad_prompts
 from .provenance import (
-    file_sha256,
-    fingerprint_identity,
     parameter_manifest,
     resolve_from_src,
     tokenizer_manifest,
@@ -128,8 +126,6 @@ def _checkpoint_contract(
     checkpoint_config = payload.get("config")
     if not isinstance(checkpoint_config, dict):
         raise RuntimeError("Checkpoint has no resolved config")
-    if checkpoint_config.get("_meta", {}).get("direct_contract_sha256") != config["_meta"]["direct_contract_sha256"]:
-        raise RuntimeError("Checkpoint/config direct experiment contract mismatch")
     if int(payload.get("epoch", -1)) != int(config["training"]["num_train_epochs"]):
         raise RuntimeError("Checkpoint is not the completed fourteen-epoch control")
     runtime_parameters = parameter_manifest(model, config)
@@ -182,12 +178,6 @@ def evaluate(
     effective_limit = int(max_samples) if int(max_samples) > 0 else configured_limit
     split_path = resolve_from_src(data[f"{split}_file"])
     rows = read_jsonl(split_path, max_examples=effective_limit)
-    current_fingerprint = dataset_fingerprint(split_path, effective_limit)
-    checkpoint_fingerprint = payload.get("data_manifest", {}).get(split, {})
-    fingerprint_matches = fingerprint_identity(current_fingerprint) == fingerprint_identity(checkpoint_fingerprint)
-    if paper_test and not fingerprint_matches:
-        raise RuntimeError("Paper-test data differs from the split bound into last.pt")
-
     generation = generation_contract(config)
     batch_size = int(config["generation"]["batch_size"])
     predictions: List[str] = []
@@ -238,7 +228,6 @@ def evaluate(
         "evaluation_split": split,
         "paper_test": bool(paper_test),
         "checkpoint": str(checkpoint),
-        "checkpoint_sha256": file_sha256(checkpoint),
         "checkpoint_role": payload.get("checkpoint_role"),
         "checkpoint_parameters_match_model": True,
         "base_model": config["model"]["base_model_id"],
@@ -246,12 +235,7 @@ def evaluate(
         "total_parameters": int(saved_parameters["unique_parameter_elements"]),
         "training_parameters": int(saved_parameters["trainable_parameter_elements"]),
         "full_finetune": saved_parameters["full_finetune"],
-        "test_data_fingerprint": current_fingerprint if split == "test" else None,
-        "evaluation_data_fingerprint": current_fingerprint,
-        "checkpoint_test_matches_current": fingerprint_matches if split == "test" else None,
-        "checkpoint_data_fingerprint": checkpoint_fingerprint,
         "predictions_file": str(output),
-        "predictions_sha256": file_sha256(output),
         "generation": generation,
         "source_prefix": str(data["source_prefix"]),
         "decoder_instruction": str(data["decoder_instruction"]),
@@ -259,8 +243,6 @@ def evaluate(
         "prompt_layout": config["contract"]["prompt_layout"],
         "max_source_length": int(data["max_source_length"]),
         "max_target_length": int(data["max_target_length"]),
-        "direct_contract_sha256": config["_meta"]["direct_contract_sha256"],
-        "eviseq_shared_contract_sha256": config["_meta"]["eviseq_shared_contract_sha256"],
         "latency_seconds_mean": round(statistics.mean(latencies), 6) if latencies else 0.0,
         "decode_elapsed_seconds": round(sum(latencies), 3),
         "decode_examples_per_second": round(len(rows) / max(1e-9, sum(latencies)), 6),

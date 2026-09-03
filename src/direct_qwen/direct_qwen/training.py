@@ -26,7 +26,6 @@ from .data import CausalCollator, DirectCausalDataset
 from .provenance import (
     audit_splits,
     data_manifest,
-    file_sha256,
     parameter_manifest,
     resolve_from_src,
     tokenizer_manifest,
@@ -350,7 +349,6 @@ def train(config_path: str, overwrite_output_dir: bool = False) -> Path:
 
         last_path = output_dir / "last.pt"
         save_last_checkpoint(model, last_path, config, epochs, global_step, manifests)
-        checkpoint_hash = file_sha256(last_path)
         marker.unlink(missing_ok=True)
         (output_dir / "COMPLETE").write_text(
             json.dumps(
@@ -359,7 +357,6 @@ def train(config_path: str, overwrite_output_dir: bool = False) -> Path:
                     "epoch": epochs,
                     "global_step": global_step,
                     "checkpoint_role": "last",
-                    "checkpoint_sha256": checkpoint_hash,
                 }
             ),
             encoding="utf-8",

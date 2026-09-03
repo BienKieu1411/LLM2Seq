@@ -29,8 +29,8 @@ PUBMED_CONFIG="$PROJECT_ROOT/configs/tasks/pubmed.yaml"
 ARXIV_CONFIG="$PROJECT_ROOT/configs/tasks/arxiv.yaml"
 PPLX_PUBMED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed.yaml"
 PCEB_PUBMED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_pceb.yaml"
-PCEB_PUBMED_POS4_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_pceb_pos4.yaml"
-PCEB_PUBMED_GATE20_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_pceb_gate20.yaml"
+PCEB_PUBMED_CORRECTED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_pceb_corrected.yaml"
+DUALBRIDGE_PUBMED_CONFIG="$PROJECT_ROOT/configs/models/pplx_pubmed_dualbridge.yaml"
 SMOKE_CONFIG="$PROJECT_ROOT/configs/tasks/smoke.yaml"
 
 absolute_path() {
@@ -44,7 +44,7 @@ absolute_path() {
 config_value() {
   "$PYTHON_BIN" - "$1" "$2" <<'PY'
 import sys
-from core.configuration import load_config
+from core.config import load_config
 value = load_config(sys.argv[1])
 for key in sys.argv[2].split('.'):
     value = value[key]
@@ -207,33 +207,17 @@ case "$MODE" in
   pceb-pubmed)
     train_and_validate "$PCEB_PUBMED_CONFIG" "$@"
     ;;
-  pceb-pubmed-pos4)
-    train_and_validate "$PCEB_PUBMED_POS4_CONFIG" "$@"
+  pceb-pubmed-corrected)
+    train_and_validate "$PCEB_PUBMED_CORRECTED_CONFIG" "$@"
     ;;
-  pceb-pubmed-gate20)
-    train_and_validate "$PCEB_PUBMED_GATE20_CONFIG" "$@"
+  dualbridge-pubmed)
+    train_and_validate "$DUALBRIDGE_PUBMED_CONFIG" "$@"
     ;;
   pceb-pubmed-ddp)
     train_and_validate_ddp "$PCEB_PUBMED_CONFIG" "$@"
     ;;
-  c0|c2|c3-no-cl)
-    case "$MODE" in
-      c0) ABLATION="c0_causal" ;;
-      c2) ABLATION="c2_dec2enc" ;;
-      c3-no-cl) ABLATION="c3_no_contrastive" ;;
-    esac
-    train_and_validate "$PROJECT_ROOT/configs/ablations/$ABLATION.yaml" "$@"
-    ;;
-  c1)
-    train_and_validate "$PROJECT_ROOT/configs/ablations/c1_full_attention.yaml" "$@"
-    ;;
   c3)
     train_and_validate "$WIKI_CONFIG" "$@"
-    ;;
-  ablation-all)
-    train_and_validate "$PROJECT_ROOT/configs/ablations/c0_causal.yaml" "$@"
-    train_and_validate "$PROJECT_ROOT/configs/ablations/c2_dec2enc.yaml" "$@"
-    train_and_validate "$PROJECT_ROOT/configs/ablations/c3_no_contrastive.yaml" "$@"
     ;;
   pplx)
     train_and_validate "$PROJECT_ROOT/configs/models/pplx_wikilingua.yaml" "$@"
@@ -269,11 +253,11 @@ case "$MODE" in
   evaluate-pceb-pubmed-test)
     evaluate_test "$PCEB_PUBMED_CONFIG" "$@"
     ;;
-  evaluate-pceb-pubmed-pos4-test)
-    evaluate_test "$PCEB_PUBMED_POS4_CONFIG" "$@"
+  evaluate-pceb-pubmed-corrected-test)
+    evaluate_test "$PCEB_PUBMED_CORRECTED_CONFIG" "$@"
     ;;
-  evaluate-pceb-pubmed-gate20-test)
-    evaluate_test "$PCEB_PUBMED_GATE20_CONFIG" "$@"
+  evaluate-dualbridge-pubmed-test)
+    evaluate_test "$DUALBRIDGE_PUBMED_CONFIG" "$@"
     ;;
   evaluate-test)
     CONFIG="${1:-$WIKI_CONFIG}"
@@ -327,9 +311,6 @@ EviSeq (runs directly from source; no local package install required)
   bash eviseq_v2/scripts/run.sh arxiv --overwrite-output-dir
   bash eviseq_v2/scripts/run.sh pplx --overwrite-output-dir
   bash eviseq_v2/scripts/run.sh nemotron --overwrite-output-dir
-  bash eviseq_v2/scripts/run.sh c0|c2|c3-no-cl --overwrite-output-dir
-  bash eviseq_v2/scripts/run.sh ablation-all --overwrite-output-dir
-  bash eviseq_v2/scripts/run.sh c1 --overwrite-output-dir
 
 Data and other datasets:
   bash eviseq_v2/scripts/run.sh prepare-cnndm /absolute/path/to/cnndm
@@ -340,6 +321,8 @@ Data and other datasets:
   bash eviseq_v2/scripts/run.sh arxiv --overwrite-output-dir
   bash eviseq_v2/scripts/run.sh pplx-pubmed --overwrite-output-dir
   bash eviseq_v2/scripts/run.sh pceb-pubmed --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh pceb-pubmed-corrected --overwrite-output-dir
+  bash eviseq_v2/scripts/run.sh dualbridge-pubmed --overwrite-output-dir
   CUDA_VISIBLE_DEVICES=0,1 bash eviseq_v2/scripts/run.sh \
     pceb-pubmed-ddp --overwrite-output-dir
 

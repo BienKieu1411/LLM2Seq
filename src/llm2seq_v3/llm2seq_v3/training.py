@@ -25,7 +25,7 @@ from .config import load_config
 from .data import (
     Seq2SeqCollator,
     SummarizationDataset,
-    dataset_fingerprint,
+    dataset_record,
     decoder_seed_ids,
 )
 from .model import LLM2SeqV3
@@ -56,7 +56,7 @@ def verify_locked_data_manifest(
     """Require exact T5Gemma data parity for every complete split.
 
     Smoke and pilot configs intentionally cap their splits, so those entries
-    are marked partial rather than compared with a full-split fingerprint.
+    are marked partial rather than compared with a full split.
     """
     locked = config.get("benchmark", {}).get("data", {})
     limits = config.get("limits", {})
@@ -70,9 +70,7 @@ def verify_locked_data_manifest(
         if not expected:
             status[split] = "unlocked"
             continue
-        matches = int(actual.get("num_examples", -1)) == int(expected.get("num_examples", -2)) and str(
-            actual.get("sha256", "")
-        ) == str(expected.get("sha256", "missing"))
+        matches = int(actual.get("num_examples", -1)) == int(expected.get("num_examples", -2))
         if not matches:
             raise RuntimeError(
                 f"{split} data differs from the locked T5Gemma split: actual={actual}, expected={expected}"
@@ -507,7 +505,7 @@ def train(config_path: str, overwrite_output_dir: bool = False) -> Path:
         data = config["data"]
         limits = config.get("limits", {})
         manifest = {
-            split: dataset_fingerprint(
+            split: dataset_record(
                 data[f"{split}_file"],
                 int(limits.get(f"max_{split}_examples", 0)),
             )

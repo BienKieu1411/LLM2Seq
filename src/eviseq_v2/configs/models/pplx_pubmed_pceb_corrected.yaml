@@ -1,0 +1,18 @@
+_base_: pplx_pubmed_pceb.yaml
+
+experiment:
+  name: eviseq_pubmed_pceb_pplx_0_6b_corrected
+  output_dir: runs/eviseq/pubmed_pceb_pplx_0_6b_corrected
+
+objectives:
+  bridge_geometry_weight: 0.0
+  bridge_geometry_max_units: 12
+  evidence_contrastive_attention_aligned: true
+  evidence_hard_negative_attention_boost: 0.15
+  prompt_conditioned_static_neutral_probe: true
+
+data:
+  evidence_label_field: label
+  use_external_evidence_labels: true
+  evidence_label_index_base: 0
+  source_prefix: ""

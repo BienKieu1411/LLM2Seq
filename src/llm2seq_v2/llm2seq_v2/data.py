@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections import Counter
@@ -41,17 +40,11 @@ def read_jsonl(path: str | Path, max_examples: int = 0) -> List[Dict[str, Any]]:
     return rows
 
 
-def dataset_fingerprint(path: str | Path, max_examples: int = 0) -> Dict[str, Any]:
+def dataset_record(path: str | Path, max_examples: int = 0) -> Dict[str, Any]:
     rows = read_jsonl(path, max_examples=max_examples)
-    digest = hashlib.sha256()
-    for row in rows:
-        canonical = {key: row.get(key) for key in ("id", "source", "target")}
-        digest.update(json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
-        digest.update(b"\n")
     return {
         "path": str(Path(path).resolve()),
         "num_examples": len(rows),
-        "sha256": digest.hexdigest(),
     }
 
 

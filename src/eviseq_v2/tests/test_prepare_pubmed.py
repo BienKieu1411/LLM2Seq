@@ -42,6 +42,7 @@ def test_prepare_pubmed_is_self_contained_and_deterministic(tmp_path: Path) -> N
         "id": "train-1",
         "source": "First biomedical train-1 sentence.\nSecond sentence.",
         "target": "First abstract sentence.\nConclusion.",
+        "label": [0, 1],
         "task": "summarization",
         "dataset": "pubmed",
     }
@@ -57,6 +58,20 @@ def test_prepare_pubmed_rejects_cross_split_id_leakage(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Cross-split content leakage.*duplicate ids"):
         prepare(source, tmp_path / "raw", tmp_path / "processed")
+
+
+def test_prepare_pubmed_prefers_article_id_when_generic_id_is_absent(tmp_path: Path) -> None:
+    source = tmp_path / "pubmed"
+    row = _source_row("unused")
+    row.pop("id")
+    row["article_id"] = "pmc-123"
+    _write(source / "train.label.jsonl", row)
+    _write(source / "val.label.jsonl", {**_source_row("val"), "article_id": "pmc-456"})
+    _write(source / "test.label.jsonl", {**_source_row("test"), "article_id": "pmc-789"})
+
+    prepare(source, tmp_path / "raw", tmp_path / "processed")
+    prepared = json.loads((tmp_path / "processed" / "train.jsonl").read_text(encoding="utf-8"))
+    assert prepared["id"] == "pmc-123"
 
 
 def test_prepare_pubmed_rejects_cross_split_source_leakage_with_different_ids(tmp_path: Path) -> None:

@@ -23,9 +23,9 @@ def _last_jsonl(path: Path) -> Dict[str, Any]:
     return rows[-1]
 
 
-def _fingerprint_key(metrics: Mapping[str, Any]) -> tuple[int, str]:
-    fingerprint = metrics.get("test_data_fingerprint", {})
-    return int(fingerprint.get("num_examples", -1)), str(fingerprint.get("sha256", ""))
+def _data_key(metrics: Mapping[str, Any]) -> int:
+    record = metrics.get("test_data_record", {})
+    return int(record.get("num_examples", -1))
 
 
 def compare_encoder_pilots(run_dirs: Mapping[str, Path]) -> Dict[str, Any]:
@@ -69,7 +69,7 @@ def compare_encoder_pilots(run_dirs: Mapping[str, Path]) -> Dict[str, Any]:
             "rouge2": float(metrics["rouge2"]),
             "rougeL": float(metrics["rougeL"]),
             "num_examples": int(metrics.get("num_examples", -1)),
-            "test_data_fingerprint": metrics.get("test_data_fingerprint", {}),
+            "test_data_record": metrics.get("test_data_record", {}),
             "rouge_backend": str(metrics.get("rouge_backend", "")),
             "deployable_parameters": int(metrics.get("deployable_parameters", 0)),
             "training_parameters": training_parameters,
@@ -89,7 +89,7 @@ def compare_encoder_pilots(run_dirs: Mapping[str, Path]) -> Dict[str, Any]:
     values = list(records.values())
     reference = values[0]
     comparability_gates = {
-        "same_test_fingerprint": all(_fingerprint_key(record) == _fingerprint_key(reference) for record in values[1:]),
+        "same_test_data": all(_data_key(record) == _data_key(reference) for record in values[1:]),
         "same_test_size": all(record["num_examples"] == reference["num_examples"] for record in values[1:]),
         "same_decoder": all(record["decoder_name"] == reference["decoder_name"] for record in values[1:]),
         "same_validation_scope": all(

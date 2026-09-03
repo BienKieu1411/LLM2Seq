@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.checkpoint
 
 from .attention import (
@@ -16,7 +17,6 @@ from .attention import (
     evidence_key_attention_bias,
     mix_attention_outputs,
     pool_units,
-    sdpa_mask,
 )
 
 
@@ -73,7 +73,12 @@ class NativeDualMaskQwenEncoder(nn.Module):
         self.variant = str(attention_config.get("variant", "evidence"))
         self.evidence_key_bias_scale = float(attention_config.get("evidence_key_bias_scale", 1.0))
         requested_future_layers = int(attention_config.get("bidirectional_layer_count", 6))
-        self.bidirectional_layer_count = min(max(0, requested_future_layers), self.num_hidden_layers)
+        if requested_future_layers < 0 or requested_future_layers > self.num_hidden_layers:
+            raise ValueError(
+                "native_attention.bidirectional_layer_count must be between 0 and "
+                f"the checkpoint depth ({self.num_hidden_layers}), got {requested_future_layers}"
+            )
+        self.bidirectional_layer_count = requested_future_layers
         self.first_bidirectional_layer = self.num_hidden_layers - self.bidirectional_layer_count
         self.attn_implementation = implementation
         self.gradient_checkpointing = bool(model_config.get("gradient_checkpointing", True))
@@ -120,7 +125,10 @@ class NativeDualMaskQwenEncoder(nn.Module):
         if unit_count is None:
             unit_count = int(unit_ids.max().item())
         units, valid = pool_units(self.evidence_norm(hidden_states), unit_ids, unit_count)
-        return self.evidence_head(units).squeeze(-1), valid
+        # Auxiliary heads keep FP32 master weights; cast only the compact
+        # pooled unit tensor so BF16/FP16 inference without autocast remains
+        # valid and numerically stable.
+        return self.evidence_head(units.float()).squeeze(-1), valid
 
     def _attention(
         self,
@@ -128,6 +136,7 @@ class NativeDualMaskQwenEncoder(nn.Module):
         hidden_states: torch.Tensor,
         position_embeddings: tuple[torch.Tensor, torch.Tensor],
         attention_mask: torch.Tensor,
+        padding_mask: Optional[torch.Tensor],
         causal_mask: Optional[torch.Tensor],
         layer_index: int,
         unit_ids: Optional[torch.Tensor],
@@ -146,28 +155,122 @@ class NativeDualMaskQwenEncoder(nn.Module):
         if interface is None:
             raise RuntimeError(f"Transformers has no attention interface {self.attn_implementation!r}")
 
+        def sdpa_direct(
+            backend_query: torch.Tensor,
+            backend_mask: Optional[torch.Tensor],
+            is_causal: bool,
+        ) -> torch.Tensor:
+            """Run SDPA without materialising a ``[B, Q, K]`` padding mask.
+
+            PyTorch does not allow ``attn_mask`` and ``is_causal`` together.
+            Right-padded causal batches therefore use the fused causal path
+            with no key mask: valid queries can never see right-padding, and
+            padded query outputs are removed after the layer.  A compact key
+            mask is reserved for noncausal views; irregular masks use the
+            dense fallback below.
+            """
+
+            repeats = backend_query.shape[1] // key.shape[1]
+            kwargs = {
+                "attn_mask": backend_mask,
+                "dropout_p": 0.0 if not self.training else float(attention.attention_dropout),
+                "is_causal": is_causal,
+                "scale": attention.scaling,
+            }
+
+            def run(
+                key_states: torch.Tensor,
+                value_states: torch.Tensor,
+                *,
+                enable_gqa: bool = False,
+                call_kwargs: Optional[Dict[str, Any]] = None,
+            ) -> torch.Tensor:
+                options = kwargs if call_kwargs is None else call_kwargs
+                if enable_gqa:
+                    return F.scaled_dot_product_attention(
+                        backend_query,
+                        key_states,
+                        value_states,
+                        enable_gqa=True,
+                        **options,
+                    )
+                return F.scaled_dot_product_attention(backend_query, key_states, value_states, **options)
+
+            def is_oom(error: RuntimeError) -> bool:
+                return "out of memory" in str(error).lower()
+
+            def dense_causal_kwargs() -> Dict[str, Any]:
+                if backend_mask is None or backend_mask.shape[-2] != 1:
+                    raise RuntimeError("Cannot construct a dense causal fallback for this SDPA mask")
+                query_length = backend_query.shape[-2]
+                key_length = backend_mask.shape[-1]
+                triangle = torch.ones(
+                    (query_length, key_length),
+                    dtype=torch.bool,
+                    device=backend_query.device,
+                ).tril()
+                allowed = backend_mask.bool() & triangle[None, None, :, :]
+                return {**kwargs, "attn_mask": allowed, "is_causal": False}
+
+            def causal_mask_error(error: RuntimeError) -> bool:
+                message = str(error).lower()
+                return (
+                    is_causal
+                    and backend_mask is not None
+                    and ("causal" in message or "attn_mask" in message or "is_causal" in message)
+                )
+
+            key_states, value_states = key, value
+            if repeats > 1:
+                try:
+                    attended = run(key_states, value_states, enable_gqa=True)
+                except TypeError:
+                    key_states = key_states.repeat_interleave(repeats, dim=1)
+                    value_states = value_states.repeat_interleave(repeats, dim=1)
+                    try:
+                        attended = run(key_states, value_states)
+                    except RuntimeError as error:
+                        if is_oom(error):
+                            raise
+                        if not causal_mask_error(error):
+                            raise
+                        attended = run(key_states, value_states, call_kwargs=dense_causal_kwargs())
+                except RuntimeError as error:
+                    if is_oom(error):
+                        raise
+                    key_states = key_states.repeat_interleave(repeats, dim=1)
+                    value_states = value_states.repeat_interleave(repeats, dim=1)
+                    try:
+                        attended = run(key_states, value_states)
+                    except RuntimeError as repeated_error:
+                        if is_oom(repeated_error):
+                            raise
+                        if not causal_mask_error(repeated_error):
+                            raise
+                        attended = run(key_states, value_states, call_kwargs=dense_causal_kwargs())
+            else:
+                try:
+                    attended = run(key_states, value_states)
+                except RuntimeError as error:
+                    if is_oom(error):
+                        raise
+                    if not causal_mask_error(error):
+                        raise
+                    attended = run(key_states, value_states, call_kwargs=dense_causal_kwargs())
+            return attended.transpose(1, 2).contiguous()
+
         def attend(is_causal: bool, backend_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
             if self.attn_implementation == "flash_attention_2":
                 if backend_mask is not None:
                     raise RuntimeError("Evidence-key routing requires the supported SDPA attention backend")
                 backend_mask = attention_mask if not bool(attention_mask.bool().all()) else None
-            elif backend_mask is None:
-                # The causal mask is prepared once per encoder forward.  For
-                # dense (usually 4096-token) batches it is None, allowing
-                # PyTorch SDPA to dispatch through its is_causal Flash kernel.
-                # The old path materialised a BxSxS triangle in every layer.
-                backend_mask = (
-                    causal_mask
-                    if is_causal
-                    else sdpa_mask(
-                        attention_mask,
-                        False,
-                        hidden_states.shape[1],
-                    )
-                )
+            elif backend_mask is None and not (is_causal and causal_mask is None):
+                backend_mask = padding_mask
             if backend_mask is not None and backend_mask.requires_grad:
                 backend_mask = align_trainable_sdpa_bias_heads(backend_mask, query.shape[1])
             backend_query = ensure_sdpa_lse_for_bias_backward(query, key, value, backend_mask)
+            if self.attn_implementation == "sdpa":
+                return sdpa_direct(backend_query, backend_mask, is_causal)
             output, _ = interface(
                 attention,
                 backend_query,
@@ -225,6 +328,7 @@ class NativeDualMaskQwenEncoder(nn.Module):
         hidden_states: torch.Tensor,
         position_embeddings: tuple[torch.Tensor, torch.Tensor],
         attention_mask: torch.Tensor,
+        padding_mask: Optional[torch.Tensor],
         causal_mask: Optional[torch.Tensor],
         unit_ids: Optional[torch.Tensor],
         unit_count: Optional[int],
@@ -237,6 +341,7 @@ class NativeDualMaskQwenEncoder(nn.Module):
             normalized,
             position_embeddings,
             attention_mask,
+            padding_mask,
             causal_mask,
             layer_index,
             unit_ids,
@@ -258,15 +363,10 @@ class NativeDualMaskQwenEncoder(nn.Module):
         position_embeddings = self.core.rotary_emb(hidden_states, position_ids)
         unit_count = int(unit_ids.max().item()) if unit_ids is not None else None
         all_tokens_valid = bool(attention_mask.bool().all())
-        causal_mask = (
-            None
-            if all_tokens_valid
-            else sdpa_mask(
-                attention_mask,
-                True,
-                hidden_states.shape[1],
-            )
-        )
+        mask = attention_mask.bool()
+        has_reentry = bool((~mask[:, :-1] & mask[:, 1:]).any()) if mask.shape[1] > 1 else False
+        padding_mask = None if all_tokens_valid else mask[:, None, None, :]
+        causal_mask = None if all_tokens_valid or not has_reentry else padding_mask
         for index, layer in enumerate(self.core.layers[: self.num_hidden_layers]):
             if self.gradient_checkpointing and self.training and torch.is_grad_enabled():
 
@@ -276,6 +376,7 @@ class NativeDualMaskQwenEncoder(nn.Module):
                         states,
                         position_embeddings,
                         attention_mask,
+                        padding_mask,
                         causal_mask,
                         unit_ids,
                         unit_count,
@@ -289,6 +390,7 @@ class NativeDualMaskQwenEncoder(nn.Module):
                     hidden_states,
                     position_embeddings,
                     attention_mask,
+                    padding_mask,
                     causal_mask,
                     unit_ids,
                     unit_count,
@@ -309,16 +411,32 @@ class NativeDualMaskQwenEncoder(nn.Module):
         return EncoderOutput(memory, logits, valid, gate)
 
     def set_trainable(self, trainable: bool) -> None:
+        """Set the backbone and only the auxiliary controls used by ``variant``.
+
+        ``_run_stage`` wraps EviSeq in DDP with ``find_unused_parameters=False``.
+        Keeping a control parameter trainable when its attention branch is not
+        executed (for example ``generic_token_gate`` for ``evidence`` or the
+        bidirectional gate for ``full``/``causal``) leaves a permanently
+        unused parameter in the reducer.  That is not merely wasted optimizer
+        state: a multi-GPU run can fail at the next iteration with an
+        unfinished reduction.  The evidence norm/head are always live because
+        they produce the bridge salience logits; the two attention controls are
+        enabled only for the branches that consume them.
+        """
         for parameter in self.model.parameters():
             parameter.requires_grad = bool(trainable)
-        for module in (self.evidence_norm, self.evidence_head, self.generic_token_gate):
+        for module in (self.evidence_norm, self.evidence_head):
             for parameter in module.parameters():
                 parameter.requires_grad = True
-        self.evidence_view_gate.requires_grad = True
+        generic_is_live = self.variant == "dec2enc"
+        for parameter in self.generic_token_gate.parameters():
+            parameter.requires_grad = generic_is_live
+        evidence_gate_is_live = self.variant in {"evidence", "dec2enc"}
+        self.evidence_view_gate.requires_grad = evidence_gate_is_live
 
 
 class PretrainedNativeEncoder(nn.Module):
-    """Token-memory path for PPLX/Nemotron comparison in the same final graph."""
+    """Token-memory path for pretrained encoder backends."""
 
     def __init__(self, config: Dict[str, Any], dtype: torch.dtype):
         super().__init__()
@@ -373,7 +491,7 @@ class PretrainedNativeEncoder(nn.Module):
             logits, valid = None, None
         else:
             units, valid = pool_units(self.evidence_norm(memory), unit_ids, int(unit_ids.max().item()))
-            logits = self.evidence_head(units).squeeze(-1)
+            logits = self.evidence_head(units.float()).squeeze(-1)
         return EncoderOutput(memory, logits, valid, memory.float().new_zeros(()))
 
     def set_trainable(self, trainable: bool) -> None:

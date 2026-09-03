@@ -1,21 +1,23 @@
-# Data
+# PubMed data
 
-Dataset files are JSONL: one JSON object per line. Field names are configured
-in YAML, so users do not need to rewrite their data to `source` and `target`.
+The built-in runner reads three JSONL files:
 
-Supported mapping options:
+- `datasets/pubmed/train.jsonl`
+- `datasets/pubmed/validation.jsonl`
+- `datasets/pubmed/test.jsonl`
 
-- `source_field`, `target_field`, `id_field`;
-- `source_template`, `target_template` for combining several top-level fields;
-- `list_separator` for list-valued fields.
+Each row uses the fixed fields `id`, `source`, `target` and, for the PCEB
+objective, a zero-based `label` list containing the selected source-sentence
+indices.
 
-Run `eviseq validate-data --config CONFIG.yaml` before training to verify the
-configured splits and print their sizes. Train and validation are required;
-test is optional.
-
-The CNN/DailyMail and PubMed conversion helpers remain available:
+Prepare the files from a local PubMed source directory with:
 
 ```bash
-bash eviseq/scripts/run.sh prepare-cnndm /absolute/path/to/cnndm
-bash eviseq/scripts/run.sh prepare-pubmed /absolute/path/to/pubmed
+bash ../scripts/run.sh prepare-pubmed /absolute/path/to/pubmed
+```
+
+Then verify the splits with:
+
+```bash
+bash ../scripts/run.sh validate-data
 ```

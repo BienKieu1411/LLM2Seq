@@ -16,6 +16,7 @@ _RUNTIME_DATA_FIELDS = (
     "id_field",
     "source_template",
     "target_template",
+    "record_mapper",
     "list_separator",
     "source_prefix",
     "sentence_separator",
@@ -32,23 +33,62 @@ _RUNTIME_GENERATION_FIELDS = (
     "repetition_penalty",
     "no_repeat_ngram_size",
 )
+_RUNTIME_DECODER_FIELDS = (
+    "cross_attention_every",
+    "initialize_cross_from_self",
+    "cross_gate_init",
+    "cross_attention_dropout",
+)
+_RUNTIME_OBJECTIVE_FIELDS = (
+    "use_contrastive",
+    "contrastive_pooling",
+    "use_evidence_contrastive",
+    "evidence_contrastive_mode",
+    "evidence_contrastive_attention_aligned",
+    "prompt_conditioned_inference_bridge",
+    "prompt_bridge_dynamic_logit_scale",
+    "prompt_bridge_dynamic_logit_clip",
+    "prompt_bridge_source_probe_layers",
+    "prompt_conditioned_static_neutral_probe",
+    "use_source_swap",
+    "source_swap_strategy",
+)
+
+
+def _runtime_objectives(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Return inference-relevant objective settings with stable defaults."""
+
+    objectives = dict(config.get("objectives", {}))
+    defaults = {
+        "use_contrastive": False,
+        "contrastive_pooling": "mean_last",
+        "use_evidence_contrastive": True,
+        "evidence_contrastive_mode": "document",
+        "evidence_contrastive_attention_aligned": False,
+        "prompt_conditioned_inference_bridge": False,
+        "prompt_bridge_dynamic_logit_scale": 1.0,
+        "prompt_bridge_dynamic_logit_clip": 2.0,
+        "prompt_bridge_source_probe_layers": 2,
+        "prompt_conditioned_static_neutral_probe": False,
+        "use_source_swap": False,
+        "source_swap_strategy": "hard_in_batch",
+    }
+    for name, default in defaults.items():
+        objectives.setdefault(name, default)
+    return {name: objectives[name] for name in _RUNTIME_OBJECTIVE_FIELDS}
 
 
 def evaluation_config_fingerprint(config: Dict[str, Any]) -> str:
-    """Stable fingerprint for fields that change a checkpoint's decoded output.
+    """Stable serialized key for fields that change decoded checkpoint output.
 
     Batch size and dataset split deliberately do not participate.  In
     contrast, source serialization, model graph, and greedy constraints must
-    agree with the checkpoint's resolved configuration.
+    agree with the checkpoint's saved run definition.
     """
 
     data = config.get("data", {})
     generation = config.get("generation", {})
     bridge = dict(config.get("bridge", {}))
-    # ``trainable_identity_projection: false`` is an identity graph and was
-    # absent from checkpoints created before the option existed.  Canonicalize
-    # that default so old identity-bridge checkpoints remain evaluable while
-    # a real bridge-projection mismatch still fails closed.
     bridge.setdefault("trainable_identity_projection", False)
     bridge.setdefault("salience_gate_parameterization", "signed_tanh")
     bridge.setdefault("salience_length_normalization", "legacy_gated")
@@ -56,15 +96,16 @@ def evaluation_config_fingerprint(config: Dict[str, Any]) -> str:
         "model": config.get("model", {}),
         "native_attention": config.get("native_attention", {}),
         "bridge": bridge,
-        "decoder": config.get("decoder", {}),
+        "decoder": {name: config.get("decoder", {}).get(name) for name in _RUNTIME_DECODER_FIELDS},
         "data": {name: data.get(name) for name in _RUNTIME_DATA_FIELDS},
         "generation": {name: generation.get(name) for name in _RUNTIME_GENERATION_FIELDS},
+        "objectives": _runtime_objectives(config),
     }
     return json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def assert_evaluation_config_matches_checkpoint(payload: Dict[str, Any], config: Dict[str, Any]) -> None:
-    """Fail closed when inference would use a different model/task protocol."""
+    """Fail closed when inference would use a different PubMed protocol."""
 
     saved = payload.get("config")
     if not isinstance(saved, dict):
@@ -176,8 +217,8 @@ def save_configured_epoch_checkpoints(
     if improved:
         best_path = directory / "best.pt"
         save_best_checkpoint(model, best_path, config, epoch, global_step)
-        model._best_checkpoint_value = current  # type: ignore[attr-defined]
-        model._best_checkpoint_epoch = int(epoch)  # type: ignore[attr-defined]
+        model._best_checkpoint_value = current
+        model._best_checkpoint_epoch = int(epoch)
         result.update(
             {
                 "best_path": str(best_path),

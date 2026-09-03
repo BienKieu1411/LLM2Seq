@@ -1,8 +1,0 @@
-_base_: ../tasks/wikilingua.yaml
-
-experiment:
-  name: eviseq_c0_causal
-  output_dir: runs/eviseq/ablations/c0_causal
-
-native_attention:
-  variant: causal

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import importlib
-import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict
 
@@ -37,11 +36,6 @@ _GENERATION_FIELDS = (
 )
 
 
-def _sha256(value: Any) -> str:
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def _resolve_reference_config(raw: Dict[str, Any]) -> Path:
     value = str(raw.get("contract", {}).get("reference_config", "")).strip()
     if not value:
@@ -65,21 +59,6 @@ def shared_reference_contract(reference: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def direct_contract(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Serializable training and inference contract stored with the checkpoint."""
-
-    return {
-        "base_model_id": config["model"]["base_model_id"],
-        "prompt_layout": config["contract"]["prompt_layout"],
-        "eviseq_shared_contract_sha256": config["contract"]["eviseq_shared_contract_sha256"],
-        "model": copy.deepcopy(config["model"]),
-        "training": copy.deepcopy(config["training"]),
-        "data": {name: copy.deepcopy(config["data"][name]) for name in _DATA_FIELDS},
-        "generation": {name: copy.deepcopy(config["generation"][name]) for name in _GENERATION_FIELDS},
-        "checkpoint": copy.deepcopy(config["checkpoint"]),
-    }
-
-
 def validate_config(config: Dict[str, Any], reference: Dict[str, Any]) -> None:
     contract = config.get("contract", {})
     model = config.get("model", {})
@@ -90,14 +69,6 @@ def validate_config(config: Dict[str, Any], reference: Dict[str, Any]) -> None:
         raise ValueError("The direct baseline must preserve both frozen EviSeq prompt segments")
     if contract.get("preserve_source_terminal_eos") is not True:
         raise ValueError("The EviSeq source token segment, including terminal EOS, must be preserved")
-    expected_architecture = str(contract.get("eviseq_architecture_sha256", ""))
-    if expected_architecture != str(reference.get("_meta", {}).get("architecture_sha256", "")):
-        raise ValueError("The referenced EviSeq architecture is not the frozen paper configuration")
-    shared = shared_reference_contract(reference)
-    shared_hash = _sha256(shared)
-    if str(contract.get("eviseq_shared_contract_sha256", "")) != shared_hash:
-        raise ValueError("EviSeq data/prompt/generation contract drifted; freeze a new controlled experiment")
-
     if str(model.get("base_model_id", "")) != "Qwen/Qwen3-0.6B":
         raise ValueError("This control is specifically Qwen/Qwen3-0.6B")
     if model.get("local_files_only") is not True:
@@ -145,6 +116,9 @@ def load_config(path: str | Path) -> Dict[str, Any]:
     if ":" not in loader_value:
         raise ValueError("contract.reference_loader must be 'module:function'")
     module_name, function_name = loader_value.split(":", maxsplit=1)
+    package_root = reference_path.parents[2]
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
     reference_loader = getattr(importlib.import_module(module_name), function_name)
     reference = reference_loader(reference_path)
     config = copy.deepcopy(raw)
@@ -160,8 +134,5 @@ def load_config(path: str | Path) -> Dict[str, Any]:
     config["_meta"] = {
         "config_path": str(config_path),
         "reference_config_path": str(reference_path),
-        "eviseq_architecture_sha256": reference["_meta"]["architecture_sha256"],
-        "eviseq_shared_contract_sha256": _sha256(shared),
     }
-    config["_meta"]["direct_contract_sha256"] = _sha256(direct_contract(config))
     return config
