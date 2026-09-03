@@ -7,8 +7,8 @@ import json
 import logging
 from typing import Any, Dict
 
-from .data.dataset import read_jsonl
 from .config import load_config, resolve_data_path
+from .data.dataset import read_jsonl
 
 
 def _add_train(subparsers: Any) -> None:

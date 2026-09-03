@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Run the current PubMed PCEB main recipe.
+# Run the current PubMed DualBridge recipe.
 # Training runs teacher-forced validation loss to preserve best.pt, but never
 # generates validation summaries; each run is decoded directly on test once
 # from last.pt.  The test score is exploratory until the final ROUGE-1.5.5
@@ -18,9 +18,6 @@ export PYTHONUNBUFFERED=1
 export HF_HUB_DISABLE_TELEMETRY=1
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
-# The supplied PubMed label files may intentionally reuse records/IDs across
-# splits.  Permit conversion to continue on this supplied benchmark copy;
-# export EVISEQ_ALLOW_CROSS_SPLIT_CONTENT=false to restore the strict gate.
 export EVISEQ_ALLOW_CROSS_SPLIT_CONTENT="${EVISEQ_ALLOW_CROSS_SPLIT_CONTENT:-true}"
 export PYROUGE_HOME_DIR="${PYROUGE_HOME_DIR:-/workspace/storage-shared/nlp/dungdx4/textsum_platform_eval/pyrouge-master/tools/ROUGE-1.5.5}"
 
@@ -30,7 +27,7 @@ else
   PYTHON_BIN="${PYTHON_BIN:-python3}"
 fi
 
-CONFIG="${EVISEQ_CONFIG:-configs/models/pplx_pubmed_pceb.yaml}"
+CONFIG="${EVISEQ_CONFIG:-configs/models/pplx_pubmed_dualbridge.yaml}"
 PUBMED_SOURCE_DIR="${PUBMED_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/datasets/pubmed}"
 PROCESSED_DATA_DIR="datasets/pubmed"
 
@@ -44,7 +41,7 @@ mkdir -p logs/gpu_queues
 LOG_FILE="logs/gpu_queues/gpu_0_pubmed_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "${LOG_FILE}") 2>&1
 
-echo "=== GPU 0: PCEB PubMed (PPLX 0.6B -> Qwen3 0.6B) ==="
+echo "=== GPU 0: DualBridge PubMed (PPLX 0.6B -> Qwen3 0.6B) ==="
 echo "=== CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ==="
 echo "=== Config: ${CONFIG} ==="
 echo "=== EVISEQ_ALLOW_CROSS_SPLIT_CONTENT=${EVISEQ_ALLOW_CROSS_SPLIT_CONTENT} ==="
