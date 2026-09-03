@@ -24,7 +24,13 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 export EVISEQ_ALLOW_CROSS_SPLIT_CONTENT="${EVISEQ_ALLOW_CROSS_SPLIT_CONTENT:-true}"
 export PYROUGE_HOME_DIR="${PYROUGE_HOME_DIR:-/workspace/storage-shared/nlp/dungdx4/textsum_platform_eval/pyrouge-master/tools/ROUGE-1.5.5}"
 
-EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-8}"
+if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+  PYTHON_BIN="${PYTHON_BIN:-${VIRTUAL_ENV}/bin/python}"
+else
+  PYTHON_BIN="${PYTHON_BIN:-python3}"
+fi
+
+CONFIG="${EVISEQ_CONFIG:-configs/models/pplx_pubmed_pceb.yaml}"
 PUBMED_SOURCE_DIR="${PUBMED_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/datasets/pubmed}"
 PROCESSED_DATA_DIR="datasets/pubmed"
 
@@ -40,6 +46,7 @@ exec > >(tee -a "${LOG_FILE}") 2>&1
 
 echo "=== GPU 0: PCEB PubMed (PPLX 0.6B -> Qwen3 0.6B) ==="
 echo "=== CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ==="
+echo "=== Config: ${CONFIG} ==="
 echo "=== EVISEQ_ALLOW_CROSS_SPLIT_CONTENT=${EVISEQ_ALLOW_CROSS_SPLIT_CONTENT} ==="
 echo "=== PYROUGE_HOME_DIR=${PYROUGE_HOME_DIR} ==="
 echo "=== Log: ${LOG_FILE} ==="
@@ -61,18 +68,24 @@ fi
 
 run_and_score() {
   local config="$1"
-  local run_dir="$2"
+  local run_dir
+  run_dir="$("${PYTHON_BIN}" - "$config" <<'PY'
+import sys
+
+from core.config import load_config
+
+print(load_config(sys.argv[1])["experiment"]["output_dir"])
+PY
+)"
   local predictions="${run_dir}/last_test_predictions.jsonl"
 
   echo "=== Training ${config}; saving best.pt by validation loss (no valid predictions) ==="
   bash scripts/run.sh train "${config}" --overwrite-output-dir
   echo "=== Evaluating last.pt directly on the test split ==="
-  bash scripts/run.sh evaluate-test "${config}" --batch-size "${EVAL_BATCH_SIZE}"
+  bash scripts/run.sh evaluate-test "${config}"
   bash scripts/run.sh rouge155 "${PROJECT_ROOT}/${predictions}" --details
 }
 
-run_and_score \
-  configs/models/pplx_pubmed_pceb.yaml \
-  runs/eviseq/pubmed_pceb_pplx_0_6b
+run_and_score "${CONFIG}"
 
 echo "=== GPU 0 PubMed queue completed successfully ==="
