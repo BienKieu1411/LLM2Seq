@@ -108,7 +108,8 @@ class QwenCopiedCrossAttention(nn.Module):
                 or key.dtype != query.dtype
                 or value.dtype != query.dtype
             ):
-                raise RuntimeError("Stale cross-attention cache; rebuild it for the current source batch")
+                key, value = self._project_memory(encoder_hidden_states)
+                self._memory_cache = (key, value)
         source_length = key.shape[-2]
         if value.shape[-2] != source_length or key.shape[-1] != self.head_dim or value.shape[-1] != self.head_dim:
             raise RuntimeError("Cross-attention K/V cache has an incompatible shape")
