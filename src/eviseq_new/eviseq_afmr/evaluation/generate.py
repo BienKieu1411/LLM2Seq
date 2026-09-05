@@ -13,10 +13,20 @@ def _apply_repetition_penalty(scores: torch.Tensor, token_ids: torch.Tensor, pen
     """Match Transformers' RepetitionPenaltyLogitsProcessor for greedy decode."""
     if penalty == 1.0:
         return
-    for row in range(token_ids.shape[0]):
-        seen = token_ids[row].unique()
-        values = scores[row, seen]
-        scores[row, seen] = torch.where(values < 0, values * penalty, values / penalty)
+    values = scores.gather(1, token_ids)
+    scores.scatter_(1, token_ids, torch.where(values < 0, values * penalty, values / penalty))
+
+
+def _apply_no_repeat_ngram(scores: torch.Tensor, token_ids: torch.Tensor, ngram_size: int) -> None:
+    if ngram_size <= 0 or token_ids.shape[1] < ngram_size:
+        return
+    ngrams = token_ids.unfold(1, ngram_size, 1)
+    if ngram_size == 1:
+        matches = torch.ones_like(ngrams[..., -1], dtype=torch.bool)
+    else:
+        matches = (ngrams[..., :-1] == token_ids[:, None, -(ngram_size - 1) :]).all(-1)
+    penalties = torch.zeros_like(matches, dtype=scores.dtype).masked_fill(matches, -float("inf"))
+    scores.scatter_add_(1, ngrams[..., -1], penalties)
 
 
 def _no_repeat_ngram_tokens(token_ids: torch.Tensor, ngram_size: int) -> list[list[int]]:
@@ -46,6 +56,7 @@ def generate_greedy(
     min_new_tokens: int = 0,
     repetition_penalty: float = 1.0,
     no_repeat_ngram_size: int = 0,
+    compact_finished: bool = True,
 ) -> tuple[list[str], torch.Tensor]:
     if repetition_penalty <= 0:
         raise ValueError("repetition_penalty must be positive")
@@ -73,29 +84,36 @@ def generate_greedy(
     past = None
     finished = torch.zeros(token_ids.shape[0], dtype=torch.bool, device=token_ids.device)
     model.decoder.eval()
-    model.decoder.prepare_cross_cache(bridge.memory)
+    active_rows = torch.arange(token_ids.shape[0], device=token_ids.device)
+    memory, memory_mask, source_bias = bridge.memory, bridge.memory_mask, bridge.source_bias
     try:
+        model.decoder.prepare_cross_cache(memory)
         for step in range(max_new_tokens):
-            current = token_ids if past is None else token_ids[:, -1:]
+            history = token_ids.index_select(0, active_rows)
+            current = history if past is None else history[:, -1:]
             logits, past, _ = model.decoder(
                 current,
-                bridge.memory,
-                bridge.memory_mask,
-                bridge.source_bias,
-                decode_mask,
+                memory,
+                memory_mask,
+                source_bias,
+                decode_mask.index_select(0, active_rows),
                 past_key_values=past,
                 use_cache=True,
             )
             scores = logits[:, -1].float()
-            _apply_repetition_penalty(scores, token_ids, float(repetition_penalty))
-            for row, banned in enumerate(_no_repeat_ngram_tokens(token_ids, int(no_repeat_ngram_size))):
-                if banned:
-                    scores[row, torch.tensor(banned, device=scores.device)] = -float("inf")
+            _apply_repetition_penalty(scores, history, float(repetition_penalty))
+            _apply_no_repeat_ngram(scores, history, int(no_repeat_ngram_size))
             eos = getattr(tokenizer, "eos_token_id", None)
             if step < min_new_tokens:
                 if eos is not None:
                     scores[:, int(eos)] = -float("inf")
-            next_token = scores.argmax(dim=-1)
+            next_token = torch.full(
+                (token_ids.shape[0],),
+                int(getattr(tokenizer, "pad_token_id", 0) or 0),
+                device=token_ids.device,
+                dtype=token_ids.dtype,
+            )
+            next_token[active_rows] = scores.argmax(dim=-1)
             next_token = torch.where(finished, int(getattr(tokenizer, "pad_token_id", 0) or 0), next_token)
             decode_mask = torch.cat((decode_mask, (~finished)[:, None]), dim=1)
             if eos is not None:
@@ -103,6 +121,20 @@ def generate_greedy(
             token_ids = torch.cat((token_ids, next_token[:, None]), dim=1)
             if eos is not None and step >= min_new_tokens and bool(finished.all()):
                 break
+            if (
+                compact_finished
+                and eos is not None
+                and hasattr(past, "batch_select_indices")
+                and hasattr(model.decoder, "select_cross_cache")
+            ):
+                surviving = (~finished.index_select(0, active_rows)).nonzero(as_tuple=True)[0]
+                if surviving.numel() != active_rows.numel():
+                    past.batch_select_indices(surviving)
+                    model.decoder.select_cross_cache(surviving)
+                    active_rows = active_rows.index_select(0, surviving)
+                    memory = memory.index_select(0, surviving)
+                    memory_mask = memory_mask.index_select(0, surviving)
+                    source_bias = source_bias.index_select(0, surviving)
     finally:
         model.decoder.clear_cross_cache()
     texts = tokenizer.batch_decode(token_ids[:, batch["decoder_prompt_ids"].shape[1] :], skip_special_tokens=True)

@@ -138,6 +138,55 @@ All local verification uses tiny random backbones with network disabled, includi
 
 For bundled `configs/*.yaml`, relative data/output paths are rooted at `eviseq_new/`, independent of the calling directory or whether files already exist. An external YAML resolves relative paths against its own directory. At encoder/decoder hidden size 1024, the main AFMR bridge contains 1,981,446 parameters; this excludes both pretrained backbones and the copied decoder cross-attention. Token-wise depth selection adds 1,024 parameters over the previous document-wise graph and does not stack a second full-depth memory tensor.
 
+## Performance controls
+
+Training speed controls in the base recipe enable length bucketing, eight data
+workers, persistent workers, CUDA fused AdamW, and TF32 FP32 matrix products.
+Bucketing uses JSONL record byte lengths collected during the existing offset
+scan as an inexpensive length proxy. It does not tokenize or cache the corpus
+in RAM. Each example is visited once per epoch, including the final partial
+batch; batches are reshuffled deterministically by seed and epoch. Changing
+batch composition changes the training trajectory even though the objective is
+unchanged. TF32 can be disabled with `training.tf32: false` for full FP32
+matrix-product precision; the backbones retain their configured dtype.
+
+The chunked LM head now processes only non-ignored labels. Its CE and gradients
+match the full-logit path in regression tests. `decoder.ce_chunk_size: 1024`
+reduces chunk/recomputation overhead relative to 256 while keeping a bounded
+logit allocation. Set it to 256 if the larger chunk exceeds the memory budget.
+These settings do not change checkpoint architecture compatibility.
+
+Greedy evaluation applies repetition and n-gram constraints with tensor
+operations on the model device. `generation.compact_finished: true` removes
+finished rows from both self-attention and cross-attention KV caches, and
+restores predictions to their original row order. Cache implementations without
+batch selection automatically retain the full batch. Generation does not
+tokenize references. JSONL append/resume and CUDA OOM splitting remain active.
+Compaction and TF32 may change floating-point rounding on GPUs; use
+`compact_finished: false` and `tf32: false` for a controlled parity comparison.
+
+To use the data-loader improvements with an older external/resolved config,
+add the following keys to its existing sections (do not duplicate sections):
+
+```yaml
+training:
+  length_bucketing: true
+  length_bucket_multiplier: 50
+  num_workers: 8
+  persistent_workers: true
+  fused_optimizer: true
+  tf32: true
+decoder:
+  ce_chunk_size: 1024
+generation:
+  compact_finished: true
+```
+
+An already running Python process needs a restart to use updated code. Existing
+AFMR checkpoints can resume at the next epoch through `--resume-checkpoint`.
+GPU speedups must be measured on the actual B200, model paths, and batch shapes;
+offline tiny-model correctness tests are not hardware performance benchmarks.
+
 ## Package layout
 
 ```text

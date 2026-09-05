@@ -45,4 +45,7 @@ def build_optimizer(model: torch.nn.Module, config: dict[str, Any], stage: str) 
         groups[key]["params"].append(parameter)
     if not groups:
         raise ValueError(f"No trainable parameters for stage {stage}")
-    return torch.optim.AdamW(list(groups.values()), betas=(0.9, 0.95), eps=1e-8)
+    fused = bool(training.get("fused_optimizer", True)) and all(
+        parameter.device.type == "cuda" for group in groups.values() for parameter in group["params"]
+    )
+    return torch.optim.AdamW(list(groups.values()), betas=(0.9, 0.95), eps=1e-8, fused=fused)

@@ -30,6 +30,7 @@ def test_diagnostic_backend_matches_installed_rouge():
 def test_greedy_constraints_match_transformers_processors():
     import torch
     from eviseq_afmr.evaluation.generate import (
+        _apply_no_repeat_ngram,
         _apply_repetition_penalty,
         _no_repeat_ngram_tokens,
     )
@@ -46,3 +47,72 @@ def test_greedy_constraints_match_transformers_processors():
         expected_scores = NoRepeatNGramLogitsProcessor(ngram_size)(token_ids, scores.clone())
         expected_banned = [torch.where(row == -float("inf"))[0].tolist() for row in expected_scores]
         assert _no_repeat_ngram_tokens(token_ids, ngram_size) == expected_banned
+        actual = scores.clone()
+        _apply_no_repeat_ngram(actual, token_ids, ngram_size)
+        torch.testing.assert_close(actual, expected_scores)
+
+
+def test_finished_rows_are_removed_without_changing_greedy_tokens():
+    from types import SimpleNamespace
+
+    import torch
+    from eviseq_afmr.evaluation.generate import generate_greedy
+    from eviseq_afmr.runtime import _TinyTokenizer
+
+    class Cache:
+        def batch_select_indices(self, indices):
+            pass
+
+    class Decoder:
+        def __init__(self):
+            self.sizes = []
+
+        def eval(self):
+            pass
+
+        def prepare_cross_cache(self, memory):
+            self.cached = memory.clone()
+
+        def clear_cross_cache(self):
+            self.cached = None
+
+        def select_cross_cache(self, indices):
+            self.cached = self.cached.index_select(0, indices)
+
+        def __call__(self, tokens, memory, mask, bias, decode_mask, **kwargs):
+            self.sizes.append(tokens.shape[0])
+            torch.testing.assert_close(memory, self.cached)
+            stop = decode_mask.sum(-1) >= memory[:, 0, 0]
+            selected = torch.where(stop, 2, 3)
+            scores = torch.zeros(tokens.shape[0], 1, 4)
+            scores[:, 0].scatter_(1, selected[:, None], 10.0)
+            return scores, Cache(), None
+
+    class Model:
+        def __init__(self):
+            self.decoder = Decoder()
+
+        def eval(self):
+            pass
+
+        def encode_source(self, *args):
+            return SimpleNamespace(
+                memory=torch.tensor([1.0, 3.0, 5.0]).reshape(3, 1, 1),
+                memory_mask=torch.ones(3, 1, dtype=torch.bool),
+                source_bias=torch.zeros(3, 1),
+            )
+
+    batch = {
+        "input_ids": torch.ones(3, 2, dtype=torch.long),
+        "attention_mask": torch.ones(3, 2),
+        "source_content_mask": torch.ones(3, 2),
+        "decoder_prompt_ids": torch.ones(3, 1, dtype=torch.long),
+        "decoder_prompt_mask": torch.ones(3, 1),
+    }
+    baseline, optimized = Model(), Model()
+    _, expected = generate_greedy(baseline, batch, _TinyTokenizer(), 8, compact_finished=False)
+    _, actual = generate_greedy(optimized, batch, _TinyTokenizer(), 8, compact_finished=True)
+    torch.testing.assert_close(actual, expected)
+    assert optimized.decoder.sizes == [3, 2, 2, 1, 1]
+    assert baseline.decoder.sizes == [3] * 5
+    assert optimized.decoder.cached is None

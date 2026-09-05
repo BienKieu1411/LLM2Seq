@@ -212,6 +212,9 @@ class QwenCrossDecoder(nn.Module):
         causal_lm, model_config = _load_decoder(name, dtype, trust_remote_code, attention_implementation)
         self.model_name = str(name)
         self.config = model_config
+        self.ce_chunk_size = int(config.get("ce_chunk_size", 1024))
+        if self.ce_chunk_size <= 0:
+            raise ValueError("ce_chunk_size must be positive")
         self.backbone = causal_lm.model
         self.lm_head = causal_lm.lm_head
         if int(config.get("cross_attention_every", 1)) != 1:
@@ -283,19 +286,23 @@ class QwenCrossDecoder(nn.Module):
 
                 flat_hidden = hidden[:, :-1].reshape(-1, hidden.shape[-1])
                 flat_labels = shift_labels.reshape(-1)
+                valid = flat_labels.ne(-100)
+                flat_hidden = flat_hidden[valid]
+                flat_labels = flat_labels[valid]
 
                 def chunk_ce(states, targets):
                     return F.cross_entropy(self.lm_head(states).float(), targets, ignore_index=-100, reduction="sum")
 
                 losses = []
-                for start in range(0, flat_hidden.shape[0], 256):
-                    states, targets = flat_hidden[start : start + 256], flat_labels[start : start + 256]
+                for start in range(0, flat_hidden.shape[0], self.ce_chunk_size):
+                    states = flat_hidden[start : start + self.ce_chunk_size]
+                    targets = flat_labels[start : start + self.ce_chunk_size]
                     losses.append(
                         checkpoint(chunk_ce, states, targets, use_reentrant=False)
                         if torch.is_grad_enabled()
                         else chunk_ce(states, targets)
                     )
-                loss = torch.stack(losses).sum()
+                loss = torch.stack(losses).sum() if losses else hidden.sum() * 0.0
             loss = loss / shift_labels.ne(-100).sum().clamp_min(1)
         return logits, getattr(outputs, "past_key_values", None) if use_cache else None, loss
 
@@ -309,6 +316,11 @@ class QwenCrossDecoder(nn.Module):
         for layer in self.backbone.layers:
             if isinstance(layer, DecoderLayerWithCross):
                 layer.clear_cache()
+
+    def select_cross_cache(self, indices: torch.Tensor) -> None:
+        for layer in self.backbone.layers:
+            if isinstance(layer, DecoderLayerWithCross) and layer.cross._cache is not None:
+                layer.cross._cache = tuple(value.index_select(0, indices) for value in layer.cross._cache)
 
     def set_backbone_trainable(self, trainable: bool) -> None:
         for parameter in self.parameters():

@@ -189,6 +189,7 @@ def validate_config(config: dict[str, Any]) -> None:
             "cross_gate_init",
             "cross_gate_max",
             "attention_dropout",
+            "ce_chunk_size",
         },
         "decoder",
     )
@@ -220,6 +221,11 @@ def validate_config(config: dict[str, Any]) -> None:
             "save_each_epoch",
             "save_best",
             "resume_checkpoint",
+            "length_bucketing",
+            "length_bucket_multiplier",
+            "persistent_workers",
+            "fused_optimizer",
+            "tf32",
         },
         "training",
     )
@@ -231,6 +237,10 @@ def validate_config(config: dict[str, Any]) -> None:
     if int(training.get("interface_warmup_epochs", 0)) + int(training.get("full_finetune_epochs", 0)) == 0:
         raise ValueError("At least one AFMR training epoch is required")
     data = config["data"]
+    if int(decoder.get("ce_chunk_size", 1024)) <= 0:
+        raise ValueError("decoder.ce_chunk_size must be positive")
+    if int(training.get("length_bucket_multiplier", 50)) <= 0:
+        raise ValueError("training.length_bucket_multiplier must be positive")
     _check_keys(
         data,
         {
@@ -262,6 +272,7 @@ def validate_config(config: dict[str, Any]) -> None:
             "no_repeat_ngram_size",
             "num_beams",
             "do_sample",
+            "compact_finished",
         },
         "generation",
     )

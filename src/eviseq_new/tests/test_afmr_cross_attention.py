@@ -56,3 +56,28 @@ def test_bfloat16_source_bias_backward_is_live():
     assert torch.isfinite(output).all()
     for tensor in (query, memory, bias):
         assert tensor.grad is not None and torch.isfinite(tensor.grad).all() and tensor.grad.abs().sum() > 0
+
+
+def test_selected_decoder_cache_matches_surviving_rows():
+    from pathlib import Path
+
+    from eviseq_afmr.config import load_config
+    from eviseq_afmr.modeling.model import EviSeqAFMR
+
+    cfg = load_config(Path(__file__).parents[1] / "configs/afmr_smoke.yaml")
+    decoder = EviSeqAFMR(cfg).decoder.eval()
+    memory = torch.randn(3, 7, 24)
+    mask = torch.ones(3, 7, dtype=torch.bool)
+    bias = torch.randn(3, 7)
+    tokens = torch.tensor([[3, 4], [5, 6], [7, 8]])
+    rows = torch.tensor([0, 2])
+    with torch.no_grad():
+        decoder.prepare_cross_cache(memory)
+        _, cache, _ = decoder(tokens, memory, mask, bias, use_cache=True)
+        cache.batch_select_indices(rows)
+        decoder.select_cross_cache(rows)
+        next_ids = torch.tensor([[9], [10]])
+        cached, _, _ = decoder(next_ids, memory[rows], mask[rows], bias[rows], past_key_values=cache, use_cache=True)
+        decoder.clear_cross_cache()
+        full, _, _ = decoder(torch.cat((tokens[rows], next_ids), dim=1), memory[rows], mask[rows], bias[rows])
+    torch.testing.assert_close(cached[:, -1], full[:, -1], atol=1e-6, rtol=1e-5)

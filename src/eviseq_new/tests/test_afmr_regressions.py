@@ -173,12 +173,14 @@ def test_chunked_ce_matches_full_logits_gradient():
     torch.manual_seed(24)
     model = EviSeqAFMR(config()).eval()
     model.decoder.lm_head.weight.requires_grad_(True)
+    model.decoder.ce_chunk_size = 3
     memory = torch.randn(2, 10, 24)
     mask = torch.ones(2, 10, dtype=torch.bool)
     bias = torch.randn(2, 10, requires_grad=True)
     tokens = torch.randint(3, 128, (2, 6))
     labels = tokens.clone()
     labels[:, :2] = -100
+    labels[0, -2:] = -100
     _, _, full = model.decoder(tokens, memory, mask, bias, labels=labels)
     full.backward()
     expected = model.decoder.lm_head.weight.grad.clone()

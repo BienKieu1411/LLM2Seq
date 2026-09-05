@@ -264,6 +264,8 @@ class AFMRTrainer:
             for epoch in range(start_epoch, epochs + 1):
                 self.epoch = epoch + (stages[0][1] if stage == "full_finetune" else 0)
                 global_epoch = self.epoch
+                if hasattr(train_loader.batch_sampler, "set_epoch"):
+                    train_loader.batch_sampler.set_epoch(global_epoch)
                 metrics = self._run_epoch(
                     train_loader,
                     optimizer,

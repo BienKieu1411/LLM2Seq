@@ -25,6 +25,8 @@ class SummarizationCollator:
         self.encoder_tokenizer = encoder_tokenizer
         self.decoder_tokenizer = decoder_tokenizer
         self.data = data_config
+        self.include_targets = True
+        self._prompt_ids = _ids(decoder_tokenizer, str(data_config.get("decoder_prompt", "")))
         self.max_source_length = int(data_config.get("max_source_length", 4096))
         self.max_target_length = int(data_config.get("max_target_length", 512))
         self.encoder_prefix = str(data_config.get("encoder_prefix", ""))
@@ -75,7 +77,7 @@ class SummarizationCollator:
             encoder_rows.append(source)
             content_rows.append(content)
 
-            prompt = _ids(self.decoder_tokenizer, self.decoder_prompt)
+            prompt = self._prompt_ids
             if not prompt:
                 start_token = getattr(self.decoder_tokenizer, "bos_token_id", None)
                 if start_token is None:
@@ -83,9 +85,13 @@ class SummarizationCollator:
                 if start_token is None:
                     raise ValueError("An empty decoder prompt requires a BOS or EOS start token")
                 prompt = [int(start_token)]
-            target = _ids(self.decoder_tokenizer, record.target)[: max(1, self.max_target_length - 1)]
+            target = (
+                _ids(self.decoder_tokenizer, record.target)[: max(1, self.max_target_length - 1)]
+                if self.include_targets
+                else []
+            )
             eos_target = getattr(self.decoder_tokenizer, "eos_token_id", None)
-            if eos_target is not None:
+            if eos_target is not None and self.include_targets:
                 target = target + [int(eos_target)]
             prompt_rows.append(prompt)
             decoder_rows.append(prompt + target if target else prompt)

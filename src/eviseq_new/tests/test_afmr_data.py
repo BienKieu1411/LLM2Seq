@@ -7,6 +7,23 @@ from eviseq_afmr.data.schema import CanonicalRecord
 from eviseq_afmr.runtime import _TinyTokenizer
 
 
+def test_length_buckets_reduce_padding_and_resume_by_epoch():
+    from eviseq_afmr.data.sampling import LengthBucketBatchSampler
+
+    lengths = list(range(1, 104))
+    sampler = LengthBucketBatchSampler(lengths, 8, seed=7, multiplier=50)
+    sampler.set_epoch(3)
+    first = list(sampler)
+    assert sorted(i for batch in first for i in batch) == list(range(len(lengths)))
+    assert len(first) == len(sampler) == 13
+    assert sum(max(lengths[i] for i in batch) * len(batch) for batch in first) < sum(lengths) * 1.15
+    recreated = LengthBucketBatchSampler(lengths, 8, seed=7, multiplier=50)
+    recreated.set_epoch(3)
+    assert list(recreated) == first
+    recreated.set_epoch(4)
+    assert list(recreated) != first
+
+
 def test_preparation_preserves_text_and_discards_external_labels(tmp_path):
     source = tmp_path / "raw.jsonl"
     source.write_text(

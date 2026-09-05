@@ -22,11 +22,17 @@ from torch.utils.data import DataLoader, Subset
 from .config import load_config, resolve_path
 from .data.collate import SummarizationCollator
 from .data.dataset import JsonlSummarizationDataset
+from .data.sampling import LengthBucketBatchSampler
 from .modeling.model import EviSeqAFMR
 from .training.checkpoint import load_checkpoint
 from .training.engine import AFMRTrainer, seed_everything
 
 LOGGER = logging.getLogger("eviseq_afmr.runtime")
+
+
+def _configure_precision(config: dict[str, Any]) -> None:
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = bool(config["training"].get("tf32", False))
 
 
 class _TinyTokenizer:
@@ -122,15 +128,36 @@ def build_loaders(
         )
         if batch_size_override is not None:
             batch_size = int(batch_size_override)
+        workers = (
+            int(config["training"].get("num_workers", 0))
+            if name == "train"
+            else int(config["training"].get("validation_num_workers", 0))
+        )
+        sampling = {"batch_size": batch_size, "shuffle": name == "train"}
+        if name == "train" and config["training"].get("length_bucketing", False):
+            sampling = {
+                "batch_sampler": LengthBucketBatchSampler(
+                    dataset.length_estimates,
+                    batch_size,
+                    int(config["training"].get("seed", 42)),
+                    int(config["training"].get("length_bucket_multiplier", 50)),
+                )
+            }
         loaders[name] = DataLoader(
             dataset,
-            batch_size=batch_size,
-            shuffle=name == "train",
-            num_workers=int(config["training"].get("num_workers", 0))
-            if name == "train"
-            else int(config["training"].get("validation_num_workers", 0)),
+            **sampling,
+            num_workers=workers,
+            persistent_workers=workers > 0 and bool(config["training"].get("persistent_workers", True)),
             collate_fn=collator,
             pin_memory=torch.cuda.is_available(),
+        )
+        LOGGER.info(
+            "[data] split=%s | examples=%d | batch=%d | workers=%d | length_bucketing=%s",
+            name,
+            len(dataset),
+            batch_size,
+            workers,
+            "batch_sampler" in sampling,
         )
     return loaders
 
@@ -167,6 +194,7 @@ def train(
     if int(os.environ.get("WORLD_SIZE", "1")) > 1:
         raise ValueError("This AFMR runner is single-process; do not launch it with torchrun/DDP")
     config = load_config(config_path)
+    _configure_precision(config)
     if output_dir_override:
         config["experiment"]["output_dir"] = output_dir_override
     checkpoint = resume_checkpoint or str(config["training"].get("resume_checkpoint", "")).strip()
@@ -207,6 +235,7 @@ def evaluate(
     max_examples: int = 0,
 ) -> dict[str, Any]:
     config = load_config(config_path)
+    _configure_precision(config)
     selected_batch_size = int(batch_size if batch_size is not None else config["generation"]["batch_size"])
     if selected_batch_size <= 0:
         raise ValueError("Evaluation batch size must be positive")
@@ -214,6 +243,7 @@ def evaluate(
     from .evaluation.generate import append_jsonl, generate_greedy
 
     loader = loaders[split]
+    loader.collate_fn.include_targets = False
     seen = set()
     predictions: list[str] = []
     references: list[str] = []
@@ -307,6 +337,7 @@ def evaluate(
                     int(config["generation"].get("min_new_tokens", 0)),
                     float(config["generation"].get("repetition_penalty", 1.0)),
                     int(config["generation"].get("no_repeat_ngram_size", 0)),
+                    bool(config["generation"].get("compact_finished", True)),
                 )
             except torch.cuda.OutOfMemoryError:
                 size = len(narrowed["ids"])

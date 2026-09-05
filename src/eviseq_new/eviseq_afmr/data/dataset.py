@@ -19,6 +19,7 @@ class JsonlSummarizationDataset(Dataset[CanonicalRecord]):
             raise FileNotFoundError(f"Dataset not found: {self.path}")
         self.data_config = dict(data_config)
         self.offsets = array("Q")
+        self.length_estimates = array("Q")
         self._handle = None
         self._pid = None
         with self.path.open("rb") as handle:
@@ -29,6 +30,7 @@ class JsonlSummarizationDataset(Dataset[CanonicalRecord]):
                     break
                 if line.strip():
                     self.offsets.append(offset)
+                    self.length_estimates.append(len(line))
                     if max_examples > 0 and len(self.offsets) >= max_examples:
                         break
         if not self.offsets:
