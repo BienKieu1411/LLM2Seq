@@ -70,8 +70,8 @@ data:
   target_field: summary
   id_field: id
   list_separator: "\n"
-  encoder_prefix: "Summarize the article faithfully and concisely.\nArticle:\n"
-  decoder_prompt: "Summarize the article faithfully and concisely.\nSummary:\n"
+  encoder_prefix: "Summarize the following document faithfully and concisely.\nDocument:\n"
+  decoder_prompt: ""
   max_source_length: 4096
   max_target_length: 512
 
@@ -79,7 +79,7 @@ generation:
   batch_size: 96
   max_new_tokens: 512
   min_new_tokens: 16
-  repetition_penalty: 1.0
-  no_repeat_ngram_size: 0
+  repetition_penalty: 1.05
+  no_repeat_ngram_size: 3
   num_beams: 1
   do_sample: false

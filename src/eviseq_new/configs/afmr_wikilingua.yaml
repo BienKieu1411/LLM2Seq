@@ -8,11 +8,21 @@ data:
   train_file: datasets/wikilingua/train.jsonl
   validation_file: datasets/wikilingua/validation.jsonl
   test_file: datasets/wikilingua/test.jsonl
-  encoder_prefix: "Summarize the text faithfully and concisely.\nText:\n"
-  decoder_prompt: "Summarize the text faithfully and concisely.\nSummary:\n"
+  encoder_prefix: "Tóm tắt thành các bước hành động ngắn, đúng thứ tự; không thêm thông tin.\nVăn bản:\n"
+  decoder_prompt: ""
   max_source_length: 3072
   max_target_length: 384
+
+generation:
+  max_new_tokens: 256
+  min_new_tokens: 16
+  repetition_penalty: 1.05
+  no_repeat_ngram_size: 3
 
 model:
   encoder_name: /absolute/path/to/pplx-embed-v1-0.6b
   decoder_name: /absolute/path/to/Qwen3-0.6B
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 5

@@ -8,7 +8,20 @@ data:
   train_file: datasets/cnndm/train.jsonl
   validation_file: datasets/cnndm/validation.jsonl
   test_file: datasets/cnndm/test.jsonl
+  encoder_prefix: "Summarize the following news article concisely. Preserve the important facts and do not add information.\nArticle:\n"
+  decoder_prompt: ""
+  max_target_length: 256
+
+generation:
+  max_new_tokens: 192
+  min_new_tokens: 8
+  repetition_penalty: 1.05
+  no_repeat_ngram_size: 3
 
 model:
   encoder_name: /absolute/path/to/pplx-embed-v1-0.6b
   decoder_name: /absolute/path/to/Qwen3-0.6B
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 5

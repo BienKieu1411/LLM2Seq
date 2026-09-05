@@ -305,6 +305,8 @@ def evaluate(
                     loaders[split].collate_fn.decoder_tokenizer,
                     int(config["generation"]["max_new_tokens"]),
                     int(config["generation"].get("min_new_tokens", 0)),
+                    float(config["generation"].get("repetition_penalty", 1.0)),
+                    int(config["generation"].get("no_repeat_ngram_size", 0)),
                 )
             except torch.cuda.OutOfMemoryError:
                 size = len(narrowed["ids"])

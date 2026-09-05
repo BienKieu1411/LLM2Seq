@@ -63,7 +63,7 @@ bash scripts/prepare_afmr.sh --dataset wikilingua --input-dir /data/wikilingua -
 
 ## A100 training/evaluation
 
-Start from `configs/afmr_base.yaml`, copy it to a task recipe, and set only model locations, data files, lengths, batch resources, and output directory. The default recipe uses one warm-up epoch and four full-finetuning epochs, greedy decoding (`num_beams: 1`, `do_sample: false`), and CE-only training.
+Start from `configs/afmr_base.yaml`, copy it to a task recipe, and set only model locations, data files, lengths, batch resources, and output directory. The generic base uses one warm-up epoch and four full-finetuning epochs; benchmark recipes override this to match the corresponding T5Gemma total (PubMed 1+3, CNNDM/WikiLingua 1+5). Decoding is greedy (`num_beams: 1`, `do_sample: false`), and training is CE-only.
 
 ```bash
 cd src/eviseq_new
@@ -77,6 +77,15 @@ PYTHON=/absolute/path/to/bienkieu_env/bin/python \
 ```
 
 The runtime loads models only for `train` or `evaluate`; importing AFMR and running tests does not download anything. Checkpoints are structurally guarded: changing batch size, generation batch size, data paths, or model folder location is allowed, while changing AFMR ranks, windows, depth taps, or cross-attention layout is rejected.
+
+For a controlled T5Gemma comparison, each task recipe copies the exact T5Gemma
+source instruction and uses an empty decoder prompt. The collator then falls
+back to the decoder BOS/EOS start token, matching the native seq2seq decoder
+contract instead of giving AFMR an extra textual instruction. Greedy decoding
+also applies the same repetition penalty, no-repeat n-gram constraint, minimum
+length, and maximum length as the corresponding T5Gemma recipe. A richer
+decoder prompt is a separate ablation and requires a separately fine-tuned
+checkpoint.
 
 The token-wise graph (`afmr_token_depth_lowrank_v3`) is intentionally incompatible with earlier document-wise AFMR checkpoints. Do not use `strict=False` to force-load those checkpoints. Train this graph from pretrained backbones in a separate output directory. New token-wise checkpoints resume normally.
 

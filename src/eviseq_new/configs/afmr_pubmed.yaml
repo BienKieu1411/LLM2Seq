@@ -8,7 +8,19 @@ data:
   train_file: datasets/pubmed/train.jsonl
   validation_file: datasets/pubmed/validation.jsonl
   test_file: datasets/pubmed/test.jsonl
+  encoder_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
+  decoder_prompt: ""
+
+generation:
+  max_new_tokens: 512
+  min_new_tokens: 32
+  repetition_penalty: 1.05
+  no_repeat_ngram_size: 3
 
 model:
   encoder_name: /absolute/path/to/pplx-embed-v1-0.6b
   decoder_name: /absolute/path/to/Qwen3-0.6B
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 3

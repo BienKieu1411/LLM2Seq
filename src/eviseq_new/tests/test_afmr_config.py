@@ -10,6 +10,39 @@ def test_smoke_config_is_valid():
     assert config["generation"]["num_beams"] == 1
 
 
+def test_pubmed_recipe_matches_t5gemma_prompt_and_decode_contract():
+    config = load_config(Path(__file__).parents[1] / "configs" / "afmr_pubmed.yaml")
+    assert config["data"]["encoder_prefix"] == (
+        "Summarize the following biomedical research article into a concise, factual abstract. "
+        "Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
+    )
+    assert config["data"]["decoder_prompt"] == ""
+    assert config["generation"]["min_new_tokens"] == 32
+    assert config["generation"]["repetition_penalty"] == 1.05
+    assert config["generation"]["no_repeat_ngram_size"] == 3
+
+
+@pytest.mark.parametrize(
+    ("afmr_name", "t5_name", "total_epochs"),
+    (
+        ("afmr_pubmed.yaml", "pubmed_full_1b_1b_4096.yaml", 4),
+        ("afmr_cnndm.yaml", "cnndm_full_1b_1b_4096.yaml", 6),
+        ("afmr_wikilingua.yaml", "wikilingua_full_3072.yaml", 6),
+    ),
+)
+def test_task_recipes_match_t5gemma_protocol(afmr_name, t5_name, total_epochs):
+    import yaml
+
+    root = Path(__file__).parents[3]
+    afmr = load_config(Path(__file__).parents[1] / "configs" / afmr_name)
+    t5 = yaml.safe_load((root / "src" / "T5Gemma" / "configs" / t5_name).read_text(encoding="utf-8"))
+    assert afmr["data"]["encoder_prefix"] == t5["data"]["source_prefix"]
+    assert afmr["data"]["decoder_prompt"] == ""
+    for key in ("max_new_tokens", "min_new_tokens", "repetition_penalty", "no_repeat_ngram_size"):
+        assert afmr["generation"][key] == t5["generation"][key]
+    assert afmr["training"]["interface_warmup_epochs"] + afmr["training"]["full_finetune_epochs"] == total_epochs
+
+
 def test_packaged_paths_do_not_depend_on_cwd_or_existing_files(tmp_path, monkeypatch):
     config = load_config(Path(__file__).parents[1] / "configs" / "afmr_pubmed.yaml")
     expected = Path(__file__).parents[1] / "datasets/pubmed/train.jsonl"

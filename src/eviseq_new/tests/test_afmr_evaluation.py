@@ -25,3 +25,24 @@ def test_diagnostic_backend_matches_installed_rouge():
     actual = summarization_metrics(predictions, references)
     assert abs(actual["rouge2"] - 100 * expected["rouge-2"]["f"]) < 1e-8
     assert "1.0.0" in actual["rouge_backend"]
+
+
+def test_greedy_constraints_match_transformers_processors():
+    import torch
+    from eviseq_afmr.evaluation.generate import (
+        _apply_repetition_penalty,
+        _no_repeat_ngram_tokens,
+    )
+    from transformers import NoRepeatNGramLogitsProcessor, RepetitionPenaltyLogitsProcessor
+
+    token_ids = torch.tensor([[1, 2, 3, 2, 4], [2, 2, 1, 2, 1]])
+    scores = torch.tensor([[1.0, -2.0, 3.0, -4.0, 5.0, 6.0], [1.0, -2.0, 3.0, -4.0, 5.0, 6.0]])
+    actual = scores.clone()
+    _apply_repetition_penalty(actual, token_ids, 1.05)
+    expected = RepetitionPenaltyLogitsProcessor(1.05)(token_ids, scores.clone())
+    torch.testing.assert_close(actual, expected)
+
+    for ngram_size in (1, 2, 3, 4):
+        expected_scores = NoRepeatNGramLogitsProcessor(ngram_size)(token_ids, scores.clone())
+        expected_banned = [torch.where(row == -float("inf"))[0].tolist() for row in expected_scores]
+        assert _no_repeat_ngram_tokens(token_ids, ngram_size) == expected_banned

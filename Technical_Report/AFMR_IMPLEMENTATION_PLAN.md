@@ -38,8 +38,20 @@ Ba trục thích nghi là:
 - Prompt-, source- và budget-conditioned multi-scale focus prior.
 - Một bias nguồn dùng chung cho mọi decoder cross-attention layer.
 - Main loss chỉ là token cross-entropy; allocation loss trên prior chỉ bật trong ablation riêng.
-- Một epoch interface warm-up và bốn epoch full fine-tuning.
+- Một epoch interface warm-up và một giai đoạn full fine-tuning; số epoch của
+  từng recipe phải được đặt để tổng số lượt qua dữ liệu bằng baseline
+  (PubMed: 1+3=4, CNNDM/WikiLingua: 1+5=6).
 - Greedy decoding, một lần chạy encoder, KV cache chuẩn.
+
+### 1.3. Prompt contract cho so sánh T5Gemma
+
+Official comparison không được cho AFMR thêm một textual decoder instruction
+mà T5Gemma không có. Mỗi task recipe phải dùng đúng `source_prefix` của
+T5Gemma recipe tương ứng, còn `decoder_prompt` để rỗng; collator dùng BOS/EOS
+decoder-start token. `num_beams=1`, `do_sample=false`, `min_new_tokens`,
+`max_new_tokens`, `repetition_penalty` và `no_repeat_ngram_size` cũng phải
+giống baseline. Prompt giàu hơn chỉ được báo như một ablation với checkpoint
+được fine-tune lại, không trộn vào số official.
 
 ### 1.2. Những thứ cố ý không có
 
@@ -878,7 +890,7 @@ objective:
 
 training:
   interface_warmup_epochs: 1
-  full_finetune_epochs: 4
+  full_finetune_epochs: 3
   batch_size: 48
   gradient_accumulation_steps: 2
   warmup_bridge_lr: 1.0e-4
@@ -901,17 +913,17 @@ data:
   target_field: summary
   id_field: id
   list_separator: "\n"
-  encoder_prefix: "Summarize the article faithfully and concisely.\nArticle:\n"
-  decoder_prompt: "Summarize the article faithfully and concisely.\nSummary:\n"
+  encoder_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
+  decoder_prompt: ""
   max_source_length: 4096
   max_target_length: 512
 
 generation:
   batch_size: 96
   max_new_tokens: 512
-  min_new_tokens: 16
-  repetition_penalty: 1.0
-  no_repeat_ngram_size: 0
+  min_new_tokens: 32
+  repetition_penalty: 1.05
+  no_repeat_ngram_size: 3
   num_beams: 1
   do_sample: false
 ```
