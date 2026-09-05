@@ -112,12 +112,18 @@ Training uses FP32 bridge arithmetic, BF16 or FP32 backbones, non-reentrant back
 
 Training prints reusable, machine-readable progress lines with stage, epoch
 percentage, epoch/total optimizer steps, token-weighted CE, gradient norm,
-learning rates, total elapsed time, epoch ETA, and sample/token throughput. For
+learning rates, total elapsed time, epoch/total training ETA, and sample/token throughput. For
 example:
 
 ```text
-[train] stage=full | epoch=2/4 | epoch_progress=[====>.............] 24.0% | step=120/500 | total_step=860/2000 | CE=1.23840 | grad=0.8123 | lr=bridge:3.00e-05,cross_attention:5.00e-05 | elapsed=03:17:42 | epoch_eta=01:48:09 | vram=67.42GiB | ex/s=7.42 | tok/s=30120
+[train] stage=full | epoch=2/4 | epoch_progress=[====>.............] 24.0% | step=120/500 | total_step=620/2000 | CE=1.23840 | grad=0.8123 | lr=bridge:3.00e-05,cross_attention:5.00e-05 | elapsed=03:17:42 | epoch_eta=01:48:09 | total_eta=06:32:45 | vram=67.42GiB | ex/s=7.42 | tok/s=30120
 ```
+
+`total_eta` extrapolates the current epoch's average optimizer-step time over
+all remaining training epochs. It excludes future validation, checkpoint saving,
+and generation. The estimate adapts when the stage or throughput changes;
+warm-up throughput may underestimate full-finetuning time. Numeric ETA is saved
+as `total_eta_seconds` in the step records, including resumed runs.
 
 The same step/epoch records are appended to `training_metrics.jsonl`, including
 numeric progress and elapsed-time fields; elapsed time is also stored in each

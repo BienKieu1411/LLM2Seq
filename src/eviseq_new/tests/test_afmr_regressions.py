@@ -324,6 +324,7 @@ def test_training_log_is_compact_and_uses_accumulated_ce(caplog):
     fields = dict(field.strip("|").split("=", 1) for field in messages[0].split() if "=" in field)
     assert {"stage", "epoch", "epoch_progress", "step", "total_step", "CE", "grad", "lr", "elapsed"} <= set(fields)
     assert fields["epoch"] == "1/1" and fields["step"] == "1/1"
+    assert fields["total_eta"] == "00:00:00"
     assert float(fields["CE"]) == pytest.approx(metrics["ce"], abs=1e-5)
     assert fields["lr"].count("bridge:") == 1
     assert fields["lr"].count("cross_attention:") == 1

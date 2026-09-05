@@ -158,6 +158,10 @@ class AFMRTrainer:
                     epoch_progress = epoch_step / max(1, epoch_steps)
                     total_progress = (global_epoch - 1 + epoch_progress) / max(1, total_epochs)
                     epoch_eta = epoch_elapsed * (1.0 - epoch_progress) / max(epoch_progress, 1.0e-9)
+                    remaining_steps = max(0, total_epochs - global_epoch) * epoch_steps + max(
+                        0, epoch_steps - epoch_step
+                    )
+                    total_eta = epoch_elapsed / max(1, epoch_step) * remaining_steps
                     total_elapsed = self._elapsed_train_seconds()
                     peak_vram_gib = _peak_vram_gib(self.device)
                     record = {
@@ -181,6 +185,7 @@ class AFMRTrainer:
                         "epoch_elapsed_seconds": round(epoch_elapsed, 4),
                         "total_elapsed_seconds": round(total_elapsed, 4),
                         "epoch_eta_seconds": round(epoch_eta, 4),
+                        "total_eta_seconds": round(total_eta, 4),
                         "peak_vram_gib": peak_vram_gib,
                         "examples": examples,
                         "tokens": window_tokens,
@@ -189,7 +194,7 @@ class AFMRTrainer:
                     }
                     self._write_metric(record)
                     LOGGER.info(
-                        "[train] stage=%s | epoch=%d/%d | epoch_progress=%s %5.1f%% | step=%d/%d | total_step=%d/%d | CE=%.5f | grad=%.4f | lr=%s | elapsed=%s | epoch_eta=%s | vram=%s | ex/s=%.2f | tok/s=%.0f",
+                        "[train] stage=%s | epoch=%d/%d | epoch_progress=%s %5.1f%% | step=%d/%d | total_step=%d/%d | CE=%.5f | grad=%.4f | lr=%s | elapsed=%s | epoch_eta=%s | total_eta=%s | vram=%s | ex/s=%.2f | tok/s=%.0f",
                         _stage_label(stage),
                         global_epoch,
                         total_epochs,
@@ -204,6 +209,7 @@ class AFMRTrainer:
                         learning_rates,
                         _format_duration(total_elapsed),
                         _format_duration(epoch_eta),
+                        _format_duration(total_eta),
                         f"{peak_vram_gib:.2f}GiB" if peak_vram_gib is not None else "NA",
                         examples / max(window_elapsed, 1e-9),
                         window_tokens / max(window_elapsed, 1e-9),
