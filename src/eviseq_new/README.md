@@ -73,8 +73,27 @@ PYTHON=/absolute/path/to/bienkieu_env/bin/python \
 PYTHON=/absolute/path/to/bienkieu_env/bin/python \
   CUDA_VISIBLE_DEVICES=0 bash scripts/run_afmr.sh evaluate \
   configs/afmr_pubmed.yaml runs/afmr/pubmed/last.pt \
-  runs/afmr/pubmed/test_predictions.jsonl --split test
+runs/afmr/pubmed/test_predictions.jsonl --split test
 ```
+
+For a one-GPU PubMed queue that prepares data, trains the strongest PPLX
+encoder recipe, then trains a Qwen3-Embedding control and evaluates both
+`last.pt` checkpoints, run:
+
+```bash
+cd src/eviseq_new
+PYTHON=/absolute/path/to/bienkieu_env/bin/python \
+CUDA_VISIBLE_DEVICES=0 \
+PPLX_ENCODER=/path/to/pplx-embed-v1-0.6b \
+QWEN_ENCODER=/path/to/Qwen3-Embedding-0.6B \
+DECODER_MODEL=/path/to/Qwen3-0.6B \
+PUBMED_SOURCE_DIR=/path/to/pubmed \
+bash scripts/run_pubmed_pair.sh
+```
+
+Preparation is skipped when the canonical PubMed files already exist. Set
+`EVAL_BATCH_SIZE` to control evaluation memory. Set `ROUGE155_SCRIPT` to the
+local `evaluate_rouge.py` wrapper to append the Perl ROUGE-1.5.5 audit.
 
 The runtime loads models only for `train` or `evaluate`; importing AFMR and running tests does not download anything. Checkpoints are structurally guarded: changing batch size, generation batch size, data paths, or model folder location is allowed, while changing AFMR ranks, windows, depth taps, or cross-attention layout is rejected.
 
