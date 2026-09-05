@@ -1,0 +1,89 @@
+"""End-to-end AFMR model graph."""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+import torch
+import torch.nn as nn
+
+from .afmr import AdaptiveFullMemoryResidualBridge
+from .decoder import QwenCrossDecoder
+from .encoder import build_encoder, resolve_dtype
+from .outputs import AFMROutput, BridgeState
+
+
+class EviSeqAFMR(nn.Module):
+    def __init__(self, config: dict[str, Any]):
+        super().__init__()
+        self.config = config
+        self.encoder = build_encoder(config)
+        decoder_cfg = config["model"]
+        self.decoder = QwenCrossDecoder(
+            str(decoder_cfg["decoder_name"]),
+            config["decoder"],
+            resolve_dtype(str(decoder_cfg.get("dtype", "float32"))),
+            bool(decoder_cfg.get("gradient_checkpointing", True)),
+            bool(decoder_cfg.get("trust_remote_code", True)),
+            str(decoder_cfg.get("attention_implementation", "sdpa")),
+        )
+        self.bridge = AdaptiveFullMemoryResidualBridge(
+            self.encoder.hidden_size, int(self.decoder.config.hidden_size), config["architecture"]
+        )
+
+    def encode_source(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        source_content_mask: torch.Tensor,
+        decoder_prompt_ids: torch.Tensor,
+        decoder_prompt_mask: torch.Tensor,
+        output_budget: torch.Tensor,
+    ) -> BridgeState:
+        state = self.encoder(input_ids, attention_mask, source_content_mask)
+        prompt_embeddings = self.decoder.embed_tokens(decoder_prompt_ids)
+        bridge = self.bridge(state, prompt_embeddings, decoder_prompt_mask, output_budget)
+        decoder_dtype = self.decoder.embed_tokens.weight.dtype
+        if bridge.memory.dtype != decoder_dtype:
+            bridge = BridgeState(
+                bridge.memory.to(decoder_dtype),
+                bridge.memory_mask,
+                bridge.content_mask,
+                bridge.source_bias,
+                bridge.controller,
+            )
+        return bridge
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        source_content_mask: torch.Tensor,
+        decoder_prompt_ids: torch.Tensor,
+        decoder_prompt_mask: torch.Tensor,
+        decoder_input_ids: torch.Tensor,
+        decoder_attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        output_budget: Optional[torch.Tensor] = None,
+        return_logits: bool = True,
+    ) -> AFMROutput:
+        if output_budget is None:
+            output_budget = torch.full(
+                (input_ids.shape[0],),
+                int(self.config["generation"].get("max_new_tokens", 256)),
+                device=input_ids.device,
+                dtype=torch.float32,
+            )
+        bridge = self.encode_source(
+            input_ids, attention_mask, source_content_mask, decoder_prompt_ids, decoder_prompt_mask, output_budget
+        )
+        logits, _, loss_ce = self.decoder(
+            decoder_input_ids,
+            bridge.memory,
+            bridge.memory_mask,
+            bridge.source_bias,
+            decoder_attention_mask,
+            labels=labels,
+            return_logits=return_logits,
+        )
+        return AFMROutput(logits, loss_ce, loss_ce, bridge)

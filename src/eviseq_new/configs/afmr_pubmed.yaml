@@ -1,0 +1,14 @@
+_base_: afmr_base.yaml
+
+experiment:
+  name: afmr_pubmed
+  output_dir: runs/afmr/pubmed
+
+data:
+  train_file: datasets/pubmed/train.jsonl
+  validation_file: datasets/pubmed/validation.jsonl
+  test_file: datasets/pubmed/test.jsonl
+
+model:
+  encoder_name: /absolute/path/to/pplx-embed-v1-0.6b
+  decoder_name: /absolute/path/to/Qwen3-0.6B

@@ -1,0 +1,38 @@
+_base_: afmr_base.yaml
+
+experiment:
+  name: afmr_smoke
+  output_dir: runs/afmr/smoke
+
+model:
+  encoder_name: __tiny__
+  decoder_name: __tiny__
+  dtype: float32
+  gradient_checkpointing: true
+
+architecture:
+  controller_dim: 16
+  depth_taps: 2
+  depth_rank: 8
+  feature_rank: 8
+  focus_hidden: 16
+  focus_windows: [4, 8, 16]
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 1
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  validation_batch_size: 2
+  num_workers: 0
+  validation_num_workers: 0
+
+data:
+  train_file: tests/fixtures/train.jsonl
+  validation_file: tests/fixtures/validation.jsonl
+  test_file: tests/fixtures/test.jsonl
+
+generation:
+  batch_size: 2
+  max_new_tokens: 32
+  min_new_tokens: 0

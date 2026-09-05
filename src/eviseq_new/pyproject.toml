@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eviseq-afmr"
+version = "1.0.0"
+description = "Adaptive Full-Memory Residual bridge for pretrained summarization"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.6",
+  "transformers>=5.2,<6",
+  "accelerate>=1.2",
+  "safetensors>=0.4",
+  "pyyaml>=6.0",
+  "numpy>=1.24",
+  "rouge==1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.9"]
+
+[project.scripts]
+eviseq-afmr = "eviseq_afmr.cli:main"
+
+[tool.setuptools]
+packages = ["eviseq_afmr", "eviseq_afmr.data", "eviseq_afmr.evaluation", "eviseq_afmr.modeling", "eviseq_afmr.training"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"

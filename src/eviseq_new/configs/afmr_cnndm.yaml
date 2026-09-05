@@ -1,0 +1,14 @@
+_base_: afmr_base.yaml
+
+experiment:
+  name: afmr_cnndm
+  output_dir: runs/afmr/cnndm
+
+data:
+  train_file: datasets/cnndm/train.jsonl
+  validation_file: datasets/cnndm/validation.jsonl
+  test_file: datasets/cnndm/test.jsonl
+
+model:
+  encoder_name: /absolute/path/to/pplx-embed-v1-0.6b
+  decoder_name: /absolute/path/to/Qwen3-0.6B
