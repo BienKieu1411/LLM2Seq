@@ -110,7 +110,21 @@ The token-wise graph (`afmr_token_depth_lowrank_v3`) is intentionally incompatib
 
 Training uses FP32 bridge arithmetic, BF16 or FP32 backbones, non-reentrant backbone checkpointing, token-weighted gradient accumulation (including a partial final window), and a per-stage linear LR decay. Optimizer moments are carried from warm-up to full fine-tuning. LM-head CE is computed in checkpointed token chunks instead of retaining full `[B,T,V]` logits. Encoder KV caching is disabled; only the requested depth taps are captured. The runner currently supports one GPU/process and rejects multi-process launches.
 
-Training prints Trainer-style progress lines with stage, global epoch, optimizer step, token-weighted CE, gradient norm, learning rates, elapsed time, examples and token throughput. The same step/epoch records are appended to `training_metrics.jsonl`; epoch summaries report train/validation CE. Generation writes every completed sample batch immediately to JSONL, prints progress/ETA, resumes from a contiguous prefix, retries CUDA OOM by halving the active batch, and stores final metrics in `<predictions>.metrics.json`.
+Training prints reusable, machine-readable progress lines with stage, epoch
+percentage, epoch/total optimizer steps, token-weighted CE, gradient norm,
+learning rates, total elapsed time, epoch ETA, and sample/token throughput. For
+example:
+
+```text
+[train] stage=full | epoch=2/4 | epoch_progress=[====>.............] 24.0% | step=120/500 | total_step=860/2000 | CE=1.23840 | grad=0.8123 | lr=bridge:3.00e-05,cross_attention:5.00e-05 | elapsed=03:17:42 | epoch_eta=01:48:09 | vram=67.42GiB | ex/s=7.42 | tok/s=30120
+```
+
+The same step/epoch records are appended to `training_metrics.jsonl`, including
+numeric progress and elapsed-time fields; elapsed time is also stored in each
+checkpoint so a resumed run continues the total-time counter. Generation
+writes every completed sample batch immediately to JSONL, prints progress/ETA,
+resumes from a contiguous prefix, retries CUDA OOM by halving the active batch,
+and stores final metrics in `<predictions>.metrics.json`.
 
 Checkpoints are `epoch_001.pt`, ..., `last.pt`; `best.pt` is optional and off in the main recipe. Final evaluation uses `last.pt`. `generation.batch_size` controls decoding; `--batch-size` overrides it explicitly. An existing prediction file resumes only if its IDs and references match a contiguous prefix of the active split. Each new batch is flushed to JSONL with progress/ETA. Use a different output filename when comparing another checkpoint. Evaluation retries CUDA OOM by halving the active batch; if a single example still fails, it raises the original error.
 

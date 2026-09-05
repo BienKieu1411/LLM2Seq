@@ -46,6 +46,7 @@ def save_checkpoint(
     best_metric: float | None = None,
     stage: str | None = None,
     stage_epoch: int | None = None,
+    elapsed_train_seconds: float | None = None,
     scheduler: Any = None,
 ) -> None:
     destination = Path(path)
@@ -59,6 +60,7 @@ def save_checkpoint(
         "best_metric": best_metric,
         "stage": stage,
         "stage_epoch": stage_epoch,
+        "elapsed_train_seconds": None if elapsed_train_seconds is None else float(elapsed_train_seconds),
         "architecture_spec": architecture_spec(config),
         "rng_state": {
             "python": random.getstate(),
@@ -105,5 +107,14 @@ def load_checkpoint(
         if rng_state.get("cuda") is not None and torch.cuda.is_available():
             torch.cuda.set_rng_state_all([value.to(device="cpu") for value in rng_state["cuda"]])
     return {
-        key: state.get(key) for key in ("epoch", "step", "best_metric", "stage", "stage_epoch", "architecture_spec")
+        key: state.get(key)
+        for key in (
+            "epoch",
+            "step",
+            "best_metric",
+            "stage",
+            "stage_epoch",
+            "elapsed_train_seconds",
+            "architecture_spec",
+        )
     }

@@ -32,6 +32,33 @@ def _move(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
     }
 
 
+def _format_duration(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _progress_bar(fraction: float, width: int = 18) -> str:
+    fraction = min(1.0, max(0.0, float(fraction)))
+    filled = int(round(width * fraction))
+    if filled >= width:
+        return "[" + "=" * width + "]"
+    if filled == 0:
+        return "[" + "." * width + "]"
+    return "[" + "=" * (filled - 1) + ">" + "." * (width - filled) + "]"
+
+
+def _stage_label(stage: str) -> str:
+    return {"interface_warmup": "warmup", "full_finetune": "full"}.get(stage, stage)
+
+
+def _peak_vram_gib(device: torch.device) -> float | None:
+    if device.type != "cuda":
+        return None
+    return round(torch.cuda.max_memory_allocated(device) / (1024**3), 3)
+
+
 class AFMRTrainer:
     def __init__(self, model: torch.nn.Module, config: dict[str, Any], device: torch.device | str):
         self.model = model.to(device)
@@ -43,14 +70,27 @@ class AFMRTrainer:
         self.epoch = 0
         self.scheduler = None
         self.metrics_path = Path(self.config["experiment"]["output_dir"]) / "training_metrics.jsonl"
+        self._fit_started_at: float | None = None
+        self._elapsed_before_fit = 0.0
 
     def _write_metric(self, record: dict[str, Any]) -> None:
         self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
         with self.metrics_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+    def _elapsed_train_seconds(self) -> float:
+        active = 0.0 if self._fit_started_at is None else time.monotonic() - self._fit_started_at
+        return self._elapsed_before_fit + max(0.0, active)
+
     def _run_epoch(
-        self, loader: Iterable[dict[str, Any]], optimizer: torch.optim.Optimizer, stage: str, train: bool
+        self,
+        loader: Iterable[dict[str, Any]],
+        optimizer: torch.optim.Optimizer,
+        stage: str,
+        train: bool,
+        global_epoch: int | None = None,
+        total_epochs: int | None = None,
+        total_training_steps: int | None = None,
     ) -> dict[str, float]:
         self.model.train(train)
         accum = int(self.config["training"]["gradient_accumulation_steps"])
@@ -59,6 +99,12 @@ class AFMRTrainer:
         iterator = iter(loader)
         epoch_step = 0
         epoch_steps = math.ceil(len(loader) / accum) if train else len(loader)
+        global_epoch = int(global_epoch or self.epoch or 1)
+        total_epochs = int(total_epochs or global_epoch)
+        total_training_steps = int(total_training_steps or epoch_steps * total_epochs)
+        if train and self.device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(self.device)
+        epoch_started_at = time.monotonic()
         while window := list(islice(iterator, accum if train else 1)):
             started = time.monotonic()
             counts = [int(raw["labels"][:, 1:].ne(-100).sum()) for raw in window]
@@ -106,41 +152,61 @@ class AFMRTrainer:
                 self.stage_optimizer_step += 1
                 epoch_step += 1
                 if self.global_step % int(self.config["training"]["log_every_steps"]) == 0:
-                    elapsed = time.monotonic() - started
+                    window_elapsed = time.monotonic() - started
+                    epoch_elapsed = time.monotonic() - epoch_started_at
                     examples = sum(int(raw["input_ids"].shape[0]) for raw in window)
+                    epoch_progress = epoch_step / max(1, epoch_steps)
+                    total_progress = (global_epoch - 1 + epoch_progress) / max(1, total_epochs)
+                    epoch_eta = epoch_elapsed * (1.0 - epoch_progress) / max(epoch_progress, 1.0e-9)
+                    total_elapsed = self._elapsed_train_seconds()
+                    peak_vram_gib = _peak_vram_gib(self.device)
                     record = {
                         "type": "step",
                         "stage": stage,
-                        "epoch": self.epoch,
+                        "epoch": global_epoch,
                         "step": self.global_step,
                         "epoch_step": epoch_step,
                         "epoch_steps": epoch_steps,
-                        "epoch_progress": round(epoch_step / max(1, epoch_steps), 6),
+                        "epoch_progress": round(epoch_progress, 6),
+                        "epoch_percent": round(100.0 * epoch_progress, 3),
+                        "total_progress": round(total_progress, 6),
+                        "total_percent": round(100.0 * total_progress, 3),
                         "ce": round(float(step_loss), 6),
                         "grad_norm": round(float(grad), 6),
                         "learning_rate": {
                             group.get("name", str(i)): group["lr"] for i, group in enumerate(optimizer.param_groups)
                         },
-                        "seconds": round(elapsed, 4),
+                        "seconds": round(window_elapsed, 4),
+                        "window_seconds": round(window_elapsed, 4),
+                        "epoch_elapsed_seconds": round(epoch_elapsed, 4),
+                        "total_elapsed_seconds": round(total_elapsed, 4),
+                        "epoch_eta_seconds": round(epoch_eta, 4),
+                        "peak_vram_gib": peak_vram_gib,
                         "examples": examples,
                         "tokens": window_tokens,
-                        "examples_per_second": round(examples / max(elapsed, 1e-9), 4),
-                        "tokens_per_second": round(window_tokens / max(elapsed, 1e-9), 4),
+                        "examples_per_second": round(examples / max(window_elapsed, 1e-9), 4),
+                        "tokens_per_second": round(window_tokens / max(window_elapsed, 1e-9), 4),
                     }
                     self._write_metric(record)
                     LOGGER.info(
-                        "[train] stage=%s | epoch=%d (%d/%d) | step=%d | CE=%.5f | grad=%.4f | lr=%s | %.2fs | %d ex | %.1f tok/s",
-                        stage,
-                        self.epoch,
+                        "[train] stage=%s | epoch=%d/%d | epoch_progress=%s %5.1f%% | step=%d/%d | total_step=%d/%d | CE=%.5f | grad=%.4f | lr=%s | elapsed=%s | epoch_eta=%s | vram=%s | ex/s=%.2f | tok/s=%.0f",
+                        _stage_label(stage),
+                        global_epoch,
+                        total_epochs,
+                        _progress_bar(epoch_progress),
+                        100.0 * epoch_progress,
                         epoch_step,
                         epoch_steps,
                         self.global_step,
+                        total_training_steps,
                         float(step_loss),
                         float(grad),
                         learning_rates,
-                        elapsed,
-                        examples,
-                        window_tokens / max(elapsed, 1e-9),
+                        _format_duration(total_elapsed),
+                        _format_duration(epoch_eta),
+                        f"{peak_vram_gib:.2f}GiB" if peak_vram_gib is not None else "NA",
+                        examples / max(window_elapsed, 1e-9),
+                        window_tokens / max(window_elapsed, 1e-9),
                     )
         ce = float(ce_sum) / max(1, token_total)
         return {"loss": ce, "ce": ce}
@@ -151,12 +217,18 @@ class AFMRTrainer:
             resume_info = load_checkpoint(resume_checkpoint, self.model, config=self.config)
             self.global_step = int(resume_info.get("step") or 0)
             self.best_metric = resume_info.get("best_metric")
+            self._elapsed_before_fit = float(resume_info.get("elapsed_train_seconds") or 0.0)
+        else:
+            self._elapsed_before_fit = 0.0
+        self._fit_started_at = time.monotonic()
         training = self.config["training"]
         stages = (
             ("interface_warmup", int(training["interface_warmup_epochs"])),
             ("full_finetune", int(training["full_finetune_epochs"])),
         )
         steps_per_epoch = math.ceil(len(train_loader) / int(training["gradient_accumulation_steps"]))
+        total_epochs = sum(epochs for _, epochs in stages)
+        total_training_steps = max(1, steps_per_epoch * total_epochs)
         stage_order = {name: index for index, (name, _) in enumerate(stages)}
         if resume_info and resume_info.get("stage") not in stage_order:
             raise ValueError("Checkpoint has no recognized training stage")
@@ -185,36 +257,67 @@ class AFMRTrainer:
                     group["lr"] = base_lr * max(0.0, 1.0 - self.stage_optimizer_step / total_steps)
             for epoch in range(start_epoch, epochs + 1):
                 self.epoch = epoch + (stages[0][1] if stage == "full_finetune" else 0)
-                metrics = self._run_epoch(train_loader, optimizer, stage, True)
-                LOGGER.info(
-                    "[train] epoch=%d stage=%s | CE=%.5f",
-                    self.epoch,
+                global_epoch = self.epoch
+                metrics = self._run_epoch(
+                    train_loader,
+                    optimizer,
                     stage,
+                    True,
+                    global_epoch,
+                    total_epochs,
+                    total_training_steps,
+                )
+                LOGGER.info(
+                    "[train] epoch %d/%d complete | stage=%s | CE=%.5f | elapsed=%s",
+                    global_epoch,
+                    total_epochs,
+                    _stage_label(stage),
                     metrics["ce"],
+                    _format_duration(self._elapsed_train_seconds()),
                 )
                 self._write_metric(
-                    {"type": "epoch", "split": "train", "stage": stage, "epoch": self.epoch, "ce": metrics["ce"]}
+                    {
+                        "type": "epoch",
+                        "split": "train",
+                        "stage": stage,
+                        "epoch": global_epoch,
+                        "total_epochs": total_epochs,
+                        "epoch_percent": 100.0,
+                        "total_percent": round(100.0 * global_epoch / max(1, total_epochs), 3),
+                        "ce": metrics["ce"],
+                        "total_elapsed_seconds": round(self._elapsed_train_seconds(), 4),
+                    }
                 )
                 validation = None
                 if validation_loader is not None:
-                    validation = self._run_epoch(validation_loader, optimizer, stage, False)
-                    LOGGER.info(
-                        "[validation] epoch=%d stage=%s | CE=%.5f",
-                        self.epoch,
+                    validation = self._run_epoch(
+                        validation_loader,
+                        optimizer,
                         stage,
+                        False,
+                        global_epoch,
+                        total_epochs,
+                        total_training_steps,
+                    )
+                    LOGGER.info(
+                        "[validation] epoch %d/%d | CE=%.5f | elapsed=%s",
+                        global_epoch,
+                        total_epochs,
                         validation["ce"],
+                        _format_duration(self._elapsed_train_seconds()),
                     )
                     self._write_metric(
                         {
                             "type": "epoch",
                             "split": "validation",
                             "stage": stage,
-                            "epoch": self.epoch,
+                            "epoch": global_epoch,
+                            "total_epochs": total_epochs,
+                            "total_elapsed_seconds": round(self._elapsed_train_seconds(), 4),
                             "ce": validation["ce"],
                         }
                     )
                 output_dir = self.config["experiment"]["output_dir"]
-                global_epoch = epoch + (stages[0][1] if stage == "full_finetune" else 0)
                 if (
                     validation is not None
                     and bool(training.get("save_best", False))
@@ -231,6 +334,7 @@ class AFMRTrainer:
                         best_metric=self.best_metric,
                         stage=stage,
                         stage_epoch=epoch,
+                        elapsed_train_seconds=self._elapsed_train_seconds(),
                         scheduler=self.scheduler,
                     )
                 if bool(training.get("save_each_epoch", True)):
@@ -244,6 +348,7 @@ class AFMRTrainer:
                         best_metric=self.best_metric,
                         stage=stage,
                         stage_epoch=epoch,
+                        elapsed_train_seconds=self._elapsed_train_seconds(),
                         scheduler=self.scheduler,
                     )
                 save_checkpoint(
@@ -256,6 +361,15 @@ class AFMRTrainer:
                     best_metric=self.best_metric,
                     stage=stage,
                     stage_epoch=epoch,
+                    elapsed_train_seconds=self._elapsed_train_seconds(),
                     scheduler=self.scheduler,
                 )
             carried_state = dict(optimizer.state)
+        LOGGER.info(
+            "[train] complete | epochs=%d/%d | optimizer_steps=%d/%d | total_elapsed=%s",
+            total_epochs,
+            total_epochs,
+            self.global_step,
+            total_training_steps,
+            _format_duration(self._elapsed_train_seconds()),
+        )
