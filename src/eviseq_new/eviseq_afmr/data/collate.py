@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from operator import index
 from typing import Any, Sequence
 
 import torch
@@ -10,10 +12,27 @@ from .copy_alignment import align_copy_tokens, pad_copy_alignments
 from .schema import CanonicalRecord
 
 
+def _token_ids(encoded: Any) -> list[int]:
+    if isinstance(encoded, Mapping):
+        if "input_ids" not in encoded:
+            raise ValueError("Tokenizer output must contain input_ids")
+        encoded = encoded["input_ids"]
+    if hasattr(encoded, "tolist"):
+        encoded = encoded.tolist()
+    if isinstance(encoded, (list, tuple)) and len(encoded) == 1 and isinstance(encoded[0], (list, tuple)):
+        encoded = encoded[0]
+    if not isinstance(encoded, (list, tuple)):
+        raise ValueError("Tokenizer output must be one sequence of integer token IDs")
+    try:
+        return [index(value) for value in encoded]
+    except TypeError as exc:
+        raise ValueError(
+            "Tokenizer output must be one sequence of integer token IDs, not text or multiple sequences"
+        ) from exc
+
+
 def _ids(tokenizer: Any, text: str) -> list[int]:
-    encoded = tokenizer(text, add_special_tokens=False)
-    values = encoded["input_ids"] if isinstance(encoded, dict) else encoded.input_ids
-    return [int(value) for value in values]
+    return _token_ids(tokenizer(text, add_special_tokens=False))
 
 
 class SummarizationCollator:
@@ -34,10 +53,11 @@ class SummarizationCollator:
         if data_config.get("decoder_chat_template", False):
             if not instruction.strip():
                 raise ValueError("decoder_chat_template requires a non-empty decoder_prompt")
-            self._prompt_ids = list(
+            self._prompt_ids = _token_ids(
                 decoder_tokenizer.apply_chat_template(
                     [{"role": "user", "content": instruction}],
                     tokenize=True,
+                    return_dict=False,
                     add_generation_prompt=True,
                     enable_thinking=False,
                 )

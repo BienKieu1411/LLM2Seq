@@ -1,5 +1,6 @@
 import json
 
+import pytest
 import torch
 from eviseq_afmr.data.collate import SummarizationCollator
 from eviseq_afmr.data.dataset import JsonlSummarizationDataset
@@ -76,7 +77,12 @@ def test_chat_prompt_uses_native_template_and_excludes_reference():
     class ChatTokenizer(_TinyTokenizer):
         def apply_chat_template(self, messages, **kwargs):
             assert messages == [{"role": "user", "content": "Summarize faithfully."}]
-            assert kwargs == {"tokenize": True, "add_generation_prompt": True, "enable_thinking": False}
+            assert kwargs == {
+                "tokenize": True,
+                "return_dict": False,
+                "add_generation_prompt": True,
+                "enable_thinking": False,
+            }
             return [7, 8, 9]
 
     tokenizer = ChatTokenizer()
@@ -95,6 +101,106 @@ def test_chat_prompt_uses_native_template_and_excludes_reference():
     assert first["decoder_prompt_ids"].tolist() == [expected]
     torch.testing.assert_close(first["decoder_prompt_ids"], second["decoder_prompt_ids"])
     assert first["labels"][0, : len(expected)].eq(-100).all()
+
+
+@pytest.mark.parametrize("kind", ["mapping", "batch_encoding", "tensor", "batched_tensor"])
+def test_chat_prompt_accepts_tokenizer_return_containers(kind):
+    from transformers import BatchEncoding
+
+    class ChatTokenizer(_TinyTokenizer):
+        def apply_chat_template(self, messages, **kwargs):
+            values = [7, 8, 9]
+            return {
+                "mapping": {"input_ids": values, "attention_mask": [1, 1, 1]},
+                "batch_encoding": BatchEncoding({"input_ids": values}),
+                "tensor": torch.tensor(values),
+                "batched_tensor": torch.tensor([values]),
+            }[kind]
+
+    collator = SummarizationCollator(
+        _TinyTokenizer(),
+        ChatTokenizer(),
+        {
+            "decoder_prompt": "Summarize faithfully.",
+            "decoder_chat_template": True,
+        },
+    )
+    batch = collator([CanonicalRecord("x", "same source", "reference")])
+    assert batch["decoder_prompt_ids"].tolist() == [[7, 8, 9]]
+    assert batch["labels"][0, :3].eq(-100).all()
+
+
+@pytest.mark.parametrize("grounded_copy", [False, True])
+def test_real_fast_tokenizer_chat_prompt_batches_in_train_and_eval(grounded_copy):
+    from collections.abc import Mapping
+
+    from tokenizers import Tokenizer, models, pre_tokenizers
+    from transformers import PreTrainedTokenizerFast
+
+    words = [
+        "[UNK]",
+        "[PAD]",
+        "[BOS]",
+        "[EOS]",
+        "Summarize",
+        "faithfully",
+        "same",
+        "source",
+        "reference",
+        "Abstract",
+        "assistant",
+        ":",
+        ".",
+    ]
+    backend = Tokenizer(models.WordLevel({word: i for i, word in enumerate(words)}, unk_token="[UNK]"))
+    backend.pre_tokenizer = pre_tokenizers.Whitespace()
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend, unk_token="[UNK]", pad_token="[PAD]", bos_token="[BOS]", eos_token="[EOS]"
+    )
+    tokenizer.chat_template = "{{ messages[0]['content'] }}{% if add_generation_prompt %} assistant:{% endif %}"
+    rendered = tokenizer.apply_chat_template(
+        [{"role": "user", "content": "Summarize faithfully."}],
+        tokenize=True,
+        add_generation_prompt=True,
+        enable_thinking=False,
+    )
+    expected = list(rendered["input_ids"] if isinstance(rendered, Mapping) else rendered)
+    expected += tokenizer("Abstract:\n", add_special_tokens=False)["input_ids"]
+    collator = SummarizationCollator(
+        tokenizer,
+        tokenizer,
+        {
+            "decoder_prompt": "Summarize faithfully.",
+            "decoder_chat_template": True,
+            "decoder_prefix": "Abstract:\n",
+        },
+        grounded_copy=grounded_copy,
+    )
+    records = [CanonicalRecord("x", "same source", "reference"), CanonicalRecord("y", "source", "reference")]
+    train = collator(records)
+    collator.include_targets = False
+    evaluation = collator(records)
+    assert train["decoder_prompt_ids"].tolist() == [expected, expected]
+    torch.testing.assert_close(train["decoder_prompt_ids"], evaluation["decoder_prompt_ids"])
+    assert train["labels"][:, : len(expected)].eq(-100).all()
+    assert evaluation["labels"].eq(-100).all()
+
+
+@pytest.mark.parametrize("invalid", ["rendered prompt", ["input_ids", "attention_mask"], [[7], [8]]])
+def test_invalid_chat_token_ids_fail_before_dataloader_workers(invalid):
+    class ChatTokenizer(_TinyTokenizer):
+        def apply_chat_template(self, messages, **kwargs):
+            return invalid
+
+    with pytest.raises(ValueError, match="integer token IDs"):
+        SummarizationCollator(
+            _TinyTokenizer(),
+            ChatTokenizer(),
+            {
+                "decoder_prompt": "Summarize",
+                "decoder_chat_template": True,
+            },
+        )
 
 
 def test_old_processed_data_is_normalized_without_repreparing(tmp_path):
