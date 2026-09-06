@@ -2,6 +2,8 @@ import json
 
 import torch
 from eviseq_afmr.data.collate import SummarizationCollator
+from eviseq_afmr.data.dataset import JsonlSummarizationDataset
+from eviseq_afmr.data.normalization import detokenize
 from eviseq_afmr.data.prepare import prepare_split
 from eviseq_afmr.data.schema import CanonicalRecord
 from eviseq_afmr.runtime import _TinyTokenizer
@@ -68,6 +70,60 @@ def test_collator_keeps_decoder_inputs_and_labels_aligned():
     assert torch.equal(batch["decoder_input_ids"][supervised], batch["labels"][supervised])
     assert batch["labels"][0, -1] == _TinyTokenizer.eos_token_id
     assert not any(key.startswith("allocation") for key in batch)
+
+
+def test_chat_prompt_uses_native_template_and_excludes_reference():
+    class ChatTokenizer(_TinyTokenizer):
+        def apply_chat_template(self, messages, **kwargs):
+            assert messages == [{"role": "user", "content": "Summarize faithfully."}]
+            assert kwargs == {"tokenize": True, "add_generation_prompt": True, "enable_thinking": False}
+            return [7, 8, 9]
+
+    tokenizer = ChatTokenizer()
+    collator = SummarizationCollator(
+        tokenizer,
+        tokenizer,
+        {
+            "decoder_prompt": "Summarize faithfully.",
+            "decoder_chat_template": True,
+            "decoder_prefix": "Abstract:\n",
+        },
+    )
+    first = collator([CanonicalRecord("x", "same source", "first reference")])
+    second = collator([CanonicalRecord("x", "same source", "different reference")])
+    expected = [7, 8, 9] + tokenizer("Abstract:\n")["input_ids"]
+    assert first["decoder_prompt_ids"].tolist() == [expected]
+    torch.testing.assert_close(first["decoder_prompt_ids"], second["decoder_prompt_ids"])
+    assert first["labels"][0, : len(expected)].eq(-100).all()
+
+
+def test_old_processed_data_is_normalized_without_repreparing(tmp_path):
+    raw = {"id": "x", "text": "parkinson 's disease ( pd ) .\nPatients did n't recover .", "summary": "pd ( 50 % ) ."}
+    path = tmp_path / "train.jsonl"
+    path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
+    legacy = JsonlSummarizationDataset(path, {})[0]
+    normalized = JsonlSummarizationDataset(path, {"detokenize": True})[0]
+    assert legacy.source == raw["text"]
+    assert normalized.source == "parkinson's disease (pd).\nPatients didn't recover."
+    assert normalized.target == "pd (50%)."
+    assert detokenize(normalized.source) == normalized.source
+
+
+def test_normalization_matches_t5gemma_sentence_preprocessing():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).parents[3] / "src/T5Gemma/scripts/prepare_cnndm_json.py"
+    spec = importlib.util.spec_from_file_location("t5_preparation", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sentences = [
+        "parkinson 's disease ( pd ) .",
+        "`` It did n't change '' , ５０ % improved .",
+        "P [ 0.05 ] ; they 've recovered !",
+    ]
+    expected = module.join_field(sentences, "\n")
+    assert detokenize("\n".join(sentences)) == expected
 
 
 def test_external_labels_cannot_change_any_model_input():

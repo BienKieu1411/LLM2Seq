@@ -2,14 +2,15 @@ _base_: afmr_base.yaml
 
 experiment:
   name: afmr_wikilingua
-  output_dir: runs/afmr/wikilingua
+  output_dir: runs/afmr/wikilingua_value_anchor_copy
 
 data:
   train_file: datasets/wikilingua/train.jsonl
   validation_file: datasets/wikilingua/validation.jsonl
   test_file: datasets/wikilingua/test.jsonl
   encoder_prefix: "Tóm tắt thành các bước hành động ngắn, đúng thứ tự; không thêm thông tin.\nVăn bản:\n"
-  decoder_prompt: ""
+  decoder_prompt: "Tóm tắt nội dung được mã hóa thành các bước hành động ngắn gọn, đúng thứ tự. Giữ các chỉ dẫn quan trọng, không thêm thông tin. Chỉ trả lời bằng bản tóm tắt."
+  decoder_prefix: "Tóm tắt:\n"
   max_source_length: 3072
   max_target_length: 384
 

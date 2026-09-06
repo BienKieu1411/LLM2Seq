@@ -38,4 +38,4 @@ class FocusController(nn.Module):
         n = source_mask.sum(dim=1, keepdim=True).float()
         k = output_budget.reshape(-1, 1).float()
         scalar = torch.cat((torch.log1p(n), torch.log1p(k.clamp_min(0)), k / n.clamp_min(1.0)), dim=-1)
-        return self.output(self.source(source_pool) + self.prompt(prompt_pool) + self.scalar(scalar))
+        return self.output((self.source(source_pool) + self.prompt(prompt_pool) + self.scalar(scalar)).float())

@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader, Subset
 
 from .config import load_config, resolve_path
 from .data.collate import SummarizationCollator
+from .data.copy_alignment import COPY_INPUT_KEYS
 from .data.dataset import JsonlSummarizationDataset
 from .data.sampling import LengthBucketBatchSampler
 from .modeling.model import EviSeqAFMR
@@ -120,7 +121,12 @@ def build_loaders(
         split_data = copy.deepcopy(data)
         limit = max_train_examples if name == "train" else max_validation_examples if name == "validation" else 0
         dataset = JsonlSummarizationDataset(resolve_path(paths[name], config), split_data, max_examples=limit)
-        collator = SummarizationCollator(encoder_tokenizer, decoder_tokenizer, split_data)
+        collator = SummarizationCollator(
+            encoder_tokenizer,
+            decoder_tokenizer,
+            split_data,
+            grounded_copy=bool(config["decoder"].get("grounded_copy", {}).get("enabled", False)),
+        )
         batch_size = (
             int(config["training"].get("validation_batch_size", 4))
             if name != "train"
@@ -194,6 +200,8 @@ def train(
     if int(os.environ.get("WORLD_SIZE", "1")) > 1:
         raise ValueError("This AFMR runner is single-process; do not launch it with torchrun/DDP")
     config = load_config(config_path)
+    config["model"]["dtype"] = "float32"
+    config["model"].setdefault("compute_dtype", "bfloat16")
     _configure_precision(config)
     if output_dir_override:
         config["experiment"]["output_dir"] = output_dir_override
@@ -294,7 +302,12 @@ def evaluate(
         )
         return result
     device_obj = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-    model = EviSeqAFMR(config).to(device_obj)
+    inference_config = copy.deepcopy(config)
+    if device_obj.type == "cuda":
+        inference_config["model"]["dtype"] = config["model"].get(
+            "compute_dtype", config["model"].get("dtype", "float32")
+        )
+    model = EviSeqAFMR(inference_config).to(device_obj)
     load_checkpoint(checkpoint_path, model, config=config, restore_rng=False)
     model.eval()
     loader = DataLoader(
@@ -326,6 +339,7 @@ def evaluate(
                     "decoder_prompt_mask",
                     "ids",
                     "references",
+                    *COPY_INPUT_KEYS,
                 }
             }
             try:

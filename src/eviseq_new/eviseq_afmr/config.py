@@ -97,6 +97,7 @@ def validate_config(config: dict[str, Any]) -> None:
             "encoder_name",
             "decoder_name",
             "dtype",
+            "compute_dtype",
             "tokenizer_use_fast",
             "gradient_checkpointing",
             "attention_implementation",
@@ -108,6 +109,8 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("model.encoder_name and model.decoder_name are required")
     if model.get("dtype", "float32") not in {"float32", "bfloat16"}:
         raise ValueError("AFMR supports float32 or bfloat16; float16 requires a loss scaler and is not supported")
+    if model.get("compute_dtype", "bfloat16") not in {"float32", "bfloat16"}:
+        raise ValueError("model.compute_dtype must be float32 or bfloat16")
     if not model.get("tokenizer_use_fast", True):
         raise ValueError("AFMR requires a fast encoder tokenizer for exact offset mapping")
     architecture = config["architecture"]
@@ -134,8 +137,8 @@ def validate_config(config: dict[str, Any]) -> None:
         },
         "architecture",
     )
-    if architecture.get("name") != "afmr_v1":
-        raise ValueError("architecture.name must be afmr_v1")
+    if architecture.get("name") not in {"afmr_v1", "afmr_value_anchor"}:
+        raise ValueError("architecture.name must be afmr_v1 or afmr_value_anchor")
     taps = int(architecture.get("depth_taps", 0))
     if taps < 0:
         raise ValueError("architecture.depth_taps must be non-negative")
@@ -190,6 +193,7 @@ def validate_config(config: dict[str, Any]) -> None:
             "cross_gate_max",
             "attention_dropout",
             "ce_chunk_size",
+            "grounded_copy",
         },
         "decoder",
     )
@@ -197,6 +201,14 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("AFMR uses cross-attention in every decoder layer")
     if not bool(decoder.get("initialize_cross_from_self", True)):
         raise ValueError("AFMR cross-attention projections must be initialized from decoder self-attention")
+    copy_config = decoder.get("grounded_copy", {})
+    if not isinstance(copy_config, dict):
+        raise ValueError("decoder.grounded_copy must be a mapping")
+    _check_keys(copy_config, {"enabled", "key_dim", "gate_init"}, "decoder.grounded_copy")
+    if not isinstance(copy_config.get("enabled", False), bool):
+        raise ValueError("decoder.grounded_copy.enabled must be a boolean")
+    if int(copy_config.get("key_dim", 128)) <= 0 or not 0 < float(copy_config.get("gate_init", 0.05)) < 1:
+        raise ValueError("Grounded copy requires key_dim > 0 and 0 < gate_init < 1")
     training = config["training"]
     _check_keys(
         training,
@@ -253,6 +265,9 @@ def validate_config(config: dict[str, Any]) -> None:
             "list_separator",
             "encoder_prefix",
             "decoder_prompt",
+            "decoder_chat_template",
+            "decoder_prefix",
+            "detokenize",
             "max_source_length",
             "max_target_length",
         },

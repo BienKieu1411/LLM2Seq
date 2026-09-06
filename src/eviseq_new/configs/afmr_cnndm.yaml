@@ -2,14 +2,15 @@ _base_: afmr_base.yaml
 
 experiment:
   name: afmr_cnndm
-  output_dir: runs/afmr/cnndm
+  output_dir: runs/afmr/cnndm_value_anchor_copy
 
 data:
   train_file: datasets/cnndm/train.jsonl
   validation_file: datasets/cnndm/validation.jsonl
   test_file: datasets/cnndm/test.jsonl
   encoder_prefix: "Summarize the following news article concisely. Preserve the important facts and do not add information.\nArticle:\n"
-  decoder_prompt: ""
+  decoder_prompt: "Summarize the encoded news article concisely. Preserve the main events, people, dates, and quantities. Do not add unsupported information. Output only the summary."
+  detokenize: true
   max_target_length: 256
 
 generation:

@@ -8,6 +8,8 @@ from typing import Any, Iterable
 
 import torch
 
+from ..data.copy_alignment import COPY_INPUT_KEYS
+
 
 def _apply_repetition_penalty(scores: torch.Tensor, token_ids: torch.Tensor, penalty: float) -> None:
     """Match Transformers' RepetitionPenaltyLogitsProcessor for greedy decode."""
@@ -72,11 +74,13 @@ def generate_greedy(
         torch.full(
             (batch["input_ids"].shape[0],), max_new_tokens, device=batch["input_ids"].device, dtype=torch.float32
         ),
+        **{key: batch[key] for key in COPY_INPUT_KEYS if key in batch},
     )
     prompt_mask = batch["decoder_prompt_mask"].bool()
     if prompt_mask.shape[1] == 0 or not bool(prompt_mask.any(-1).all()):
         raise ValueError("Greedy generation requires a non-empty decoder prompt per sample")
     width = prompt_mask.shape[1]
+    chat_prompt = bool(getattr(model, "config", {}).get("data", {}).get("decoder_chat_template", False))
     positions = torch.arange(width, device=prompt_mask.device)[None, :]
     order = torch.argsort(torch.where(prompt_mask, positions + width, positions), dim=-1)
     token_ids = batch["decoder_prompt_ids"].gather(1, order)
@@ -86,8 +90,12 @@ def generate_greedy(
     model.decoder.eval()
     active_rows = torch.arange(token_ids.shape[0], device=token_ids.device)
     memory, memory_mask, source_bias = bridge.memory, bridge.memory_mask, bridge.source_bias
+    value_memory = getattr(bridge, "value_memory", None)
+    copy_state = getattr(bridge, "copy_state", None)
     try:
-        model.decoder.prepare_cross_cache(memory)
+        model.decoder.prepare_cross_cache(
+            memory, **({"value_memory": value_memory} if value_memory is not None else {})
+        )
         for step in range(max_new_tokens):
             history = token_ids.index_select(0, active_rows)
             current = history if past is None else history[:, -1:]
@@ -99,10 +107,13 @@ def generate_greedy(
                 decode_mask.index_select(0, active_rows),
                 past_key_values=past,
                 use_cache=True,
+                **({"value_memory": value_memory} if value_memory is not None else {}),
+                **({"copy_state": copy_state} if copy_state is not None else {}),
             )
             scores = logits[:, -1].float()
-            _apply_repetition_penalty(scores, history, float(repetition_penalty))
-            _apply_no_repeat_ngram(scores, history, int(no_repeat_ngram_size))
+            constraint_history = history[:, width:] if chat_prompt else history
+            _apply_repetition_penalty(scores, constraint_history, float(repetition_penalty))
+            _apply_no_repeat_ngram(scores, constraint_history, int(no_repeat_ngram_size))
             eos = getattr(tokenizer, "eos_token_id", None)
             if step < min_new_tokens:
                 if eos is not None:
@@ -135,6 +146,10 @@ def generate_greedy(
                     memory = memory.index_select(0, surviving)
                     memory_mask = memory_mask.index_select(0, surviving)
                     source_bias = source_bias.index_select(0, surviving)
+                    if value_memory is not None:
+                        value_memory = value_memory.index_select(0, surviving)
+                    if copy_state is not None:
+                        copy_state = copy_state.index_select(surviving)
     finally:
         model.decoder.clear_cross_cache()
     texts = tokenizer.batch_decode(token_ids[:, batch["decoder_prompt_ids"].shape[1] :], skip_special_tokens=True)

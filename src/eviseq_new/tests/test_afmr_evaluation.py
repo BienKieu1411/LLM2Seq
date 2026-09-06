@@ -17,6 +17,33 @@ def test_diagnostic_metrics_are_bounded():
     assert 0 <= metrics["rougeL"] <= 100
 
 
+def test_chat_prompt_is_not_penalized_as_generated_text(monkeypatch):
+    from pathlib import Path
+
+    from eviseq_afmr.config import load_config
+    from eviseq_afmr.evaluation import generate
+    from eviseq_afmr.modeling.model import EviSeqAFMR
+    from eviseq_afmr.runtime import build_loaders
+
+    config = load_config(Path(__file__).parents[1] / "configs/afmr_smoke.yaml")
+    loader = build_loaders(config)["train"]
+    batch = next(iter(loader))
+    model = EviSeqAFMR(config).eval()
+    model.config["data"]["decoder_chat_template"] = True
+    seen = []
+    original = generate._apply_repetition_penalty
+
+    def track(scores, ids, penalty):
+        seen.append(ids.shape[1])
+        return original(scores, ids, penalty)
+
+    monkeypatch.setattr(generate, "_apply_repetition_penalty", track)
+    generate.generate_greedy(
+        model, batch, loader.collate_fn.decoder_tokenizer, 3, min_new_tokens=3, repetition_penalty=1.05
+    )
+    assert seen == [0, 1, 2]
+
+
 def test_diagnostic_backend_matches_installed_rouge():
     from rouge import Rouge
 

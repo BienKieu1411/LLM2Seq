@@ -1,9 +1,10 @@
 from pathlib import Path
 
+import pytest
 import torch
 from eviseq_afmr.config import load_config
 from eviseq_afmr.modeling.model import EviSeqAFMR
-from eviseq_afmr.runtime import build_loaders, evaluate
+from eviseq_afmr.runtime import _write_resolved_config, build_loaders, evaluate
 from eviseq_afmr.training.checkpoint import load_checkpoint
 from eviseq_afmr.training.engine import AFMRTrainer
 
@@ -16,9 +17,12 @@ def _config(tmp_path: Path) -> dict:
     return config
 
 
-def test_tiny_runtime_trains_saves_best_and_streams_eval(tmp_path: Path):
+@pytest.mark.parametrize("grounded_copy", [False, True])
+def test_tiny_runtime_trains_saves_best_and_streams_eval(tmp_path: Path, grounded_copy):
     config = _config(tmp_path)
-    config_path = Path(__file__).parents[1] / "configs" / "afmr_smoke.yaml"
+    config["decoder"]["grounded_copy"]["enabled"] = grounded_copy
+    _write_resolved_config(config, tmp_path)
+    config_path = tmp_path / "resolved_config.yaml"
     loaders = build_loaders(config, max_train_examples=4, max_validation_examples=2)
     test_batch = next(iter(build_loaders(config, split="test")["test"]))
     assert "allocation_target" not in test_batch

@@ -6,6 +6,7 @@ from typing import Any, Sequence
 
 import torch
 
+from .copy_alignment import align_copy_tokens, pad_copy_alignments
 from .schema import CanonicalRecord
 
 
@@ -21,12 +22,29 @@ class SummarizationCollator:
         encoder_tokenizer: Any,
         decoder_tokenizer: Any,
         data_config: dict[str, Any],
+        *,
+        grounded_copy: bool = False,
     ):
         self.encoder_tokenizer = encoder_tokenizer
         self.decoder_tokenizer = decoder_tokenizer
         self.data = data_config
         self.include_targets = True
-        self._prompt_ids = _ids(decoder_tokenizer, str(data_config.get("decoder_prompt", "")))
+        self.grounded_copy = grounded_copy
+        instruction = str(data_config.get("decoder_prompt", ""))
+        if data_config.get("decoder_chat_template", False):
+            if not instruction.strip():
+                raise ValueError("decoder_chat_template requires a non-empty decoder_prompt")
+            self._prompt_ids = list(
+                decoder_tokenizer.apply_chat_template(
+                    [{"role": "user", "content": instruction}],
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            )
+        else:
+            self._prompt_ids = _ids(decoder_tokenizer, instruction)
+        self._prompt_ids += _ids(decoder_tokenizer, str(data_config.get("decoder_prefix", "")))
         self.max_source_length = int(data_config.get("max_source_length", 4096))
         self.max_target_length = int(data_config.get("max_target_length", 512))
         self.encoder_prefix = str(data_config.get("encoder_prefix", ""))
@@ -34,7 +52,7 @@ class SummarizationCollator:
         self.pad_encoder = int(getattr(encoder_tokenizer, "pad_token_id", 0) or 0)
         self.pad_decoder = int(getattr(decoder_tokenizer, "pad_token_id", 0) or 0)
 
-    def _encode_source(self, record: CanonicalRecord) -> tuple[list[int], list[bool]]:
+    def _encode_source(self, record: CanonicalRecord, return_offsets: bool = False):
         try:
             encoded = self.encoder_tokenizer(
                 self.encoder_prefix + record.source,
@@ -53,7 +71,7 @@ class SummarizationCollator:
             content.append(article)
         if not any(content):
             raise ValueError(f"No source content remains after truncation for {record.example_id}")
-        return source, content
+        return (source, content, offsets) if return_offsets else (source, content)
 
     @staticmethod
     def _pad(rows: Sequence[Sequence[int]], value: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -72,8 +90,13 @@ class SummarizationCollator:
         prompt_rows: list[list[int]] = []
         decoder_rows: list[list[int]] = []
         label_rows: list[list[int]] = []
+        copy_rows = []
         for record in records:
-            source, content = self._encode_source(record)
+            source, content, offsets = self._encode_source(record, return_offsets=True)
+            if self.grounded_copy:
+                copy_rows.append(
+                    align_copy_tokens(record.source, len(self.encoder_prefix), offsets, self.decoder_tokenizer)
+                )
             encoder_rows.append(source)
             content_rows.append(content)
 
@@ -103,7 +126,7 @@ class SummarizationCollator:
         prompt_ids, prompt_mask = self._pad(prompt_rows, self.pad_decoder)
         decoder_input_ids, decoder_attention_mask = self._pad(decoder_rows, self.pad_decoder)
         labels, _ = self._pad(label_rows, -100)
-        return {
+        result = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "source_content_mask": source_content_mask.bool(),
@@ -116,3 +139,6 @@ class SummarizationCollator:
             "sources": [record.source for record in records],
             "references": [record.target for record in records],
         }
+        if self.grounded_copy:
+            result.update(pad_copy_alignments(copy_rows))
+        return result

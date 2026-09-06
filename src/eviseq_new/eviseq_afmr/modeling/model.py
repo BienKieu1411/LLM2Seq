@@ -39,6 +39,7 @@ class EviSeqAFMR(nn.Module):
         decoder_prompt_ids: torch.Tensor,
         decoder_prompt_mask: torch.Tensor,
         output_budget: torch.Tensor,
+        **copy_inputs: torch.Tensor,
     ) -> BridgeState:
         state = self.encoder(input_ids, attention_mask, source_content_mask)
         prompt_embeddings = self.decoder.embed_tokens(decoder_prompt_ids)
@@ -51,7 +52,20 @@ class EviSeqAFMR(nn.Module):
                 bridge.content_mask,
                 bridge.source_bias,
                 bridge.controller,
+                None if bridge.value_memory is None else bridge.value_memory.to(decoder_dtype),
             )
+        if self.decoder.grounded_copy is not None:
+            if not copy_inputs:
+                raise ValueError("Grounded copy is enabled but source-token alignment is missing")
+            bridge.copy_state = self.decoder.grounded_copy.prepare(
+                bridge.value_memory if bridge.value_memory is not None else bridge.memory,
+                bridge.source_bias,
+                bridge.content_mask,
+                self.decoder.embed_tokens,
+                **copy_inputs,
+            )
+        elif copy_inputs:
+            raise ValueError("Copy alignment supplied to a decoder without grounded copy")
         return bridge
 
     def forward(
@@ -66,6 +80,7 @@ class EviSeqAFMR(nn.Module):
         labels: Optional[torch.Tensor] = None,
         output_budget: Optional[torch.Tensor] = None,
         return_logits: bool = True,
+        **copy_inputs: torch.Tensor,
     ) -> AFMROutput:
         if output_budget is None:
             output_budget = torch.full(
@@ -75,7 +90,13 @@ class EviSeqAFMR(nn.Module):
                 dtype=torch.float32,
             )
         bridge = self.encode_source(
-            input_ids, attention_mask, source_content_mask, decoder_prompt_ids, decoder_prompt_mask, output_budget
+            input_ids,
+            attention_mask,
+            source_content_mask,
+            decoder_prompt_ids,
+            decoder_prompt_mask,
+            output_budget,
+            **copy_inputs,
         )
         logits, _, loss_ce = self.decoder(
             decoder_input_ids,
@@ -85,5 +106,7 @@ class EviSeqAFMR(nn.Module):
             decoder_attention_mask,
             labels=labels,
             return_logits=return_logits,
+            value_memory=bridge.value_memory,
+            copy_state=bridge.copy_state,
         )
         return AFMROutput(logits, loss_ce, loss_ce, bridge)

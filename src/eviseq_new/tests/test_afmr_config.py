@@ -6,7 +6,7 @@ from eviseq_afmr.config import load_config, resolve_path
 
 def test_smoke_config_is_valid():
     config = load_config(Path(__file__).parents[1] / "configs" / "afmr_smoke.yaml")
-    assert config["architecture"]["name"] == "afmr_v1"
+    assert config["architecture"]["name"] == "afmr_value_anchor"
     assert config["generation"]["num_beams"] == 1
 
 
@@ -16,7 +16,11 @@ def test_pubmed_recipe_matches_t5gemma_prompt_and_decode_contract():
         "Summarize the following biomedical research article into a concise, factual abstract. "
         "Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
     )
-    assert config["data"]["decoder_prompt"] == ""
+    assert config["data"]["decoder_prompt"]
+    assert config["data"]["decoder_chat_template"] is True
+    assert config["data"]["detokenize"] is True
+    assert config["model"]["dtype"] == "float32"
+    assert config["model"]["compute_dtype"] == "bfloat16"
     assert config["generation"]["min_new_tokens"] == 32
     assert config["generation"]["repetition_penalty"] == 1.05
     assert config["generation"]["no_repeat_ngram_size"] == 3
@@ -37,7 +41,7 @@ def test_task_recipes_match_t5gemma_protocol(afmr_name, t5_name, total_epochs):
     afmr = load_config(Path(__file__).parents[1] / "configs" / afmr_name)
     t5 = yaml.safe_load((root / "src" / "T5Gemma" / "configs" / t5_name).read_text(encoding="utf-8"))
     assert afmr["data"]["encoder_prefix"] == t5["data"]["source_prefix"]
-    assert afmr["data"]["decoder_prompt"] == ""
+    assert afmr["data"]["decoder_prompt"]
     for key in ("max_new_tokens", "min_new_tokens", "repetition_penalty", "no_repeat_ngram_size"):
         assert afmr["generation"][key] == t5["generation"][key]
     assert afmr["training"]["interface_warmup_epochs"] + afmr["training"]["full_finetune_epochs"] == total_epochs

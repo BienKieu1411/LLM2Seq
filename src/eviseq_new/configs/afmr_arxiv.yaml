@@ -2,12 +2,15 @@ _base_: afmr_base.yaml
 
 experiment:
   name: afmr_arxiv
-  output_dir: runs/afmr/arxiv
+  output_dir: runs/afmr/arxiv_value_anchor_copy
 
 data:
   train_file: datasets/arxiv/train.jsonl
   validation_file: datasets/arxiv/validation.jsonl
   test_file: datasets/arxiv/test.jsonl
+  decoder_prompt: "Summarize the encoded research article as a concise, factual abstract. Cover the research problem, approach, main findings, and contributions when supported. Output only the abstract."
+  decoder_prefix: "Abstract:\n"
+  detokenize: true
 
 model:
   encoder_name: /absolute/path/to/pplx-embed-v1-0.6b

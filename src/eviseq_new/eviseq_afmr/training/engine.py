@@ -5,6 +5,7 @@ import logging
 import math
 import random
 import time
+from contextlib import nullcontext
 from itertools import islice
 from pathlib import Path
 from typing import Any, Iterable
@@ -12,6 +13,7 @@ from typing import Any, Iterable
 import numpy as np
 import torch
 
+from ..data.copy_alignment import COPY_INPUT_KEYS
 from .checkpoint import load_checkpoint, save_checkpoint
 from .optimizer import build_optimizer, set_stage_trainability
 
@@ -61,9 +63,13 @@ def _peak_vram_gib(device: torch.device) -> float | None:
 
 class AFMRTrainer:
     def __init__(self, model: torch.nn.Module, config: dict[str, Any], device: torch.device | str):
-        self.model = model.to(device)
+        self.model = model.to(device=device, dtype=torch.float32)
         self.config = config
         self.device = torch.device(device)
+        self.use_bf16 = self.device.type == "cuda" and config["model"].get("compute_dtype", "bfloat16") == "bfloat16"
+        LOGGER.info(
+            "precision | parameters=FP32 | optimizer=FP32 | compute=%s", "BF16 autocast" if self.use_bf16 else "FP32"
+        )
         self.global_step = 0
         self.best_metric: float | None = None
         self.stage_optimizer_step = 0
@@ -115,20 +121,22 @@ class AFMRTrainer:
             for raw_batch, tokens in zip(window, counts):
                 batch = _move(raw_batch, self.device)
                 with torch.set_grad_enabled(train):
-                    output = self.model(
-                        batch["input_ids"],
-                        batch["attention_mask"],
-                        batch["source_content_mask"],
-                        batch["decoder_prompt_ids"],
-                        batch["decoder_prompt_mask"],
-                        batch["decoder_input_ids"],
-                        batch.get("decoder_attention_mask"),
-                        batch.get("labels"),
-                        return_logits=False,
-                    )
-                    if output.loss_ce is None:
-                        raise RuntimeError("AFMR training requires decoder labels")
-                    loss = output.loss_ce * tokens / max(1, window_tokens)
+                    with torch.autocast("cuda", dtype=torch.bfloat16) if self.use_bf16 else nullcontext():
+                        output = self.model(
+                            batch["input_ids"],
+                            batch["attention_mask"],
+                            batch["source_content_mask"],
+                            batch["decoder_prompt_ids"],
+                            batch["decoder_prompt_mask"],
+                            batch["decoder_input_ids"],
+                            batch.get("decoder_attention_mask"),
+                            batch.get("labels"),
+                            return_logits=False,
+                            **{key: batch[key] for key in COPY_INPUT_KEYS if key in batch},
+                        )
+                        if output.loss_ce is None:
+                            raise RuntimeError("AFMR training requires decoder labels")
+                        loss = output.loss_ce * tokens / max(1, window_tokens)
                     if train:
                         loss.backward()
                 step_loss += loss.detach()

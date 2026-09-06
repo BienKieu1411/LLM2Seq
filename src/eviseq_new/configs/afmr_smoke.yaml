@@ -18,6 +18,11 @@ architecture:
   focus_hidden: 16
   focus_windows: [4, 8, 16]
 
+decoder:
+  grounded_copy:
+    enabled: false
+    key_dim: 8
+
 training:
   interface_warmup_epochs: 1
   full_finetune_epochs: 1
@@ -28,6 +33,9 @@ training:
   validation_num_workers: 0
 
 data:
+  decoder_prompt: "Summarize:"
+  decoder_chat_template: false
+  decoder_prefix: ""
   train_file: tests/fixtures/train.jsonl
   validation_file: tests/fixtures/validation.jsonl
   test_file: tests/fixtures/test.jsonl

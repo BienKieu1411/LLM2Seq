@@ -9,6 +9,7 @@ from typing import Any
 
 from torch.utils.data import Dataset
 
+from .normalization import detokenize
 from .schema import CanonicalRecord
 
 
@@ -56,6 +57,8 @@ class JsonlSummarizationDataset(Dataset[CanonicalRecord]):
             id_field=str(config.get("id_field", "id")),
             separator=str(config.get("list_separator", "\n")),
         )
+        if config.get("detokenize", False):
+            record = replace(record, source=detokenize(record.source), target=detokenize(record.target))
         return record if record.example_id else replace(record, example_id=str(index + 1))
 
     def __getstate__(self):

@@ -10,6 +10,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .grounded_copy import CopyState, GroundedCopyHead
+
 try:
     from transformers.modeling_layers import GradientCheckpointingLayer
 except ImportError:
@@ -70,11 +72,16 @@ class CopiedCrossAttention(nn.Module):
         self.dropout = float(dropout)
         self._cache: Optional[tuple[torch.Tensor, torch.Tensor]] = None
 
-    def _memory_kv(self, memory: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _memory_kv(
+        self, memory: torch.Tensor, value_memory: Optional[torch.Tensor] = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         batch, length, _ = memory.shape
+        if value_memory is not None and value_memory.shape != memory.shape:
+            raise ValueError("Key and value memories must have matching token positions and dimensions")
         hidden = self.memory_norm(memory)
         key = self.k_norm(self.k_proj(hidden).view(batch, length, self.num_kv_heads, self.head_dim)).transpose(1, 2)
-        value = self.v_proj(hidden).view(batch, length, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        value_hidden = hidden if value_memory is None else self.memory_norm(value_memory)
+        value = self.v_proj(value_hidden).view(batch, length, self.num_kv_heads, self.head_dim).transpose(1, 2)
         return key, value
 
     def forward(
@@ -83,12 +90,15 @@ class CopiedCrossAttention(nn.Module):
         memory: torch.Tensor,
         memory_mask: Optional[torch.Tensor],
         source_bias: Optional[torch.Tensor],
+        value_memory: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         batch, query_length, _ = query_states.shape
         query = self.q_norm(
             self.q_proj(query_states).view(batch, query_length, self.num_heads, self.head_dim)
         ).transpose(1, 2)
-        key, value = self._cache if self._cache is not None and not self.training else self._memory_kv(memory)
+        key, value = (
+            self._cache if self._cache is not None and not self.training else self._memory_kv(memory, value_memory)
+        )
         mask: Optional[torch.Tensor]
         if source_bias is not None:
             if source_bias.ndim == 2:
@@ -137,8 +147,8 @@ class CopiedCrossAttention(nn.Module):
         return self.o_proj(attended.transpose(1, 2).reshape(batch, query_length, self.num_heads * self.head_dim))
 
     @torch.no_grad()
-    def prepare_cache(self, memory: torch.Tensor) -> None:
-        self._cache = tuple(value.contiguous() for value in self._memory_kv(memory))
+    def prepare_cache(self, memory: torch.Tensor, value_memory: Optional[torch.Tensor] = None) -> None:
+        self._cache = tuple(value.contiguous() for value in self._memory_kv(memory, value_memory))
 
     def clear_cache(self) -> None:
         self._cache = None
@@ -166,6 +176,7 @@ class DecoderLayerWithCross(GradientCheckpointingLayer):
         encoder_hidden_states: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         encoder_attention_bias: Optional[torch.Tensor] = None,
+        encoder_value_states: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> torch.Tensor:
         residual = hidden_states
@@ -181,7 +192,11 @@ class DecoderLayerWithCross(GradientCheckpointingLayer):
         hidden_states = residual + self_states
         if encoder_hidden_states is not None:
             cross = self.cross(
-                self.cross_norm(hidden_states), encoder_hidden_states, encoder_attention_mask, encoder_attention_bias
+                self.cross_norm(hidden_states),
+                encoder_hidden_states,
+                encoder_attention_mask,
+                encoder_attention_bias,
+                value_memory=encoder_value_states,
             )
             hidden_states = (
                 hidden_states + self.cross_gate_max * torch.sigmoid(self.cross_gate).to(hidden_states.dtype) * cross
@@ -191,8 +206,8 @@ class DecoderLayerWithCross(GradientCheckpointingLayer):
         return residual + self.base.mlp(hidden_states)
 
     @torch.no_grad()
-    def prepare_cache(self, memory: torch.Tensor) -> None:
-        self.cross.prepare_cache(memory)
+    def prepare_cache(self, memory: torch.Tensor, value_memory: Optional[torch.Tensor] = None) -> None:
+        self.cross.prepare_cache(memory, value_memory)
 
     def clear_cache(self) -> None:
         self.cross.clear_cache()
@@ -217,6 +232,15 @@ class QwenCrossDecoder(nn.Module):
             raise ValueError("ce_chunk_size must be positive")
         self.backbone = causal_lm.model
         self.lm_head = causal_lm.lm_head
+        copy_config = config.get("grounded_copy", {})
+        self.grounded_copy = None
+        if copy_config.get("enabled", False):
+            with torch.random.fork_rng(devices=[]):
+                self.grounded_copy = GroundedCopyHead(
+                    int(model_config.hidden_size),
+                    int(copy_config.get("key_dim", 128)),
+                    float(copy_config.get("gate_init", 0.05)),
+                )
         if int(config.get("cross_attention_every", 1)) != 1:
             raise ValueError("AFMR requires cross-attention in every decoder layer")
         gate_init = float(config.get("cross_gate_init", 0.10))
@@ -253,7 +277,11 @@ class QwenCrossDecoder(nn.Module):
         past_key_values: Optional[Any] = None,
         use_cache: bool = False,
         return_logits: bool = True,
+        value_memory: Optional[torch.Tensor] = None,
+        copy_state: Optional[CopyState] = None,
     ) -> tuple[Optional[torch.Tensor], Optional[Any], Optional[torch.Tensor]]:
+        if (self.grounded_copy is None) != (copy_state is None):
+            raise ValueError("Decoder grounded-copy configuration and source state disagree")
         position_ids = None
         if attention_mask is not None:
             position_ids = attention_mask.long().cumsum(-1) - 1
@@ -268,12 +296,21 @@ class QwenCrossDecoder(nn.Module):
             encoder_hidden_states=memory,
             encoder_attention_mask=memory_mask,
             encoder_attention_bias=source_bias,
+            encoder_value_states=value_memory,
         )
         hidden = outputs.last_hidden_state
-        logits = self.lm_head(hidden[:, -1:] if use_cache else hidden) if return_logits else None
+        output_hidden = hidden[:, -1:] if use_cache else hidden
+        logits = self.lm_head(output_hidden) if return_logits else None
+        if logits is not None and self.grounded_copy is not None:
+            logits = self.grounded_copy.mix_logits(output_hidden, logits, copy_state)
         loss = None
         if labels is not None:
             shift_labels = labels[:, 1:].contiguous()
+            if self.grounded_copy is not None and logits is None:
+                loss = self.grounded_copy.loss(
+                    hidden[:, :-1], shift_labels, copy_state, self.lm_head, self.ce_chunk_size
+                )
+                return logits, getattr(outputs, "past_key_values", None) if use_cache else None, loss
             if logits is not None:
                 loss = F.cross_entropy(
                     logits[:, :-1].float().reshape(-1, logits.shape[-1]),
@@ -307,10 +344,10 @@ class QwenCrossDecoder(nn.Module):
         return logits, getattr(outputs, "past_key_values", None) if use_cache else None, loss
 
     @torch.no_grad()
-    def prepare_cross_cache(self, memory: torch.Tensor) -> None:
+    def prepare_cross_cache(self, memory: torch.Tensor, value_memory: Optional[torch.Tensor] = None) -> None:
         for layer in self.backbone.layers:
             if isinstance(layer, DecoderLayerWithCross):
-                layer.prepare_cache(memory)
+                layer.prepare_cache(memory, value_memory)
 
     def clear_cross_cache(self) -> None:
         for layer in self.backbone.layers:
@@ -326,6 +363,8 @@ class QwenCrossDecoder(nn.Module):
         for parameter in self.parameters():
             parameter.requires_grad = bool(trainable)
         if not trainable:
+            if self.grounded_copy is not None:
+                self.grounded_copy.requires_grad_(True)
             for layer in self.backbone.layers:
                 if isinstance(layer, DecoderLayerWithCross):
                     for parameter in layer.cross.parameters():

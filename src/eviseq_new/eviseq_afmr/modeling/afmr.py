@@ -1,9 +1,4 @@
-"""Adaptive Full-Memory Residual bridge.
-
-The bridge keeps one full source memory.  The only routing signal is one
-shared additive token prior consumed by every copied decoder cross-attention
-layer; it never creates banks, slots, top-k source pruning, or a second memory.
-"""
+"""Full-source retrieval adaptation with an optional final-state value anchor."""
 
 from __future__ import annotations
 
@@ -24,6 +19,7 @@ def _bounded_gate(raw: torch.Tensor, maximum: float) -> torch.Tensor:
 class AdaptiveFullMemoryResidualBridge(nn.Module):
     def __init__(self, encoder_hidden: int, decoder_hidden: int, config: dict):
         super().__init__()
+        self.value_anchored = config.get("name", "afmr_v1") == "afmr_value_anchor"
         self.encoder_hidden = int(encoder_hidden)
         self.decoder_hidden = int(decoder_hidden)
         self.controller_dim = int(config.get("controller_dim", 256))
@@ -119,13 +115,13 @@ class AdaptiveFullMemoryResidualBridge(nn.Module):
 
     def _temperature(self, controller: torch.Tensor) -> torch.Tensor:
         return self.temperature_min + (self.temperature_max - self.temperature_min) * torch.sigmoid(
-            self.temperature_raw(controller.float()).squeeze(-1)
+            self.temperature_raw(controller.float()).squeeze(-1).float()
         )
 
     def _depth_weights(self, normalized_taps: list[torch.Tensor], controller: torch.Tensor) -> torch.Tensor:
         scores = torch.cat([self.depth_content_score(state) for state in normalized_taps], dim=-1)
         scores = scores + self.depth_router(controller.float())[:, None, :]
-        return torch.softmax(scores, dim=-1)
+        return torch.softmax(scores.float(), dim=-1)
 
     def _focus_prior(self, memory: torch.Tensor, content_mask: torch.Tensor, controller: torch.Tensor) -> torch.Tensor:
         batch, length, _ = memory.shape
@@ -162,7 +158,7 @@ class AdaptiveFullMemoryResidualBridge(nn.Module):
                 + self.focus_query(controller.float())[:, None, :]
                 + self.focus_scale_embedding[scale_index]
             )
-            region_score = self.focus_output(F.silu(region_features)).squeeze(-1)
+            region_score = self.focus_output(F.silu(region_features)).squeeze(-1).float()
             valid = valid & scale_available[:, None]
             mean = (region_score * valid).sum(dim=-1, keepdim=True) / valid.sum(dim=-1, keepdim=True).clamp_min(
                 1
@@ -184,7 +180,7 @@ class AdaptiveFullMemoryResidualBridge(nn.Module):
             token_denominator = overlap_add(valid.float()).clamp_min(1.0)
             priors.append((token_values / token_denominator).gather(1, content_index))
             valid_scales.append(scale_available)
-        scale_logits = self.focus_scale(controller.float()).to(memory.device)
+        scale_logits = self.focus_scale(controller.float()).float().to(memory.device)
         scale_mask = torch.stack(valid_scales, dim=-1)
         no_valid = ~scale_mask.any(dim=-1)
         safe_scale_mask = scale_mask | no_valid[:, None]
@@ -240,4 +236,9 @@ class AdaptiveFullMemoryResidualBridge(nn.Module):
         source_bias = self._focus_prior(memory, content, controller)
         memory = memory.masked_fill(~encoder_state.attention_mask.bool().unsqueeze(-1), 0)
         source_bias = source_bias.masked_fill(~content, 0.0)
-        return BridgeState(memory, encoder_state.attention_mask.bool(), content, source_bias, controller)
+        value_memory = None
+        if self.value_anchored:
+            value_memory = self.base_projection(final.float()).masked_fill(
+                ~encoder_state.attention_mask.bool().unsqueeze(-1), 0
+            )
+        return BridgeState(memory, encoder_state.attention_mask.bool(), content, source_bias, controller, value_memory)

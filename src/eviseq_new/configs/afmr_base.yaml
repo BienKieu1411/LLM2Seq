@@ -5,7 +5,8 @@ experiment:
 model:
   encoder_name: Qwen/Qwen3-Embedding-0.6B
   decoder_name: Qwen/Qwen3-0.6B
-  dtype: bfloat16
+  dtype: float32
+  compute_dtype: bfloat16
   tokenizer_use_fast: true
   gradient_checkpointing: true
   attention_implementation: sdpa
@@ -15,7 +16,7 @@ encoder:
   backend: pretrained_native
 
 architecture:
-  name: afmr_v1
+  name: afmr_value_anchor
   controller_dim: 256
   depth_taps: 4
   depth_rank: 128
@@ -40,6 +41,10 @@ decoder:
   cross_gate_max: 1.0
   attention_dropout: 0.0
   ce_chunk_size: 1024
+  grounded_copy:
+    enabled: true
+    key_dim: 128
+    gate_init: 0.05
 
 training:
   interface_warmup_epochs: 1
@@ -77,7 +82,10 @@ data:
   id_field: id
   list_separator: "\n"
   encoder_prefix: "Summarize the following document faithfully and concisely.\nDocument:\n"
-  decoder_prompt: ""
+  decoder_prompt: "Summarize the encoded source concisely and faithfully. Preserve the essential facts and relationships. Do not add unsupported information. Output only the summary."
+  decoder_chat_template: true
+  decoder_prefix: "Summary:\n"
+  detokenize: false
   max_source_length: 4096
   max_target_length: 512
 

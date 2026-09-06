@@ -6,7 +6,7 @@ import torch
 
 
 def _component(name: str) -> str:
-    if ".cross." in name or name.endswith("cross_gate") or ".cross_norm." in name:
+    if ".cross." in name or name.endswith("cross_gate") or ".cross_norm." in name or ".grounded_copy." in name:
         return "cross_attention"
     for component in ("encoder", "decoder", "bridge"):
         if name.startswith(component + "."):

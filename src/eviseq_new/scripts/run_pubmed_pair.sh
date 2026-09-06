@@ -21,7 +21,12 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 PUBMED_SOURCE_DIR="${PUBMED_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/datasets/pubmed}"
 PROCESSED_DATA_DIR="${ROOT}/datasets/pubmed"
 RAW_DATA_DIR="${ROOT}/datasets/raw/pubmed"
-RUN_ROOT="${ROOT}/runs/afmr/pubmed_pair"
+AFMR_ARCHITECTURE="${AFMR_ARCHITECTURE:-afmr_value_anchor}"
+AFMR_GROUNDED_COPY="${AFMR_GROUNDED_COPY:-true}"
+[[ "${AFMR_GROUNDED_COPY}" == true || "${AFMR_GROUNDED_COPY}" == false ]] || { echo "AFMR_GROUNDED_COPY must be true or false" >&2; exit 1; }
+COPY_VARIANT=lm
+[[ "${AFMR_GROUNDED_COPY}" == false ]] || COPY_VARIANT=copy
+RUN_ROOT="${ROOT}/runs/afmr/pubmed_pair_${AFMR_ARCHITECTURE}_${COPY_VARIANT}"
 GENERATED_CONFIG_DIR="${RUN_ROOT}/configs"
 LOG_DIR="${ROOT}/logs/afmr"
 PPLX_ENCODER="${PPLX_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/pplx-embed-v1-0.6b}"
@@ -45,9 +50,12 @@ die() {
 [[ -d "${QWEN_ENCODER}" ]] || die "Qwen embedding encoder not found: ${QWEN_ENCODER}"
 [[ -d "${DECODER_MODEL}" ]] || die "Qwen decoder not found: ${DECODER_MODEL}"
 [[ "${EVAL_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || die "EVAL_BATCH_SIZE must be a positive integer"
+[[ "${AFMR_ARCHITECTURE}" == afmr_value_anchor || "${AFMR_ARCHITECTURE}" == afmr_v1 ]] || die "Unsupported AFMR_ARCHITECTURE"
 
 echo "=== AFMR PubMed sequential benchmark ==="
 echo "=== GPU: CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ==="
+echo "=== Architecture: ${AFMR_ARCHITECTURE}; FP32 updates, BF16 compute ==="
+echo "=== Grounded copy: ${AFMR_GROUNDED_COPY} ==="
 echo "=== Python: ${PYTHON_BIN} ==="
 echo "=== Log: ${LOG_FILE} ==="
 echo "=== Main run: PPLX encoder -> Qwen3 decoder ==="
@@ -77,7 +85,7 @@ make_config() {
   local output_config="$2"
   local encoder_name="$3"
   local output_dir="$4"
-  "${PYTHON_BIN}" - "${base_config}" "${output_config}" "${encoder_name}" "${DECODER_MODEL}" "${output_dir}" "${PROCESSED_DATA_DIR}" <<'PY'
+  "${PYTHON_BIN}" - "${base_config}" "${output_config}" "${encoder_name}" "${DECODER_MODEL}" "${output_dir}" "${PROCESSED_DATA_DIR}" "${AFMR_ARCHITECTURE}" "${AFMR_GROUNDED_COPY}" <<'PY'
 import sys
 from pathlib import Path
 
@@ -85,8 +93,10 @@ import yaml
 
 from eviseq_afmr.config import load_config
 
-base, destination, encoder, decoder, output_dir, data_dir = sys.argv[1:]
+base, destination, encoder, decoder, output_dir, data_dir, architecture, grounded_copy = sys.argv[1:]
 config = load_config(base)
+config["architecture"]["name"] = architecture
+config["decoder"]["grounded_copy"]["enabled"] = grounded_copy == "true"
 config.pop("_meta", None)
 config["model"]["encoder_name"] = encoder
 config["model"]["decoder_name"] = decoder

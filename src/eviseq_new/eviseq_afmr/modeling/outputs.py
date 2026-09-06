@@ -7,6 +7,8 @@ from typing import Optional
 
 import torch
 
+from .grounded_copy import CopyState
+
 
 @dataclass
 class EncoderState:
@@ -23,6 +25,8 @@ class BridgeState:
     content_mask: torch.Tensor
     source_bias: torch.Tensor
     controller: torch.Tensor
+    value_memory: Optional[torch.Tensor] = None
+    copy_state: Optional[CopyState] = None
 
 
 @dataclass

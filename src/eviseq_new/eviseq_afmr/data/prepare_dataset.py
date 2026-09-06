@@ -7,6 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
 
+from .normalization import detokenize
 from .schema import _as_text
 
 _SPLITS = {"train": "train", "validation": "validation", "test": "test"}
@@ -78,6 +79,8 @@ def _convert(source: Path, destination: Path, split: str, dataset: str) -> dict[
                     continue
                 text = _as_text(source_value, "\n").strip()
                 summary = _as_text(target_value, "\n").strip()
+                if dataset in {"pubmed", "arxiv", "cnndm"}:
+                    text, summary = detokenize(text), detokenize(summary)
                 if not text or not summary:
                     skipped += 1
                     continue

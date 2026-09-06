@@ -15,7 +15,7 @@ import torch
 def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
     arch = config["architecture"]
     decoder = config["decoder"]
-    return {
+    spec = {
         "graph_version": "afmr_token_depth_lowrank_v3",
         "architecture": arch.get("name"),
         "controller_dim": int(arch.get("controller_dim", 0)),
@@ -33,6 +33,10 @@ def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
         "cross_attention_every": int(decoder.get("cross_attention_every", 1)),
         "cross_gate_max": float(decoder.get("cross_gate_max", 0.0)),
     }
+    copy_config = decoder.get("grounded_copy", {})
+    if copy_config.get("enabled", False):
+        spec["grounded_copy"] = {"alignment": "char_overlap_v1", "key_dim": int(copy_config.get("key_dim", 128))}
+    return spec
 
 
 def save_checkpoint(
