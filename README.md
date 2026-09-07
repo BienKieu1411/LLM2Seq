@@ -1,112 +1,274 @@
 # LLM2Seq
 
-LLM2Seq contains the maintained EviSeq text-to-text training pipeline. EviSeq
-combines a pretrained source encoder, an evidence bridge and a pretrained
-causal decoder in one trainable graph:
+> **Evidence-aware text-to-text generation with pretrained encoder and causal-decoder language models.**
+
+LLM2Seq is a research repository for building and evaluating **EviSeq**, a text-to-text generation pipeline that combines a pretrained source encoder, an evidence-aware bridge, and a pretrained causal decoder in a single trainable architecture.
 
 ```text
-source encoder -> evidence bridge -> causal decoder
+Input document
+     │
+     ▼
+Pretrained Source Encoder
+     │
+     ▼
+Evidence Bridge
+     │
+     ▼
+Pretrained Causal Decoder
+     │
+     ▼
+Generated text
 ```
 
-The bridge maps encoder memory to decoder coordinates and adds a learned
-source-unit attention prior. Evidence labels and contrastive losses are
-training-only; the optional DualBridge prompt route is target-free and can be
-reused at inference. Inference remains one encoder, one bridge and one decoder
-with greedy generation.
+The bridge projects encoder representations into the decoder space and learns a source-unit attention prior. Evidence supervision and contrastive objectives are used during training, while inference keeps the architecture simple: **one encoder + one bridge + one decoder** with autoregressive generation.
 
-## Project layout
+The actively maintained implementation lives in [`src/eviseq_v2`](src/eviseq_v2). Other source directories are retained for reproducibility of earlier experiments.
+
+## Highlights
+
+- **Pretrained encoder + causal LLM decoder** in a unified text-to-text model.
+- **Evidence-aware bridge** for connecting source representations to decoder coordinates.
+- Optional evidence supervision and contrastive training objectives.
+- Optional **DualBridge** prompt route that remains target-free at inference time.
+- Config-driven training and evaluation with reusable YAML task templates.
+- Built-in data preparation utilities for **PubMed**, **ArXiv**, and **CNN/DailyMail**.
+- Checkpointing with resolved experiment configurations for reproducibility.
+- Resumable evaluation that continuously flushes predictions to JSONL.
+- Optional online **knowledge distillation (KD)** from a local teacher model.
+- Unit and integration tests included in the maintained implementation.
+
+## Repository Structure
 
 ```text
-src/eviseq_v2/
-├── core/           data, modeling, training and evaluation packages
-├── configs/        model, task and reusable task-template YAML files
-├── scripts/        source-tree launchers and data preparation commands
-├── tests/          unit and integration tests
-├── docs/           method notes
-└── run.py          command-line entry point
+LLM2Seq/
+├── App/                    # Application/demo-related code
+├── Paper/                  # Paper assets
+├── Slide/                  # Presentation materials
+├── Technical_Report/       # Technical reports
+├── deploy/                 # Deployment-related files
+├── src/
+│   └── eviseq_v2/          # Maintained EviSeq implementation
+│       ├── configs/        # Model, task and template YAML files
+│       ├── core/           # Data, modeling, training and evaluation
+│       ├── datasets/       # Dataset-related resources
+│       ├── docs/           # Method and implementation notes
+│       ├── scripts/        # Training/data-preparation launchers
+│       ├── tests/          # Unit and integration tests
+│       ├── run.py          # CLI entry point
+│       ├── pyproject.toml  # Python package configuration
+│       └── requirements.txt
+├── Makefile
+└── README.md
 ```
 
-The other top-level source directories are retained for reproducibility of
-earlier experiments. New experiments should use `src/eviseq_v2`.
+## Requirements
 
-## Environment
+The maintained EviSeq package requires **Python 3.10+** and uses the following main dependencies:
 
-Use the project environment and make model paths available locally before
-training. The launchers do not issue model or dataset download commands.
+- PyTorch `>=2.6`
+- Transformers `>=5.2,<6`
+- Accelerate `>=1.2`
+- Safetensors `>=0.4`
+- PyYAML `>=6.0`
+- NumPy `>=1.24`
+- Rouge `==1.0.0`
+
+Development dependencies include `pytest` and `ruff`.
+
+## Installation
+
+Clone the repository and install the maintained package in editable mode:
 
 ```bash
-source /absolute/path/to/bienkieu_env/bin/activate
-cd src/eviseq_v2
+git clone https://github.com/BienKieu1411/LLM2Seq.git
+cd LLM2Seq/src/eviseq_v2
+
+python -m venv .venv
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-## Configure and prepare data
+For development tools:
 
-Copy a template from `src/eviseq_v2/configs/templates/`, then set model names,
-JSONL fields, paths, sequence lengths and training hyperparameters. Each input
-record must provide a source field, a target field and an optional stable id.
+```bash
+python -m pip install -e ".[dev]"
+```
 
-For the built-in biomedical converters:
+> Model checkpoints and datasets are expected to be available locally. The training launchers do not automatically download models or datasets.
+
+## Configuration
+
+Experiments are configured through YAML files under:
+
+```text
+src/eviseq_v2/configs/
+```
+
+A good starting point is a reusable template from:
+
+```text
+src/eviseq_v2/configs/templates/
+```
+
+Configure the experiment with the appropriate:
+
+- encoder and decoder model paths/names,
+- dataset JSONL paths,
+- source and target fields,
+- sequence-length limits,
+- optimization settings,
+- output directory,
+- evidence/contrastive-loss options.
+
+Each input record should contain a source field, a target field, and optionally a stable ID.
+
+## Data Preparation
+
+Built-in preparation commands are available for PubMed, ArXiv, and CNN/DailyMail:
 
 ```bash
 cd src/eviseq_v2
+
 bash scripts/run.sh prepare-pubmed /absolute/path/to/pubmed
 bash scripts/run.sh prepare-arxiv /absolute/path/to/arxiv
 bash scripts/run.sh prepare-cnndm /absolute/path/to/cnndm
 ```
 
-The PubMed and ArXiv converters preserve supplied sentence-index labels. The
-preparation step rejects duplicate ids or source texts across splits unless
-`EVISEQ_ALLOW_CROSS_SPLIT_CONTENT=true` is explicitly set for debugging.
+The PubMed and ArXiv converters preserve provided sentence-index evidence labels.
 
-## Train
+To reduce accidental evaluation leakage, the preparation pipeline rejects duplicate IDs or source texts across splits. For debugging only, this can be overridden with:
+
+```bash
+export EVISEQ_ALLOW_CROSS_SPLIT_CONTENT=true
+```
+
+## Training
+
+Run a configured task with:
 
 ```bash
 cd src/eviseq_v2
 bash scripts/run.sh train configs/tasks/wikilingua.yaml --overwrite-output-dir
+```
+
+A built-in PubMed experiment can also be launched with:
+
+```bash
 bash scripts/run.sh pceb-pubmed --overwrite-output-dir
 ```
 
-Training writes `resolved_config.yaml`, `last.pt`, optional per-epoch
-checkpoints and a validation-selected `best.pt` in the configured output
-directory.
+A training run writes artifacts such as:
 
-## Evaluate
+```text
+resolved_config.yaml
+last.pt
+best.pt
+```
+
+Optional per-epoch checkpoints may also be produced. `best.pt` is selected using validation performance.
+
+## Evaluation
+
+Evaluate a trained checkpoint with:
 
 ```bash
+cd src/eviseq_v2
+
 python run.py evaluate \
   --config runs/eviseq/my_task/resolved_config.yaml \
   --checkpoint runs/eviseq/my_task/last.pt \
   --output runs/eviseq/my_task/test_predictions.jsonl \
-  --split test --batch-size 96 --resume
+  --split test \
+  --batch-size 96 \
+  --resume
 ```
 
-Predictions are flushed after every completed batch, so an interrupted run can
-resume from the existing JSONL. Built-in metrics are `rouge`, `exact_match`
-and `token_f1`. Perl ROUGE-1.5.5 is available through the separate
-`rouge155` command when `PYROUGE_HOME_DIR` is set.
+Predictions are flushed after each completed batch, allowing interrupted evaluations to resume from an existing JSONL output.
 
-## Continue training and optional KD
+Built-in metrics include:
 
-`--init-checkpoint` initializes a new run from an existing EviSeq model. The
-optimizer and epoch counters start fresh; use the saved resolved configuration
-to preserve the model and data protocol.
+- ROUGE
+- Exact Match
+- Token F1
 
-An optional online gold-prefix KD phase uses a local teacher with the same
-tokenizer vocabulary. Set `online_kd.enabled: true` in the resolved config and
-run:
+Perl **ROUGE-1.5.5** is also supported through the separate `rouge155` command when `PYROUGE_HOME_DIR` is configured.
+
+## Continue Training
+
+Use `--init-checkpoint` to initialize a new run from an existing EviSeq checkpoint.
+
+The model weights are restored, while optimizer state and epoch counters start fresh. Reusing the saved `resolved_config.yaml` is recommended to preserve the original model and data protocol.
+
+## Knowledge Distillation
+
+EviSeq supports an optional online gold-prefix knowledge-distillation phase using a local teacher model with the same tokenizer vocabulary.
+
+Enable KD in the resolved configuration:
+
+```yaml
+online_kd:
+  enabled: true
+```
+
+Then run:
 
 ```bash
+cd src/eviseq_v2
+
 bash scripts/run.sh kd \
   runs/eviseq/my_task/resolved_config.yaml \
   runs/eviseq/my_task/last.pt \
   runs/eviseq/my_task_kd \
   --teacher-model /absolute/path/to/Qwen3-4B \
-  --epochs 1 --overwrite-output-dir
+  --epochs 1 \
+  --overwrite-output-dir
 ```
 
-## Verification
+## Testing
+
+Run the test suite with:
 
 ```bash
+cd src/eviseq_v2
 bash scripts/run.sh test
 ```
+
+Or, after installing the development dependencies:
+
+```bash
+pytest
+```
+
+## CLI
+
+Installing the project exposes the `eviseq` command-line entry point:
+
+```bash
+eviseq --help
+```
+
+You can also use the source entry point directly:
+
+```bash
+python run.py --help
+```
+
+## Research and Reproducibility
+
+This repository contains paper, slide, technical-report, experiment, and implementation artifacts for the LLM2Seq/EviSeq research project. The maintained `eviseq_v2` pipeline should be used for new experiments, while older source directories are kept to help reproduce previous work.
+
+When reporting experimental results, keep the generated `resolved_config.yaml` together with the corresponding checkpoint and prediction files so the complete experiment protocol can be reconstructed.
+
+## Contributing
+
+Contributions, bug reports, and experiment improvements are welcome. For code changes, please run the tests before submitting changes:
+
+```bash
+bash src/eviseq_v2/scripts/run.sh test
+```
+
+## License
+
+No explicit license file is currently included in this repository. Unless a license is added, the repository should not be assumed to grant reuse, redistribution, or modification rights beyond those provided by GitHub's Terms of Service.
