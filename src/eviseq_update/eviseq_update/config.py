@@ -256,6 +256,9 @@ def validate_config(config: dict[str, Any]) -> None:
             raise ValueError(f"training.{name} must be non-negative")
     if int(training.get("batch_size", 0)) == 0 or int(training.get("gradient_accumulation_steps", 0)) == 0:
         raise ValueError("batch_size and gradient_accumulation_steps must be positive")
+    max_grad_norm = training.get("max_grad_norm")
+    if max_grad_norm is not None and not 0 < float(max_grad_norm) < float("inf"):
+        raise ValueError("training.max_grad_norm must be null (disabled) or a finite positive number")
     if int(training.get("interface_warmup_epochs", 0)) + int(training.get("full_finetune_epochs", 0)) == 0:
         raise ValueError("At least one AFMR training epoch is required")
     data = config["data"]

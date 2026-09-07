@@ -299,6 +299,30 @@ def test_partial_accumulation_matches_large_batch(tmp_path):
     assert trainer.global_step == big_trainer.global_step == 1
 
 
+@pytest.mark.parametrize("limit", [None, 1.0])
+def test_gradient_clipping_can_be_disabled_without_losing_norm_logging(tmp_path, limit):
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(()))
+
+        def forward(self, *args, **kwargs):
+            return SimpleNamespace(loss_ce=torch.nn.functional.softplus(self.weight * 4))
+
+    cfg = config()
+    cfg["experiment"]["output_dir"] = str(tmp_path)
+    cfg["training"].update(max_grad_norm=limit, log_every_steps=1)
+    model = Model()
+    batch = next(iter(build_loaders(cfg)["train"]))
+    trainer = AFMRTrainer(model, cfg, "cpu")
+    trainer._run_epoch([batch], torch.optim.SGD(model.parameters(), lr=0.1), "full_finetune", True)
+    gradient = 4 * torch.sigmoid(torch.tensor(4.0))
+    assert float(model.weight.detach()) == pytest.approx(1 - 0.1 * (gradient if limit is None else 1), abs=1e-6)
+    log = json.loads((tmp_path / "training_metrics.jsonl").read_text())
+    assert log["grad_norm"] == pytest.approx(float(gradient), abs=1e-6)
+    assert log["max_grad_norm"] == limit
+
+
 def test_optimizer_exhaustive_groups_and_no_decay_norms():
     model = EviSeqAFMR(config())
     optimizer = build_optimizer(model, config(), "full_finetune")

@@ -29,6 +29,7 @@ def main(argv: list[str] | None = None) -> None:
     train.add_argument("--max-validation-examples", type=int, default=0)
     train.add_argument("--overwrite-output-dir", action="store_true")
     train.add_argument("--output-dir", default=None)
+    train.add_argument("--gradient-accumulation-steps", type=int, default=None)
     evaluate = subparsers.add_parser("evaluate")
     evaluate.add_argument("config")
     evaluate.add_argument("checkpoint")
@@ -69,6 +70,7 @@ def main(argv: list[str] | None = None) -> None:
             max_validation_examples=args.max_validation_examples,
             overwrite_output_dir=args.overwrite_output_dir,
             output_dir_override=args.output_dir,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
         )
         return
     if args.command == "evaluate":

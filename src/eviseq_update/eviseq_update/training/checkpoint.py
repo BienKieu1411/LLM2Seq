@@ -10,6 +10,9 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.distributed as dist
+
+from ..distributed import rank, run_on_main, world_size
 
 
 def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
@@ -50,6 +53,28 @@ def save_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer | None,
     config: dict[str, Any],
+    **metadata,
+) -> None:
+    """All training ranks participate; only rank zero writes the raw model."""
+    rng = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() and world_size() == 1 else None,
+        "cuda_current": torch.cuda.get_rng_state() if torch.cuda.is_available() and world_size() > 1 else None,
+    }
+    rng_states = [rng]
+    if world_size() > 1:
+        rng_states = [None] * world_size()
+        dist.all_gather_object(rng_states, rng)
+    run_on_main(lambda: _save_checkpoint(path, model, optimizer, config, rng_states=rng_states, **metadata))
+
+
+def _save_checkpoint(
+    path: str | Path,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer | None,
+    config: dict[str, Any],
     *,
     epoch: int,
     step: int,
@@ -58,6 +83,7 @@ def save_checkpoint(
     stage_epoch: int | None = None,
     elapsed_train_seconds: float | None = None,
     scheduler: Any = None,
+    rng_states: list,
 ) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -72,12 +98,9 @@ def save_checkpoint(
         "stage_epoch": stage_epoch,
         "elapsed_train_seconds": None if elapsed_train_seconds is None else float(elapsed_train_seconds),
         "architecture_spec": architecture_spec(config),
-        "rng_state": {
-            "python": random.getstate(),
-            "numpy": np.random.get_state(),
-            "torch": torch.get_rng_state(),
-            "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
-        },
+        "rng_state": rng_states[0],
+        "rng_states_by_rank": rng_states,
+        "world_size": len(rng_states),
     }
     with tempfile.NamedTemporaryFile(
         dir=destination.parent, prefix=f".{destination.name}.", suffix=".tmp", delete=False
@@ -109,13 +132,20 @@ def load_checkpoint(
         optimizer.load_state_dict(state["optimizer"])
     if scheduler is not None and state.get("scheduler") is not None:
         scheduler.load_state_dict(state["scheduler"])
-    rng_state = state.get("rng_state")
+    rng_states = state.get("rng_states_by_rank")
+    rng_state = rng_states[rank() % len(rng_states)] if rng_states else state.get("rng_state")
     if rng_state and restore_rng:
         random.setstate(rng_state["python"])
         np.random.set_state(rng_state["numpy"])
         torch.set_rng_state(rng_state["torch"].to(device="cpu"))
-        if rng_state.get("cuda") is not None and torch.cuda.is_available():
-            torch.cuda.set_rng_state_all([value.to(device="cpu") for value in rng_state["cuda"]])
+        if rng_state.get("cuda_current") is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state(rng_state["cuda_current"].to(device="cpu"))
+        elif rng_state.get("cuda") is not None and torch.cuda.is_available():
+            cuda_states = rng_state["cuda"]
+            if world_size() > 1:
+                torch.cuda.set_rng_state(cuda_states[torch.cuda.current_device() % len(cuda_states)].to("cpu"))
+            else:
+                torch.cuda.set_rng_state_all([value.to(device="cpu") for value in cuda_states])
     return {
         key: state.get(key)
         for key in (
@@ -126,5 +156,6 @@ def load_checkpoint(
             "stage_epoch",
             "elapsed_train_seconds",
             "architecture_spec",
+            "world_size",
         )
     }

@@ -12,8 +12,11 @@ from typing import Any, Iterable
 
 import numpy as np
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
 
 from ..data.copy_alignment import COPY_INPUT_KEYS
+from ..distributed import run_on_main, world_size
 from .checkpoint import load_checkpoint, save_checkpoint
 from .optimizer import build_optimizer, set_stage_trainability
 
@@ -61,6 +64,20 @@ def _peak_vram_gib(device: torch.device) -> float | None:
     return round(torch.cuda.max_memory_allocated(device) / (1024**3), 3)
 
 
+class _LossOnlyModel(torch.nn.Module):
+    """Expose only the backward root so DDP can identify unused parameters."""
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, *args, **kwargs):
+        loss = self.model(*args, **kwargs).loss_ce
+        if loss is None:
+            raise RuntimeError("AFMR training requires decoder labels")
+        return loss
+
+
 class AFMRTrainer:
     def __init__(self, model: torch.nn.Module, config: dict[str, Any], device: torch.device | str):
         self.model = model.to(device=device, dtype=torch.float32)
@@ -78,11 +95,29 @@ class AFMRTrainer:
         self.metrics_path = Path(self.config["experiment"]["output_dir"]) / "training_metrics.jsonl"
         self._fit_started_at: float | None = None
         self._elapsed_before_fit = 0.0
+        self._loss_model = _LossOnlyModel(self.model)
+        self._ddp_model = None
+
+    def _configure_distributed(self) -> None:
+        # Warmup and full finetuning have different trainable parameters.
+        # Rebuild the reducer after changing requires_grad at each stage.
+        self._ddp_model = None
+        if world_size() > 1:
+            self._ddp_model = DistributedDataParallel(
+                self._loss_model,
+                device_ids=[self.device.index] if self.device.type == "cuda" else None,
+                broadcast_buffers=False,
+                find_unused_parameters=True,
+                gradient_as_bucket_view=True,
+            )
 
     def _write_metric(self, record: dict[str, Any]) -> None:
-        self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.metrics_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        def write():
+            self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.metrics_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        run_on_main(write)
 
     def _elapsed_train_seconds(self) -> float:
         active = 0.0 if self._fit_started_at is None else time.monotonic() - self._fit_started_at
@@ -99,8 +134,11 @@ class AFMRTrainer:
         total_training_steps: int | None = None,
     ) -> dict[str, float]:
         self.model.train(train)
+        if train and world_size() > 1 and self._ddp_model is None:
+            self._configure_distributed()
+        forward_model = self._ddp_model if train and self._ddp_model is not None else self._loss_model
         accum = int(self.config["training"]["gradient_accumulation_steps"])
-        ce_sum = torch.zeros((), device=self.device)
+        ce_sum = torch.zeros((), device=self.device, dtype=torch.float64)
         token_total = 0
         iterator = iter(loader)
         epoch_step = 0
@@ -115,14 +153,24 @@ class AFMRTrainer:
             started = time.monotonic()
             counts = [int(raw["labels"][:, 1:].ne(-100).sum()) for raw in window]
             window_tokens = sum(counts)
+            examples = sum(int(raw.get("example_count", raw["input_ids"].shape[0])) for raw in window)
+            if train and world_size() > 1:
+                totals = torch.tensor([window_tokens, examples], device=self.device, dtype=torch.long)
+                dist.all_reduce(totals)
+                window_tokens, examples = totals.tolist()
             if train:
                 optimizer.zero_grad(set_to_none=True)
             step_loss = torch.zeros_like(ce_sum)
-            for raw_batch, tokens in zip(window, counts):
+            for microstep, (raw_batch, tokens) in enumerate(zip(window, counts)):
                 batch = _move(raw_batch, self.device)
-                with torch.set_grad_enabled(train):
+                sync = (
+                    self._ddp_model.no_sync()
+                    if train and self._ddp_model is not None and microstep < len(window) - 1
+                    else nullcontext()
+                )
+                with sync, torch.set_grad_enabled(train):
                     with torch.autocast("cuda", dtype=torch.bfloat16) if self.use_bf16 else nullcontext():
-                        output = self.model(
+                        loss_ce = forward_model(
                             batch["input_ids"],
                             batch["attention_mask"],
                             batch["source_content_mask"],
@@ -134,18 +182,22 @@ class AFMRTrainer:
                             return_logits=False,
                             **{key: batch[key] for key in COPY_INPUT_KEYS if key in batch},
                         )
-                        if output.loss_ce is None:
-                            raise RuntimeError("AFMR training requires decoder labels")
-                        loss = output.loss_ce * tokens / max(1, window_tokens)
+                        # DDP averages rank gradients. Undo that averaging to
+                        # obtain the mean over all real target tokens globally.
+                        scale = world_size() if train else 1
+                        loss = loss_ce * (scale * tokens / max(1, window_tokens))
                     if train:
                         loss.backward()
-                step_loss += loss.detach()
-                ce_sum += output.loss_ce.detach() * tokens
+                step_loss += loss_ce.detach().double() * tokens
+                ce_sum += loss_ce.detach().double() * tokens
                 token_total += tokens
-                del output, batch, loss
+                del loss_ce, batch, loss
             if train:
+                max_grad_norm = self.config["training"].get("max_grad_norm")
                 grad = torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), float(self.config["training"]["max_grad_norm"]), error_if_nonfinite=True
+                    self.model.parameters(),
+                    float(max_grad_norm) if max_grad_norm is not None else math.inf,
+                    error_if_nonfinite=True,
                 )
                 learning_rates = ",".join(
                     dict.fromkeys(
@@ -160,9 +212,11 @@ class AFMRTrainer:
                 self.stage_optimizer_step += 1
                 epoch_step += 1
                 if self.global_step % int(self.config["training"]["log_every_steps"]) == 0:
+                    if world_size() > 1:
+                        dist.all_reduce(step_loss)
+                    step_loss /= max(1, window_tokens)
                     window_elapsed = time.monotonic() - started
                     epoch_elapsed = time.monotonic() - epoch_started_at
-                    examples = sum(int(raw["input_ids"].shape[0]) for raw in window)
                     epoch_progress = epoch_step / max(1, epoch_steps)
                     total_progress = (global_epoch - 1 + epoch_progress) / max(1, total_epochs)
                     epoch_eta = epoch_elapsed * (1.0 - epoch_progress) / max(epoch_progress, 1.0e-9)
@@ -172,6 +226,10 @@ class AFMRTrainer:
                     total_eta = epoch_elapsed / max(1, epoch_step) * remaining_steps
                     total_elapsed = self._elapsed_train_seconds()
                     peak_vram_gib = _peak_vram_gib(self.device)
+                    if peak_vram_gib is not None and world_size() > 1:
+                        peak = torch.tensor(peak_vram_gib, device=self.device)
+                        dist.all_reduce(peak, op=dist.ReduceOp.MAX)
+                        peak_vram_gib = float(peak)
                     record = {
                         "type": "step",
                         "stage": stage,
@@ -185,6 +243,7 @@ class AFMRTrainer:
                         "total_percent": round(100.0 * total_progress, 3),
                         "ce": round(float(step_loss), 6),
                         "grad_norm": round(float(grad), 6),
+                        "max_grad_norm": max_grad_norm,
                         "learning_rate": {
                             group.get("name", str(i)): group["lr"] for i, group in enumerate(optimizer.param_groups)
                         },
@@ -197,6 +256,7 @@ class AFMRTrainer:
                         "peak_vram_gib": peak_vram_gib,
                         "examples": examples,
                         "tokens": window_tokens,
+                        "world_size": world_size(),
                         "examples_per_second": round(examples / max(window_elapsed, 1e-9), 4),
                         "tokens_per_second": round(window_tokens / max(window_elapsed, 1e-9), 4),
                     }
@@ -222,7 +282,10 @@ class AFMRTrainer:
                         examples / max(window_elapsed, 1e-9),
                         window_tokens / max(window_elapsed, 1e-9),
                     )
-        ce = float(ce_sum) / max(1, token_total)
+        totals = torch.stack((ce_sum, ce_sum.new_tensor(token_total)))
+        if world_size() > 1:
+            dist.all_reduce(totals)
+        ce = float(totals[0]) / max(1, float(totals[1]))
         return {"loss": ce, "ce": ce}
 
     def fit(self, train_loader, validation_loader=None, resume_checkpoint: str | None = None) -> None:
@@ -269,6 +332,7 @@ class AFMRTrainer:
                 self.stage_optimizer_step = max(0, start_epoch - 1) * steps_per_epoch
                 for group, base_lr in zip(optimizer.param_groups, self.scheduler.base_lrs):
                     group["lr"] = base_lr * max(0.0, 1.0 - self.stage_optimizer_step / total_steps)
+            self._configure_distributed()
             for epoch in range(start_epoch, epochs + 1):
                 self.epoch = epoch + (stages[0][1] if stage == "full_finetune" else 0)
                 global_epoch = self.epoch

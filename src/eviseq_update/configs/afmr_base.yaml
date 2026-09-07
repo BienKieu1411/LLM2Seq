@@ -70,7 +70,7 @@ training:
   full_bridge_lr: 5.0e-5
   full_cross_attention_lr: 5.0e-5
   weight_decay: 0.01
-  max_grad_norm: 1.0
+  max_grad_norm: null  # Disabled; still log the synchronized norm and reject NaN/Inf.
   seed: 42
   log_every_steps: 10
   save_each_epoch: true

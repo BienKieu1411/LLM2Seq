@@ -86,6 +86,9 @@ Tham số, gradient và AdamW states trong training được giữ FP32. CUDA au
 định BF16; mixture likelihood/CE được tổng hợp FP32. Loss chia chunk và dense logits
 đều dùng h' trước LM head. Training chia chunk chỉ tạo vocabulary logits tại các
 vị trí có supervised labels. Dtype/batch size/source length giữ theo recipe gốc.
+`training.max_grad_norm: null` tắt gradient clipping theo yêu cầu. Norm vẫn được
+ghi sau khi đồng bộ gradient; NaN/Inf khiến training dừng trước optimizer update.
+Đặt lại `1.0` để bật clip. Config resolved từ run trước cần sửa trường này riêng.
 
 ## Chạy thử offline
 
@@ -126,6 +129,45 @@ CUDA_VISIBLE_DEVICES=0 PYTHON=python3 \
   bash scripts/run_afmr.sh train configs/afmr_pubmed.yaml
 ```
 
+### Train trên hai GPU
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 NPROC_PER_NODE=2 GRADIENT_ACCUMULATION_STEPS=4 PYTHON=python3 \
+  bash scripts/run_afmr.sh train configs/afmr_pubmed.yaml \
+  --output-dir runs/eviseq_update/pubmed_copy_read_2gpu
+```
+
+Script dùng `torchrun`, mỗi tiến trình chạy một GPU qua NCCL/DDP. Recipe có
+batch 4 trên mỗi GPU: `4 × 2 GPU × accumulation 4 = 32` mẫu/update, bằng run
+một GPU với accumulation 8. Nếu giảm batch mỗi GPU, tăng accumulation tương ứng.
+Override accumulation được lưu trong `resolved_config.yaml` của run.
+
+Loss được cân theo **tổng token được giám sát trên cả hai rank và toàn bộ cửa sổ
+accumulation**. DDP chỉ đồng bộ backward cuối cửa sổ, sau đó mới đo norm và cập nhật
+trọng số. Dữ liệu được chia theo global batch; batch cuối không bỏ hoặc tính trùng
+mẫu. Rank thiếu mẫu chạy placeholder có toàn bộ labels `-100` và trọng số loss 0.
+Validation CE cũng tổng hợp numerator/token count trên hai GPU.
+
+Reducer DDP được tạo lại sau khi chuyển warm-up sang full fine-tuning để nhận cả
+backbone vừa được mở gradient. Chỉ rank 0 ghi metrics/config/checkpoint; checkpoint
+lưu RNG từng rank và weights không có tiền tố DDP, nên có thể eval một GPU. Resume
+với cùng số GPU, batch và accumulation để giữ lịch update; ví dụ thêm
+`--resume-checkpoint runs/eviseq_update/pubmed_copy_read_2gpu/last.pt` vào lệnh trên.
+
+Mỗi GPU chứa một bản đầy đủ của model và optimizer; DDP không gộp VRAM hai card.
+Tốc độ thực tế phụ thuộc độ dài mẫu và kết nối GPU. Greedy eval/ROUGE vẫn dùng một
+tiến trình: chạy `evaluate` như bình thường, không dùng `torchrun` cho eval.
+
+Queue hai encoder cũng dùng được cùng launcher:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 NPROC_PER_NODE=2 GRADIENT_ACCUMULATION_STEPS=4 \
+  bash scripts/run_pubmed_pair.sh
+```
+
+Hai encoder được train lần lượt, mỗi run dùng cả hai GPU. Các đường dẫn model/data
+của queue được cấu hình bằng các biến môi trường mô tả bên dưới.
+
 Recipe PubMed dùng 1 epoch interface warm-up + 3 epoch full fine-tuning, như bản gốc.
 Checkpoint là `epoch_001.pt`, ..., `last.pt`. Eval epoch 3 trên test:
 
@@ -161,7 +203,11 @@ CUDA_VISIBLE_DEVICES=0 PYTHON=python3 \
 Các tests kiểm tra initialization parity, CE/gradient parity khi nhánh đã hoạt động,
 gradient cho target không copy được, masked/empty source, BF16 autocast với FP32
 updates, sparse alignment, cache compaction, checkpoint compatibility và runtime
-train/resume/eval. Đây là kiểm tra correctness trên model nhỏ; throughput/VRAM GPU
+train/resume/eval. Test hai tiến trình CPU/Gloo đối chiếu gradient từng tham số
+trước optimizer step và weights sau update với một tiến trình, với target dài/ngắn
+khác nhau, accumulation dư, rank có zero labels, cả hai stages và ba chế độ
+LM-only/copy/semantic read. Nó kiểm tra cả AdamW resume, RNG từng rank và eval
+checkpoint DDP trên một tiến trình. Đây là kiểm tra correctness trên model nhỏ; throughput/VRAM GPU
 và ROUGE của bản update cần được đo bằng run thực.
 
 Triển khai này chỉ thêm shared context read. Đọc phân cấp theo vùng, chunked
