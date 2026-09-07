@@ -158,15 +158,22 @@ Mỗi GPU chứa một bản đầy đủ của model và optimizer; DDP không 
 Tốc độ thực tế phụ thuộc độ dài mẫu và kết nối GPU. Greedy eval/ROUGE vẫn dùng một
 tiến trình: chạy `evaluate` như bình thường, không dùng `torchrun` cho eval.
 
-Queue hai encoder cũng dùng được cùng launcher:
+Queue hai encoder mặc định dùng GPU `0,1`, hai DDP workers và accumulation 4.
+Sau khi đường dẫn model/data đã đúng, chỉ cần chạy:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 NPROC_PER_NODE=2 GRADIENT_ACCUMULATION_STEPS=4 \
-  bash scripts/run_pubmed_pair.sh
+bash scripts/run_pubmed_pair.sh
 ```
 
 Hai encoder được train lần lượt, mỗi run dùng cả hai GPU. Các đường dẫn model/data
-của queue được cấu hình bằng các biến môi trường mô tả bên dưới.
+của queue được cấu hình bằng các biến môi trường mô tả bên dưới. Script kiểm tra
+số GPU CUDA/NCCL trước khi chuẩn bị dữ liệu và lưu accumulation vào config tạo ra.
+Nếu cần một GPU, override cả worker count và accumulation để giữ batch 32:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 NPROC_PER_NODE=1 GRADIENT_ACCUMULATION_STEPS=8 \
+  bash scripts/run_pubmed_pair.sh
+```
 
 Recipe PubMed dùng 1 epoch interface warm-up + 3 epoch full fine-tuning, như bản gốc.
 Checkpoint là `epoch_001.pt`, ..., `last.pt`. Eval epoch 3 trên test:

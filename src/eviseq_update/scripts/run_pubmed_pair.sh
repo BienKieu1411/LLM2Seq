@@ -12,11 +12,16 @@ else
   PYTHON_BIN="python3"
 fi
 
+export PYTHON="${PYTHON_BIN}"
 export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONUNBUFFERED=1
 export HF_HUB_DISABLE_TELEMETRY=1
 export TOKENIZERS_PARALLELISM=false
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+# Each encoder run uses both GPUs through run_afmr.sh -> torchrun/DDP.
+# Effective batch: 4 examples/GPU * 2 GPUs * 4 accumulation steps = 32.
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
+export NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
+export GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-4}"
 
 PUBMED_SOURCE_DIR="${PUBMED_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/datasets/pubmed}"
 PROCESSED_DATA_DIR="${PROCESSED_DATA_DIR:-${ROOT}/datasets/pubmed}"
@@ -53,10 +58,30 @@ die() {
 [[ -d "${QWEN_ENCODER}" ]] || die "Qwen embedding encoder not found: ${QWEN_ENCODER}"
 [[ -d "${DECODER_MODEL}" ]] || die "Qwen decoder not found: ${DECODER_MODEL}"
 [[ "${EVAL_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || die "EVAL_BATCH_SIZE must be a positive integer"
+[[ "${NPROC_PER_NODE}" =~ ^[1-9][0-9]*$ ]] || die "NPROC_PER_NODE must be a positive integer"
+[[ "${GRADIENT_ACCUMULATION_STEPS}" =~ ^[1-9][0-9]*$ ]] || die "GRADIENT_ACCUMULATION_STEPS must be a positive integer"
 [[ "${AFMR_ARCHITECTURE}" == afmr_value_anchor || "${AFMR_ARCHITECTURE}" == afmr_v1 ]] || die "Unsupported AFMR_ARCHITECTURE"
+
+"${PYTHON_BIN}" - <<'PY'
+import os
+
+import torch
+
+processes = int(os.environ["NPROC_PER_NODE"])
+visible = torch.cuda.device_count()
+if not torch.cuda.is_available() or visible < processes:
+    raise SystemExit(
+        f"Requested {processes} GPU workers, but PyTorch sees {visible} CUDA GPUs. "
+        "Check CUDA_VISIBLE_DEVICES and the CUDA-enabled PyTorch installation."
+    )
+if processes > 1 and not torch.distributed.is_nccl_available():
+    raise SystemExit("Multi-GPU training requires PyTorch with NCCL support.")
+PY
 
 echo "=== AFMR PubMed sequential benchmark ==="
 echo "=== GPU: CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ==="
+echo "=== Training: ${NPROC_PER_NODE} GPU worker(s); accumulation=${GRADIENT_ACCUMULATION_STEPS} ==="
+echo "=== Evaluation: one GPU after each training run ==="
 echo "=== Architecture: ${AFMR_ARCHITECTURE}; FP32 updates, BF16 compute ==="
 echo "=== Grounded copy: ${AFMR_GROUNDED_COPY} ==="
 echo "=== Shared semantic read: ${AFMR_SEMANTIC_READ} ==="
@@ -90,7 +115,8 @@ make_config() {
   local output_config="$2"
   local encoder_name="$3"
   local output_dir="$4"
-  "${PYTHON_BIN}" - "${base_config}" "${output_config}" "${encoder_name}" "${DECODER_MODEL}" "${output_dir}" "${PROCESSED_DATA_DIR}" "${AFMR_ARCHITECTURE}" "${AFMR_GROUNDED_COPY}" "${AFMR_SEMANTIC_READ}" <<'PY'
+"${PYTHON_BIN}" - "${base_config}" "${output_config}" "${encoder_name}" "${DECODER_MODEL}" "${output_dir}" "${PROCESSED_DATA_DIR}" "${AFMR_ARCHITECTURE}" "${AFMR_GROUNDED_COPY}" "${AFMR_SEMANTIC_READ}" <<'PY'
+import os
 import sys
 from pathlib import Path
 
@@ -107,10 +133,13 @@ config.pop("_meta", None)
 config["model"]["encoder_name"] = encoder
 config["model"]["decoder_name"] = decoder
 config["experiment"]["output_dir"] = output_dir
+config["training"]["gradient_accumulation_steps"] = int(os.environ["GRADIENT_ACCUMULATION_STEPS"])
 config["data"]["train_file"] = str(Path(data_dir) / "train.jsonl")
 config["data"]["validation_file"] = str(Path(data_dir) / "validation.jsonl")
 config["data"]["test_file"] = str(Path(data_dir) / "test.jsonl")
 validate_config(config)
+effective_batch = config["training"]["batch_size"] * int(os.environ["NPROC_PER_NODE"]) * config["training"]["gradient_accumulation_steps"]
+print(f"=== Effective batch: {effective_batch} examples/update ===")
 Path(destination).write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8")
 PY
 }
