@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eviseq-update"
+version = "1.0.0"
+description = "EviSeq with shared source attention for vocabulary generation and grounded copy"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.6",
+  "transformers>=5.2,<6",
+  "accelerate>=1.2",
+  "safetensors>=0.4",
+  "pyyaml>=6.0",
+  "numpy>=1.24",
+  "rouge==1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.9"]
+
+[project.scripts]
+eviseq-update = "eviseq_update.cli:main"
+
+[tool.setuptools]
+packages = ["eviseq_update", "eviseq_update.data", "eviseq_update.evaluation", "eviseq_update.modeling", "eviseq_update.training"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
