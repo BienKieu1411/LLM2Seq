@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 import torch
-
 from eviseq_update.config import load_config
 from eviseq_update.data.sampling import DistributedBatchSampler
 from eviseq_update.distributed import rank, run_on_main, training_process_group
@@ -47,8 +46,9 @@ class _RecordingSGD(torch.optim.SGD):
         self.gradients = gradients
 
     def step(self, closure=None):
-        self.gradients.append({name: None if p.grad is None else p.grad.detach().cpu().clone()
-                               for name, p in self.named})
+        self.gradients.append(
+            {name: None if p.grad is None else p.grad.detach().cpu().clone() for name, p in self.named}
+        )
         return super().step(closure)
 
 
@@ -73,12 +73,14 @@ def _sgd_run(config, distributed):
         metrics.append(trainer._run_epoch(loaders["train"], optimizer, stage, True))
         metrics.append(trainer._run_epoch(loaders["validation"], optimizer, stage, False))
         changed = {_component(name) for name, p in model.named_parameters() if not torch.equal(p, before[name])}
-        assert changed == ({"bridge", "cross_attention"} if epoch == 1
-                           else {"encoder", "decoder", "bridge", "cross_attention"})
+        assert changed == (
+            {"bridge", "cross_attention"} if epoch == 1 else {"encoder", "decoder", "bridge", "cross_attention"}
+        )
         if head is not None and head.semantic_output is not None:
             for branch in ("semantic_value", "semantic_output", "semantic_gate"):
-                assert any(branch in name and grad is not None and grad.abs().sum() > 0
-                           for name, grad in gradients[-1].items())
+                assert any(
+                    branch in name and grad is not None and grad.abs().sum() > 0 for name, grad in gradients[-1].items()
+                )
     return model, metrics, gradients
 
 
@@ -93,14 +95,20 @@ def _worker(config_path):
             case["decoder"]["grounded_copy"]["enabled"] = mode != "plain"
             case["decoder"]["grounded_copy"]["semantic_read"]["enabled"] = mode == "semantic"
             model, metrics, gradients = _sgd_run(case, True)
-            torch.save({"model": model.state_dict(), "metrics": metrics, "gradients": gradients},
-                       root / f"{mode}_rank{rank()}.pt")
+            torch.save(
+                {"model": model.state_dict(), "metrics": metrics, "gradients": gradients},
+                root / f"{mode}_rank{rank()}.pt",
+            )
 
         # Exercise the public runtime, stage-specific optimizers, shared output
         # guards, atomic rank-zero checkpoints and resume from warmup.
         train(config_path, device="cpu")
-        train(config_path, device="cpu", resume_checkpoint=str(root / "fit/epoch_001.pt"),
-              output_dir_override=str(root / "resumed"))
+        train(
+            config_path,
+            device="cpu",
+            resume_checkpoint=str(root / "fit/epoch_001.pt"),
+            output_dir_override=str(root / "resumed"),
+        )
 
         random.seed(100 + rank())
         torch.manual_seed(200 + rank())
@@ -122,14 +130,21 @@ def test_two_process_training_matches_serial_and_resumes(tmp_path):
     torch.set_num_threads(1)
     config = load_config(Path(__file__).parents[1] / "configs/afmr_smoke.yaml")
     config["experiment"]["output_dir"] = str(tmp_path / "fit")
-    config["training"].update(batch_size=1, validation_batch_size=1, gradient_accumulation_steps=2,
-                              log_every_steps=1, max_grad_norm=None, save_best=True)
+    config["training"].update(
+        batch_size=1,
+        validation_batch_size=1,
+        gradient_accumulation_steps=2,
+        log_every_steps=1,
+        max_grad_norm=None,
+        save_best=True,
+    )
     config["decoder"]["grounded_copy"]["enabled"] = True
     config["decoder"]["grounded_copy"]["semantic_read"]["enabled"] = True
     # Deliberately unequal target lengths, odd train/validation sizes and an
     # accumulation remainder: rank 1 must backpropagate a zero-label batch.
-    rows = [{"id": str(i), "source": "alpha beta gamma delta " * (i + 1),
-             "target": "alpha " * (i + 1)} for i in range(5)]
+    rows = [
+        {"id": str(i), "source": "alpha beta gamma delta " * (i + 1), "target": "alpha " * (i + 1)} for i in range(5)
+    ]
     for split, count in (("train", 5), ("validation", 3), ("test", 2)):
         data_path = tmp_path / f"{split}.jsonl"
         data_path.write_text("".join(json.dumps(row) + "\n" for row in rows[:count]))
@@ -141,10 +156,20 @@ def test_two_process_training_matches_serial_and_resumes(tmp_path):
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
     result = subprocess.run(
-        [sys.executable, "-m", "torch.distributed.run", "--master-addr=127.0.0.1", f"--master-port={port}",
-         "--nproc_per_node=2",
-         str(Path(__file__).resolve()), str(config_path)],
-        env=environment, capture_output=True, text=True, timeout=180,
+        [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--master-addr=127.0.0.1",
+            f"--master-port={port}",
+            "--nproc_per_node=2",
+            str(Path(__file__).resolve()),
+            str(config_path),
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=180,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -192,10 +217,20 @@ def test_two_process_training_matches_serial_and_resumes(tmp_path):
     config["training"].update(gradient_accumulation_steps=7, num_workers=1, validation_num_workers=1)
     _write_resolved_config(config, tmp_path)
     result = subprocess.run(
-        ["bash", str(Path(__file__).parents[1] / "scripts/run_afmr.sh"), "train", str(config_path),
-         "--device", "cpu", "--output-dir", str(tmp_path / "launcher")],
+        [
+            "bash",
+            str(Path(__file__).parents[1] / "scripts/run_afmr.sh"),
+            "train",
+            str(config_path),
+            "--device",
+            "cpu",
+            "--output-dir",
+            str(tmp_path / "launcher"),
+        ],
         env=dict(environment, NPROC_PER_NODE="2", GRADIENT_ACCUMULATION_STEPS="2", PYTHON=sys.executable),
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     resolved = load_config(tmp_path / "launcher/resolved_config.yaml")

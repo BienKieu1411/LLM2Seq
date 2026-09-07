@@ -56,9 +56,7 @@ class GroundedCopyHead(nn.Module):
                 self.semantic_gate = nn.Linear(key_dim + semantic_rank, 1)
                 nn.init.zeros_(self.semantic_output.weight)
                 nn.init.zeros_(self.semantic_gate.weight)
-                nn.init.constant_(
-                    self.semantic_gate.bias, math.log(semantic_gate_init / (1 - semantic_gate_init))
-                )
+                nn.init.constant_(self.semantic_gate.bias, math.log(semantic_gate_init / (1 - semantic_gate_init)))
 
     @staticmethod
     def _norm(states):
@@ -86,10 +84,15 @@ class GroundedCopyHead(nn.Module):
 
         def overlap_pool(projected):
             rank = projected.shape[-1]
-            pooled = projected.new_zeros(batch, width, rank).float().scatter_add(
-                1,
-                copy_token_indices[..., None].expand(-1, -1, rank),
-                projected.gather(1, copy_encoder_indices[..., None].expand(-1, -1, rank)).float() * weights[..., None],
+            pooled = (
+                projected.new_zeros(batch, width, rank)
+                .float()
+                .scatter_add(
+                    1,
+                    copy_token_indices[..., None].expand(-1, -1, rank),
+                    projected.gather(1, copy_encoder_indices[..., None].expand(-1, -1, rank)).float()
+                    * weights[..., None],
+                )
             )
             return pooled / totals.clamp_min(1e-8)[..., None]
 
@@ -103,9 +106,7 @@ class GroundedCopyHead(nn.Module):
         keys = self._norm(pooled + lexical.float())
         semantic_values = None
         if self.semantic_read_enabled:
-            semantic_values = overlap_pool(
-                self.semantic_value(normalized_memory.to(self.semantic_value.weight.dtype))
-            )
+            semantic_values = overlap_pool(self.semantic_value(normalized_memory.to(self.semantic_value.weight.dtype)))
         return CopyState(keys, copy_token_ids, copy_token_mask & totals.gt(0), bias, semantic_values)
 
     def _attention(self, hidden: torch.Tensor, state: CopyState):

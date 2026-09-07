@@ -68,7 +68,9 @@ class DistributedBatchSampler(Sampler[list[int]]):
             indices = list(range(len(self.lengths)))
             if self.shuffle:
                 random.Random(self.seed + self.epoch).shuffle(indices)
-            batches = (indices[start : start + global_batch_size] for start in range(0, len(indices), global_batch_size))
+            batches = (
+                indices[start : start + global_batch_size] for start in range(0, len(indices), global_batch_size)
+            )
         for batch in batches:
             yield batch[self.rank :: self.world_size] or [-1]
 

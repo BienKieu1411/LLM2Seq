@@ -145,10 +145,14 @@ def build_loaders(
         if distributed and world_size() > 1:
             sampling = {
                 "batch_sampler": DistributedBatchSampler(
-                    dataset.length_estimates, batch_size, rank(), world_size(),
+                    dataset.length_estimates,
+                    batch_size,
+                    rank(),
+                    world_size(),
                     seed=int(config["training"].get("seed", 42)),
                     multiplier=int(config["training"].get("length_bucket_multiplier", 50)),
-                    shuffle=name == "train", bucket=bool(config["training"].get("length_bucketing", False)),
+                    shuffle=name == "train",
+                    bucket=bool(config["training"].get("length_bucketing", False)),
                 )
             }
             dataset = DistributedDataset(dataset)
@@ -214,14 +218,26 @@ def train(
 ) -> None:
     with training_process_group(device) as selected_device:
         _train(
-            config_path, selected_device, resume_checkpoint, max_train_examples, max_validation_examples,
-            overwrite_output_dir, output_dir_override, gradient_accumulation_steps,
+            config_path,
+            selected_device,
+            resume_checkpoint,
+            max_train_examples,
+            max_validation_examples,
+            overwrite_output_dir,
+            output_dir_override,
+            gradient_accumulation_steps,
         )
 
 
 def _train(
-    config_path, selected_device, resume_checkpoint, max_train_examples, max_validation_examples,
-    overwrite_output_dir, output_dir_override, gradient_accumulation_steps,
+    config_path,
+    selected_device,
+    resume_checkpoint,
+    max_train_examples,
+    max_validation_examples,
+    overwrite_output_dir,
+    output_dir_override,
+    gradient_accumulation_steps,
 ):
     config = load_config(config_path)
     if gradient_accumulation_steps is not None:
@@ -243,13 +259,17 @@ def _train(
         if overwrite_output_dir:
             _clear_run_artifacts(output_dir)
         elif not checkpoint and output_dir.exists() and any(output_dir.glob("*.pt")):
-            raise FileExistsError(f"Existing checkpoints in {output_dir}; resume or explicitly use --overwrite-output-dir")
+            raise FileExistsError(
+                f"Existing checkpoints in {output_dir}; resume or explicitly use --overwrite-output-dir"
+            )
         _write_resolved_config(config, output_dir)
 
     run_on_main(prepare_output)
     seed_everything(int(config["training"].get("seed", 42)))
     loaders = build_loaders(
-        config, max_train_examples=max_train_examples, max_validation_examples=max_validation_examples,
+        config,
+        max_train_examples=max_train_examples,
+        max_validation_examples=max_validation_examples,
         distributed=world_size() > 1,
     )
     model = EviSeqAFMR(config)
@@ -260,7 +280,9 @@ def _train(
     LOGGER.info("model parameters=%s total=%d", counts, sum(p.numel() for p in model.parameters()))
     LOGGER.info(
         "[distributed] world_size=%d | per_gpu_batch=%d | accumulation=%d | effective_batch=%d",
-        world_size(), config["training"]["batch_size"], config["training"]["gradient_accumulation_steps"],
+        world_size(),
+        config["training"]["batch_size"],
+        config["training"]["gradient_accumulation_steps"],
         world_size() * config["training"]["batch_size"] * config["training"]["gradient_accumulation_steps"],
     )
     trainer = AFMRTrainer(model, config, selected_device)

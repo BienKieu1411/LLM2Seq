@@ -4,14 +4,12 @@ from pathlib import Path
 import pytest
 import torch
 import torch.nn.functional as F
-
 from eviseq_update.config import load_config, validate_config
 from eviseq_update.modeling.grounded_copy import CopyState, GroundedCopyHead
 from eviseq_update.modeling.model import EviSeqAFMR
 from eviseq_update.runtime import build_loaders
 from eviseq_update.training.checkpoint import load_checkpoint, save_checkpoint
 from eviseq_update.training.optimizer import build_optimizer, set_stage_trainability
-
 
 ROOT = Path(__file__).parents[1]
 
@@ -88,8 +86,11 @@ def test_noncopyable_target_opens_alignment_gradient_after_first_update():
     keys = torch.randn(2, 4, 4, requires_grad=True)
     values = torch.randn(2, 4, 3, requires_grad=True)
     state = CopyState(
-        keys, torch.tensor([[4, 5, 6, 7], [4, 5, 6, 7]]), torch.ones(2, 4, dtype=torch.bool),
-        torch.zeros(2, 4), values,
+        keys,
+        torch.tensor([[4, 5, 6, 7], [4, 5, 6, 7]]),
+        torch.ones(2, 4, dtype=torch.bool),
+        torch.zeros(2, 4),
+        values,
     )
     labels = torch.full((2, 5), 12)  # Absent from all eligible source IDs.
     optimizer = torch.optim.SGD(head.parameters(), lr=0.5)
@@ -119,8 +120,11 @@ def test_empty_source_is_exact_lm_fallback_even_with_active_extreme_gates(width,
     hidden = torch.randn(2, 3, 8, requires_grad=True)
     lm = torch.nn.Linear(8, 13)
     state = CopyState(
-        torch.randn(2, width, 4), torch.zeros(2, width, dtype=torch.long),
-        torch.zeros(2, width, dtype=torch.bool), torch.zeros(2, width), torch.randn(2, width, 3),
+        torch.randn(2, width, 4),
+        torch.zeros(2, width, dtype=torch.long),
+        torch.zeros(2, width, dtype=torch.bool),
+        torch.zeros(2, width),
+        torch.randn(2, width, 3),
     )
     actual = head.output_logits(hidden, state, lm)
     torch.testing.assert_close(actual, lm(hidden), rtol=0, atol=0)
@@ -184,8 +188,10 @@ def test_semantic_modules_learn_in_warmup_and_full_stages_with_fp32_updates(auto
         if stage == "interface_warmup":
             assert all(parameter.grad is None for parameter in model.encoder.parameters())
         else:
-            assert any(parameter.grad is not None and parameter.grad.abs().sum() > 0
-                       for parameter in model.encoder.parameters())
+            assert any(
+                parameter.grad is not None and parameter.grad.abs().sum() > 0
+                for parameter in model.encoder.parameters()
+            )
 
 
 def test_checkpoint_roundtrip_rejects_copy_only_and_different_semantic_rank(tmp_path):
