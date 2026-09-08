@@ -77,7 +77,10 @@ def _sgd_run(config, distributed):
             {"bridge", "cross_attention"} if epoch == 1 else {"encoder", "decoder", "bridge", "cross_attention"}
         )
         if head is not None and head.semantic_output is not None:
-            for branch in ("semantic_value", "semantic_output", "semantic_gate"):
+            branches = ["semantic_value", "semantic_output", "semantic_gate"]
+            if head.semantic_attention == "independent_source":
+                branches.extend(("semantic_key", "semantic_query"))
+            for branch in branches:
                 assert any(
                     branch in name and grad is not None and grad.abs().sum() > 0 for name, grad in gradients[-1].items()
                 )
@@ -89,11 +92,14 @@ def _worker(config_path):
     config = load_config(config_path)
     root = Path(config_path).parent
     with training_process_group("cpu"):
-        for mode in ("plain", "copy", "semantic"):
+        for mode in ("plain", "copy", "shared", "semantic"):
             case = copy.deepcopy(config)
             case["experiment"]["output_dir"] = str(root / mode)
             case["decoder"]["grounded_copy"]["enabled"] = mode != "plain"
-            case["decoder"]["grounded_copy"]["semantic_read"]["enabled"] = mode == "semantic"
+            case["decoder"]["grounded_copy"]["semantic_read"]["enabled"] = mode in {"shared", "semantic"}
+            case["training"]["max_grad_norm"] = 1.0 if mode in {"shared", "semantic"} else None
+            if mode == "shared":
+                case["decoder"]["grounded_copy"]["semantic_read"].update(attention="shared_copy", max_relative_rms=None)
             model, metrics, gradients = _sgd_run(case, True)
             torch.save(
                 {"model": model.state_dict(), "metrics": metrics, "gradients": gradients},
@@ -173,12 +179,15 @@ def test_two_process_training_matches_serial_and_resumes(tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
-    for mode in ("plain", "copy", "semantic"):
+    for mode in ("plain", "copy", "shared", "semantic"):
         case = copy.deepcopy(config)
         case["training"].update(batch_size=2, validation_batch_size=2)
         case["experiment"]["output_dir"] = str(tmp_path / f"serial_{mode}")
         case["decoder"]["grounded_copy"]["enabled"] = mode != "plain"
-        case["decoder"]["grounded_copy"]["semantic_read"]["enabled"] = mode == "semantic"
+        case["decoder"]["grounded_copy"]["semantic_read"]["enabled"] = mode in {"shared", "semantic"}
+        case["training"]["max_grad_norm"] = 1.0 if mode in {"shared", "semantic"} else None
+        if mode == "shared":
+            case["decoder"]["grounded_copy"]["semantic_read"].update(attention="shared_copy", max_relative_rms=None)
         expected_model, expected_metrics, expected_gradients = _sgd_run(case, False)
         states = [torch.load(tmp_path / f"{mode}_rank{r}.pt", weights_only=False) for r in (0, 1)]
         for step, expected in enumerate(expected_gradients):
@@ -199,7 +208,11 @@ def test_two_process_training_matches_serial_and_resumes(tmp_path):
         assert len(logs) == 4  # Once per optimizer step, never once per rank.
         assert sum(row["examples"] for row in logs) == 10
         assert sum(row["tokens"] for row in logs) == 40  # 15 words + 5 EOS, twice.
-        assert all(row["world_size"] == 2 and row["max_grad_norm"] is None for row in logs)
+        assert all(row["world_size"] == 2 and row["max_grad_norm"] == case["training"]["max_grad_norm"] for row in logs)
+        if case["training"]["max_grad_norm"] is not None:
+            for gradients in states[0]["gradients"]:
+                norm = sum(gradient.square().sum() for gradient in gradients.values() if gradient is not None).sqrt()
+                assert float(norm) <= 1.000001
 
     original = torch.load(tmp_path / "fit/last.pt", weights_only=False)
     resumed = torch.load(tmp_path / "resumed/last.pt", weights_only=False)

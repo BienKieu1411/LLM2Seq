@@ -212,13 +212,22 @@ def validate_config(config: dict[str, Any]) -> None:
     semantic_config = copy_config.get("semantic_read", {})
     if not isinstance(semantic_config, dict):
         raise ValueError("decoder.grounded_copy.semantic_read must be a mapping")
-    _check_keys(semantic_config, {"enabled", "rank", "gate_init"}, "decoder.grounded_copy.semantic_read")
+    _check_keys(
+        semantic_config,
+        {"enabled", "rank", "gate_init", "attention", "max_relative_rms"},
+        "decoder.grounded_copy.semantic_read",
+    )
     if not isinstance(semantic_config.get("enabled", False), bool):
         raise ValueError("decoder.grounded_copy.semantic_read.enabled must be a boolean")
     if semantic_config.get("enabled", False) and not copy_config.get("enabled", False):
         raise ValueError("Semantic read requires decoder.grounded_copy.enabled=true")
     if int(semantic_config.get("rank", 128)) <= 0 or not 0 < float(semantic_config.get("gate_init", 0.05)) < 1:
         raise ValueError("Semantic read requires rank > 0 and 0 < gate_init < 1")
+    if semantic_config.get("attention", "shared_copy") not in {"shared_copy", "independent_source"}:
+        raise ValueError("Semantic attention must be shared_copy or independent_source")
+    relative_rms = semantic_config.get("max_relative_rms")
+    if relative_rms is not None and not 0 < float(relative_rms) < float("inf"):
+        raise ValueError("Semantic max_relative_rms must be null or a finite positive number")
     training = config["training"]
     _check_keys(
         training,

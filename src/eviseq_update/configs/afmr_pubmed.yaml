@@ -2,7 +2,7 @@ _base_: afmr_base.yaml
 
 experiment:
   name: eviseq_update_pubmed
-  output_dir: runs/eviseq_update/pubmed_value_anchor_copy_read
+  output_dir: runs/eviseq_update/pubmed_value_anchor_copy_read_v2
 
 data:
   train_file: datasets/pubmed/train.jsonl
@@ -26,3 +26,8 @@ model:
 training:
   interface_warmup_epochs: 1
   full_finetune_epochs: 3
+  # Match the reported new baseline: global batch 96, four epochs, clip 1.0.
+  # Single GPU: 48 x accumulation 2. Two GPUs: override accumulation to 1.
+  batch_size: 48
+  gradient_accumulation_steps: 2
+  max_grad_norm: 1.0

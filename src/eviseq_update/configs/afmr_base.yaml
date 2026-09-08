@@ -49,6 +49,8 @@ decoder:
       enabled: true
       rank: 128
       gate_init: 0.05
+      attention: independent_source
+      max_relative_rms: 0.10
 
 training:
   interface_warmup_epochs: 1

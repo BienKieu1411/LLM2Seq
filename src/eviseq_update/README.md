@@ -1,64 +1,77 @@
-# EviSeq Update: context nguồn cho cả LM và copy
+# EviSeq Update v2: semantic read riêng và residual có giới hạn
 
-Bản này phát triển từ `src/eviseq_new` tại commit `a1ce056`. Package Python riêng là
-`eviseq_update`, distribution/console command là `eviseq-update`. Các scripts chạy
-từ source tree dùng package trong thư mục này. Thư mục output mặc định là
-`runs/eviseq_update/` bên trong project mới.
+Package `eviseq_update` phát triển từ `src/eviseq_new` tại commit `a1ce056`.
+Distribution/console command là `eviseq-update`; scripts dùng package trong thư mục
+này. Output mặc định nằm trong `runs/eviseq_update/` của project này.
 
-Thay đổi kiến trúc: dùng **cùng attention của grounded copy head** để đọc thêm
-source values và đưa context vào LM qua một gated residual. Encoder, AFMR
-value-anchor, cross-attention từng decoder layer và copy gate giữ nguyên công thức.
-Đây là bản triển khai ứng viên ở mục 10 của
-[báo cáo nghiên cứu](../../Technical_Report/AFMR_FOUNDATION_WORLD_MODEL_NEXT_STEPS.md).
+V2 dùng **attention riêng trên các vị trí encoder** để cấp context cho LM và giới
+hạn RMS của residual bổ sung. Nhánh copy vẫn dùng alignment theo ký tự. Encoder,
+AFMR value-anchor và cross-attention từng decoder layer giữ nguyên công thức.
+Bản v1 dùng chung copy attention vẫn có thể chạy để đối chứng.
+
+Đây là ứng viên sửa kiến trúc sau kết quả update thấp hơn new; **chưa có ROUGE của
+v2**. Hai run đã báo còn khác batch, số bước cập nhật và clipping. Xem dữ kiện,
+giới hạn kết luận và kế hoạch đối chứng trong
+[báo cáo regression](../../Technical_Report/EVISEQ_UPDATE_REGRESSION_2026_09_08.md).
+Ý tưởng v1 trước đó nằm trong [báo cáo nghiên cứu](../../Technical_Report/AFMR_FOUNDATION_WORLD_MODEL_NEXT_STEPS.md).
 
 ## Computational graph
 
 ```text
-encoder → final-state value memory H0 → semantic value projection → overlap pooling → U
+encoder → final-state value memory H0 → native semantic keys / values
        ↘ AFMR memory/prior → cross-attention → decoder hidden h
 
-copy attention a(h, source keys, prior)
-    ├── scatter theo source token IDs → P_copy
-    └── a @ U → RMSNorm → gated residual → h' → LM head → P_LM
+h → semantic query → native source attention → context → bounded residual → h' → LM → P_LM
+h → copy query → aligned contextual + lexical keys → scatter token IDs → P_copy
 
 P(v) = (1-g_copy) P_LM(v) + g_copy P_copy(v)
 loss = token CE của P
 ```
 
-Decoder hidden đã được condition bởi cross-attention; nhánh mới thêm đường từ
-lượt đọc của output copy head tới vocabulary distribution:
+Decoder hidden đã nhận context qua cross-attention. Nhánh bổ sung đọc trực tiếp
+memory encoder, không phụ thuộc cách tokenizer decoder chia source thành token copy:
 
 ```text
-U_j = overlap_pool_j(W_value RMSNorm(H0))
-c_t = sum_j a_tj U_j
+K = RMSNorm(W_key RMSNorm(H0)), V = W_value RMSNorm(H0)
+q_t = W_query RMSNorm(h_t)
+a_t = softmax(mask(q_t K^T / sqrt(rank) + source_prior))
+c_t = a_t V
 beta_t = sigmoid(W_beta [q_t ; RMSNorm(c_t)] + b_beta)
-h'_t = h_t + beta_t W_out RMSNorm(c_t)
+raw_t = beta_t W_out RMSNorm(c_t)
+cap_t = rho * RMS(h_t), rho = 0.10
+delta_t = raw_t * cap_t / sqrt(cap_t^2 + RMS(raw_t)^2 + 1e-12)
+h'_t = h_t + delta_t
 ```
 
-`beta_t` điều khiển residual; `g_copy` vẫn điều khiển mixture. Hai gate học độc lập.
-Chỉ tính attention scores một lần cho mỗi forward của output head; không gọi thêm
-encoder hoặc Transformer decoder. Attention-value multiplication và source values
-vẫn tăng compute/memory, với phần đọc thêm cỡ `O(B*T*J*rank)`.
+`RMS(delta_t) <= 0.10 * RMS(h_t)` trước khi làm tròn dtype. Đây là giới hạn residual
+trong forward, khác với gradient clipping. `rho=0.10` là hyperparameter khởi điểm,
+chưa được tối ưu bằng validation. Sigmoid gate đơn thuần không giới hạn độ lớn
+projection đã học; v2 bổ sung ràng buộc này bằng phép tính trơn, không detach.
 
-`W_out=0` khi khởi tạo, beta bắt đầu ở 0.05. Với cùng seed, các module chung và
-logits ban đầu khớp bản copy-only. Backward đầu học W_out; các bước sau mới mở
-gradient qua đường mới tới W_value, beta và attention. Không detach context hoặc
-attention trong đường CE. Tất cả module mới thuộc optimizer group `cross_attention`,
-được học ngay trong interface warm-up và tiếp tục trong full fine-tuning.
+Query/key semantic không dùng chung với copy. CE cuối vẫn truyền qua cả hai nhánh,
+backbones và source prior chung; không có cam kết loại bỏ mọi xung đột gradient.
+V2 thêm một lượt attention, cỡ `O(B*T*S*rank)`, và cache native keys/values. Nó tăng
+compute/memory so với v1; không gọi thêm encoder hay Transformer decoder.
 
-Source values dùng cùng sparse character-overlap alignment với copy keys; chỉ dùng
-phần source nhìn thấy. Không dùng reference để tạo source memory. Duplicate token
-IDs cộng xác suất copy như trước. Hàng không có source token hợp lệ dùng LM chính xác,
-kể cả khi residual đã được học.
+`W_out=0` khi khởi tạo, beta bắt đầu ở 0.05. Với cùng seed, module chung và logits
+ban đầu khớp copy-only. Backward đầu học W_out; sau đó mới mở gradient tới W_value,
+W_key, W_query và beta. Module mới nằm trong optimizer group `cross_attention`,
+được học cả trong interface warm-up và full fine-tuning. Không detach context.
 
-Ở hidden width 1024, copy key rank 128 và semantic rank 128, nhánh mới có **262,401**
-tham số (hai projections và gate), tổng grounded head là **655,874** tham số. RMSNorm
-của head không có tham số. Cached `CopyState.semantic_values` có shape `[B,J,rank]`;
-được chọn lại cùng các tensor còn lại khi finished-row compaction.
+Semantic attention chỉ đọc các vị trí nguồn nhìn thấy, bỏ prompt/padding bằng
+content mask. Copy dùng sparse character-overlap alignment và cộng xác suất các
+token ID trùng nhau. Nếu nguồn semantic rỗng, residual bằng 0. Nếu không có token
+copy hợp lệ nhưng vẫn có nguồn semantic, head dùng LM đã được condition bằng nguồn.
+Reference không được dùng để tạo source memory.
 
-## Config và checkpoint
+Ở hidden width 1024, copy key rank 128 và semantic rank 128, nhánh v2 có **524,545**
+tham số (bốn projections và gate), tổng grounded head **918,018** tham số. V1 có
+262,401 tham số semantic. RMSNorm không có tham số. Semantic keys/values có shape
+`[B,S,rank]`; mask/prior có shape `[B,S]`. Cache được chọn lại khi loại hàng đã sinh xong.
 
-Các task recipes kế thừa cấu hình bật nhánh mới từ `configs/afmr_base.yaml`:
+## Config, precision và checkpoint
+
+Các task recipes kế thừa lựa chọn v2 từ `configs/afmr_base.yaml`:
 
 ```yaml
 decoder:
@@ -70,153 +83,154 @@ decoder:
       enabled: true
       rank: 128
       gate_init: 0.05
+      attention: independent_source
+      max_relative_rms: 0.10
 ```
 
-Đối chứng copy-only: đặt `semantic_read.enabled: false` và dùng output directory
-khác. Nếu tắt cả grounded copy thì cũng phải tắt semantic read. Config thiếu
-`semantic_read` giữ graph copy cũ để hỗ trợ đối chứng.
+Copy-only: đặt `semantic_read.enabled: false`. Nếu tắt grounded copy thì cũng phải
+tắt semantic read. Config thiếu `semantic_read` giữ graph copy cũ.
 
-Checkpoint lưu graph `shared_attention_residual_v1` và semantic rank trong
-`architecture_spec`. Bật/tắt nhánh hoặc đổi rank không được resume/evaluate bằng
-checkpoint không tương ứng. Bản mới cần train từ pretrained backbones; sửa YAML
-của checkpoint cũ không tạo ra weights đã học cho nhánh mới. Copy-only checkpoint
-cũ chỉ tương thích khi nhánh mới tắt và các thông số cấu trúc còn lại khớp.
+V1: đặt `attention: shared_copy`, `max_relative_rms: null`. Hai thuộc tính mới vắng
+mặt trong **resolved config cũ** cũng giữ graph v1. Recipes kế thừa base hiện tại
+chọn v2; phải ghi đè cả hai thuộc tính để chạy v1.
 
-Tham số, gradient và AdamW states trong training được giữ FP32. CUDA autocast mặc
-định BF16; mixture likelihood/CE được tổng hợp FP32. Loss chia chunk và dense logits
-đều dùng h' trước LM head. Training chia chunk chỉ tạo vocabulary logits tại các
-vị trí có supervised labels. Dtype/batch size/source length giữ theo recipe gốc.
-`training.max_grad_norm: null` tắt gradient clipping theo yêu cầu. Norm vẫn được
-ghi sau khi đồng bộ gradient; NaN/Inf khiến training dừng trước optimizer update.
-Đặt lại `1.0` để bật clip. Config resolved từ run trước cần sửa trường này riêng.
+Checkpoint v2 lưu attention mode, semantic rank và residual cap trong
+`architecture_spec`; đổi graph/rank/cap bị từ chối khi resume/evaluate. Checkpoint
+còn lưu `training_spec`: batch, accumulation, số GPU, batch hiệu dụng, clipping và
+các thiết lập training để đối chiếu các run sau. **V2 cần train từ pretrained
+backbones; không resume checkpoint v1 vào v2.** Eval checkpoint cũ bằng resolved
+config gốc. Sửa YAML không tạo ra trọng số đã học cho các projections mới.
 
-## Chạy thử offline
+Tham số, gradient và AdamW states giữ FP32; CUDA autocast mặc định BF16. Mixture
+likelihood/CE được tổng hợp FP32. Dense logits và chunked loss đều dùng h' trước
+LM head; chunked training chỉ tạo vocabulary logits tại vị trí có supervised labels.
 
-Sau khi môi trường đã có dependencies trong `requirements.txt`:
-
-```bash
-cd src/eviseq_update
-PYTHON=python3 bash scripts/run_afmr.sh smoke
-```
-
-Smoke dùng tiny Qwen ngẫu nhiên, tắt mạng, bật cả copy và semantic read. Nó kiểm tra
-gradient lúc khởi tạo và sau training, hai training stages, checkpoint round-trip,
-dense/chunked CE, greedy evaluation và prediction resume. Dữ liệu thử nằm trong
-`tests/fixtures`; checkpoints/predictions smoke nằm trong temporary directory tự xóa.
-Kết quả cuối phải có `"status": "ok"` và `"semantic_read": true`.
-
-Fixture `configs/afmr_smoke.yaml` giữ copy/semantic read tắt để chạy các regression
-tests LM-only kế thừa; lệnh `smoke` chủ động bật cả hai. Đây không phải config để
-đo chất lượng task thực.
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  python3 -m pytest -q -p no:cacheprovider
-```
+Recipe PubMed dùng `training.max_grad_norm: 1.0` để khớp baseline đã báo. Base cho các
+task khác vẫn để `null`. Norm ghi trong log là norm **trước clip**, sau đồng bộ
+gradient; NaN/Inf khiến training dừng trước optimizer update. Vì vậy log `grad=2`
+vẫn có thể đi cùng clip 1.0 đang hoạt động.
 
 ## Train và eval PubMed
 
-Sửa đường dẫn `model.encoder_name`, `model.decoder_name` trong
-`configs/afmr_pubmed.yaml`. Các split cần là JSONL với `id`, `text`, `summary`.
-Có thể trỏ `data.train_file`, `validation_file`, `test_file` bằng đường dẫn tuyệt đối
-tới dữ liệu đã chuẩn bị ở `eviseq_new`, để hai bản dùng đúng cùng split.
-Đường dẫn tương đối của config bundled được resolve từ thư mục `eviseq_update`;
-config ngoài thư mục `configs/` resolve từ thư mục chứa chính config đó.
+Sửa đường dẫn model trong `configs/afmr_pubmed.yaml` trước khi dùng recipe trực tiếp.
+Các split là JSONL có `id`, `text`, `summary`. Nên trỏ tới đúng dữ liệu đã chuẩn bị
+của baseline. Config bundled resolve đường dẫn tương đối từ thư mục project;
+config ngoài `configs/` resolve từ thư mục chứa chính config đó.
+
+PubMed mặc định **1 epoch warm-up + 3 epoch full**, batch hiệu dụng **96**, clip **1.0**.
+Một GPU: batch 48, accumulation 2. Hai GPU: batch 48/GPU, accumulation 1.
 
 ```bash
 cd src/eviseq_update
+# Một GPU
 CUDA_VISIBLE_DEVICES=0 PYTHON=python3 \
   bash scripts/run_afmr.sh train configs/afmr_pubmed.yaml
-```
 
-### Train trên hai GPU
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 NPROC_PER_NODE=2 GRADIENT_ACCUMULATION_STEPS=4 PYTHON=python3 \
+# Hai GPU
+CUDA_VISIBLE_DEVICES=0,1 NPROC_PER_NODE=2 GRADIENT_ACCUMULATION_STEPS=1 PYTHON=python3 \
   bash scripts/run_afmr.sh train configs/afmr_pubmed.yaml \
-  --output-dir runs/eviseq_update/pubmed_copy_read_2gpu
+  --output-dir runs/eviseq_update/pubmed_copy_read_v2_2gpu
 ```
 
-Script dùng `torchrun`, mỗi tiến trình chạy một GPU qua NCCL/DDP. Recipe có
-batch 4 trên mỗi GPU: `4 × 2 GPU × accumulation 4 = 32` mẫu/update, bằng run
-một GPU với accumulation 8. Nếu giảm batch mỗi GPU, tăng accumulation tương ứng.
-Override accumulation được lưu trong `resolved_config.yaml` của run.
+Script dùng `torchrun`/NCCL/DDP. Loss được cân theo **tổng supervised tokens trên mọi
+rank và cả cửa sổ accumulation**. Chỉ đồng bộ backward cuối cửa sổ, rồi clip và update.
+Batch cuối không bỏ/tính trùng mẫu; rank thiếu mẫu chạy placeholder có labels `-100`
+và trọng số loss 0. Validation CE cũng tổng hợp theo token toàn cục.
 
-Loss được cân theo **tổng token được giám sát trên cả hai rank và toàn bộ cửa sổ
-accumulation**. DDP chỉ đồng bộ backward cuối cửa sổ, sau đó mới đo norm và cập nhật
-trọng số. Dữ liệu được chia theo global batch; batch cuối không bỏ hoặc tính trùng
-mẫu. Rank thiếu mẫu chạy placeholder có toàn bộ labels `-100` và trọng số loss 0.
-Validation CE cũng tổng hợp numerator/token count trên hai GPU.
+Reducer DDP được tạo lại khi mở backbone sau warm-up. Chỉ rank 0 ghi metrics/config/
+checkpoint. Checkpoint giữ RNG từng rank, weights không có tiền tố DDP và eval được
+trên một GPU. Resume cùng số GPU, batch và accumulation để giữ lịch update; dùng
+`--resume-checkpoint /path/to/v2/last.pt`. Mỗi GPU chứa đầy đủ model/optimizer;
+DDP không gộp VRAM. Throughput/VRAM thực cần đo trên GPU.
 
-Reducer DDP được tạo lại sau khi chuyển warm-up sang full fine-tuning để nhận cả
-backbone vừa được mở gradient. Chỉ rank 0 ghi metrics/config/checkpoint; checkpoint
-lưu RNG từng rank và weights không có tiền tố DDP, nên có thể eval một GPU. Resume
-với cùng số GPU, batch và accumulation để giữ lịch update; ví dụ thêm
-`--resume-checkpoint runs/eviseq_update/pubmed_copy_read_2gpu/last.pt` vào lệnh trên.
-
-Mỗi GPU chứa một bản đầy đủ của model và optimizer; DDP không gộp VRAM hai card.
-Tốc độ thực tế phụ thuộc độ dài mẫu và kết nối GPU. Greedy eval/ROUGE vẫn dùng một
-tiến trình: chạy `evaluate` như bình thường, không dùng `torchrun` cho eval.
-
-Queue hai encoder mặc định dùng GPU `0,1`, hai DDP workers và accumulation 4.
-Sau khi đường dẫn model/data đã đúng, chỉ cần chạy:
+Queue PPLX rồi Qwen3-Embedding dùng các đường dẫn server sẵn trong script:
 
 ```bash
 bash scripts/run_pubmed_pair.sh
 ```
 
-Hai encoder được train lần lượt, mỗi run dùng cả hai GPU. Các đường dẫn model/data
-của queue được cấu hình bằng các biến môi trường mô tả bên dưới. Script kiểm tra
-số GPU CUDA/NCCL trước khi chuẩn bị dữ liệu và lưu accumulation vào config tạo ra.
-Nếu cần một GPU, override cả worker count và accumulation để giữ batch 32:
+Mỗi run mặc định dùng hai GPU; train xong mới eval test bằng một GPU. Chỉ chạy PPLX
+v2 rồi chấm thêm Perl ROUGE155, khi đã cài backend:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 NPROC_PER_NODE=1 GRADIENT_ACCUMULATION_STEPS=8 \
+RUN_ENCODERS=pplx ROUGE155_SCRIPT="$PWD/../rouge155/evaluate_rouge.py" \
   bash scripts/run_pubmed_pair.sh
 ```
 
-Recipe PubMed dùng 1 epoch interface warm-up + 3 epoch full fine-tuning, như bản gốc.
-Checkpoint là `epoch_001.pt`, ..., `last.pt`. Eval epoch 3 trên test:
+Các biến `PPLX_ENCODER`, `QWEN_ENCODER`, `DECODER_MODEL`, `PROCESSED_DATA_DIR` hoặc
+`PUBMED_SOURCE_DIR` điều khiển đường dẫn model/data. `PYTHON`, `EVAL_BATCH_SIZE`,
+`BATCH_SIZE`, `GRADIENT_ACCUMULATION_STEPS`, `MAX_GRAD_NORM` điều khiển tài nguyên/
+training. Đặt `MAX_GRAD_NORM=null` nếu chủ động thử ablation không clip. Queue in batch
+hiệu dụng, stage epochs và clipping, đồng thời lưu các giá trị vào config sinh ra.
+
+Một GPU với batch hiệu dụng 96; queue tự chọn accumulation 2 nếu không override:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 NPROC_PER_NODE=1 RUN_ENCODERS=pplx \
+  bash scripts/run_pubmed_pair.sh
+```
+
+`AFMR_SEMANTIC_VARIANT` chọn graph để đối chứng, cùng protocol mặc định:
+
+| Giá trị | Attention | Residual cap |
+|---|---|---|
+| `shared_v1` | Copy attention dùng chung như update cũ | Không |
+| `shared_bounded` | Copy attention dùng chung | 0.10 |
+| `independent_unbounded` | Native source attention riêng | Không |
+| `independent_bounded` (mặc định) | Native source attention riêng | 0.10 |
+
+Ví dụ `RUN_ENCODERS=pplx AFMR_SEMANTIC_VARIANT=shared_v1 bash scripts/run_pubmed_pair.sh`.
+`AFMR_SEMANTIC_READ=false` chạy copy-only. V2 ghi vào
+`runs/eviseq_update/pubmed_pair_afmr_value_anchor_copy_read_independent_bounded/pplx`.
+Các graph semantic có directory riêng; `RUN_ROOT`/`LOG_DIR` cho phép đổi nơi lưu.
+Dùng directory mới khi đổi protocol/seed. Queue không tự ghi đè run có sẵn;
+`OVERWRITE_OUTPUT_DIR=true` là yêu cầu reset run có chủ đích.
+
+Eval epoch 3 trên test cho run recipe trực tiếp một GPU:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 PYTHON=python3 bash scripts/run_afmr.sh evaluate \
-  configs/afmr_pubmed.yaml \
-  runs/eviseq_update/pubmed_value_anchor_copy_read/epoch_003.pt \
-  runs/eviseq_update/pubmed_value_anchor_copy_read/epoch003_test_predictions.jsonl \
+  runs/eviseq_update/pubmed_value_anchor_copy_read_v2/resolved_config.yaml \
+  runs/eviseq_update/pubmed_value_anchor_copy_read_v2/epoch_003.pt \
+  runs/eviseq_update/pubmed_value_anchor_copy_read_v2/epoch003_test_predictions.jsonl \
   --split test --batch-size 32
 ```
 
-Runtime báo Python ROUGE 1.0.0. Để so với mốc T5Gemma Perl ROUGE 1.5.5, chấm lại
-hai bộ predictions bằng cùng wrapper/tokenization/flags đã dùng cho baseline.
-Chọn config/epoch bằng validation; test dành cho đánh giá đã chốt.
+Runtime báo Python ROUGE 1.0.0. Muốn so Perl ROUGE 1.5.5, chấm predictions bằng cùng
+wrapper/tokenization/flags của baseline. Queue chỉ chấm Perl nếu có `ROUGE155_SCRIPT`.
+Chọn graph/hyperparameters/checkpoint bằng validation; test dùng cho đánh giá đã chốt.
 
-Queue PPLX rồi Qwen3-Embedding vẫn có ở `scripts/run_pubmed_pair.sh`. Nó mặc định
-bật semantic read và ghi vào `pubmed_pair_afmr_value_anchor_copy_read`. Có thể đặt
-`PROCESSED_DATA_DIR` thành đường dẫn tuyệt đối tới ba split đã chuẩn bị, hoặc đặt
-`PUBMED_SOURCE_DIR` để chuẩn bị từ raw. Các biến `PPLX_ENCODER`, `QWEN_ENCODER`,
-`DECODER_MODEL`, `PYTHON`, `EVAL_BATCH_SIZE` điều khiển đường dẫn/tài nguyên.
-`AFMR_SEMANTIC_READ=false` chạy copy-only trong directory khác. Queue không tự
-ghi đè run có sẵn; `OVERWRITE_OUTPUT_DIR=true` là yêu cầu reset run có chủ đích.
+## Xác minh offline
 
-Smoke model thực trên GPU, có giới hạn số mẫu và directory riêng:
+Sau khi cài dependencies trong `requirements.txt`:
+
+```bash
+PYTHON=python3 bash scripts/run_afmr.sh smoke
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  python3 -m pytest -q -p no:cacheprovider
+```
+
+Smoke dùng tiny Qwen ngẫu nhiên, tắt mạng, bật copy và semantic read; chạy hai stages,
+checkpoint round-trip, dense/chunked CE, greedy eval và prediction resume. Dữ liệu
+nằm trong `tests/fixtures`, output trong temporary directory tự xóa. Kết quả phải có
+`"status": "ok"`, `"semantic_read": true`. Fixture `afmr_smoke.yaml` tắt copy/semantic
+để hỗ trợ tests LM-only; lệnh `smoke` chủ động bật cả hai. Đây không phải đo ROUGE thực.
+
+Tests kiểm tra initialization parity, residual bound khi projection lớn/hidden bằng 0,
+nhánh semantic không dùng lexical copy attention, thay đổi tokenization copy, padding/
+nguồn rỗng, gradient từng tham số, cập nhật FP32 dưới BF16 autocast, cache compaction
+và compatibility checkpoint. Test hai tiến trình CPU/Gloo so gradient trước optimizer
+step và weights sau update với một tiến trình ở cả warm-up/full, bốn chế độ LM/copy/
+v1/v2, target dài/ngắn, accumulation dư và rank không có labels. Nó cũng kiểm tra
+AdamW resume, RNG từng rank và eval checkpoint DDP bằng một tiến trình.
+
+Test queue chạy config generator thật nhưng giả lập CUDA/train/eval; không chứng minh
+queue đã train trên GPU ở máy này. Smoke model thực trên GPU, có directory riêng:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 PYTHON=python3 \
   bash scripts/smoke_a100.sh configs/afmr_pubmed.yaml
 ```
 
-## Phạm vi xác minh
-
-Các tests kiểm tra initialization parity, CE/gradient parity khi nhánh đã hoạt động,
-gradient cho target không copy được, masked/empty source, BF16 autocast với FP32
-updates, sparse alignment, cache compaction, checkpoint compatibility và runtime
-train/resume/eval. Test hai tiến trình CPU/Gloo đối chiếu gradient từng tham số
-trước optimizer step và weights sau update với một tiến trình, với target dài/ngắn
-khác nhau, accumulation dư, rank có zero labels, cả hai stages và ba chế độ
-LM-only/copy/semantic read. Nó kiểm tra cả AdamW resume, RNG từng rank và eval
-checkpoint DDP trên một tiến trình. Đây là kiểm tra correctness trên model nhỏ; throughput/VRAM GPU
-và ROUGE của bản update cần được đo bằng run thực.
-
-Triển khai này chỉ thêm shared context read. Đọc phân cấp theo vùng, chunked
-long-source encoding, BRIO và world-model predictor là các ứng viên nghiên cứu khác,
-chưa được ghép vào để giữ phép so sánh có thể xác định tác dụng của thay đổi này.
+Đọc phân cấp, long-source encoding, BRIO và world-model predictor vẫn là các hướng
+nghiên cứu riêng; chưa ghép thêm vào lần sửa này.

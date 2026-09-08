@@ -45,6 +45,14 @@ def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
                 "graph": "shared_attention_residual_v1",
                 "rank": int(semantic_config.get("rank", 128)),
             }
+            attention = semantic_config.get("attention", "shared_copy")
+            relative_rms = semantic_config.get("max_relative_rms")
+            if attention != "shared_copy" or relative_rms is not None:
+                spec["grounded_copy"]["semantic_read"].update(
+                    graph="source_attention_residual_v2",
+                    attention=attention,
+                    max_relative_rms=None if relative_rms is None else float(relative_rms),
+                )
     return spec
 
 
@@ -87,6 +95,7 @@ def _save_checkpoint(
 ) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    training = config.get("training", {})
     state = {
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict() if optimizer is not None else None,
@@ -98,6 +107,15 @@ def _save_checkpoint(
         "stage_epoch": stage_epoch,
         "elapsed_train_seconds": None if elapsed_train_seconds is None else float(elapsed_train_seconds),
         "architecture_spec": architecture_spec(config),
+        "training_spec": {
+            **training,
+            "world_size": len(rng_states),
+            "effective_batch_size": (
+                int(training["batch_size"]) * int(training["gradient_accumulation_steps"]) * len(rng_states)
+                if "batch_size" in training and "gradient_accumulation_steps" in training
+                else None
+            ),
+        },
         "rng_state": rng_states[0],
         "rng_states_by_rank": rng_states,
         "world_size": len(rng_states),
@@ -156,6 +174,7 @@ def load_checkpoint(
             "stage_epoch",
             "elapsed_train_seconds",
             "architecture_spec",
+            "training_spec",
             "world_size",
         )
     }

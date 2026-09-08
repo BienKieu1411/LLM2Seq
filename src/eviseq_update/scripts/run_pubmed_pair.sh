@@ -18,10 +18,14 @@ export PYTHONUNBUFFERED=1
 export HF_HUB_DISABLE_TELEMETRY=1
 export TOKENIZERS_PARALLELISM=false
 # Each encoder run uses both GPUs through run_afmr.sh -> torchrun/DDP.
-# Effective batch: 4 examples/GPU * 2 GPUs * 4 accumulation steps = 32.
+# Default: 48 examples/GPU * 2 GPUs * 1 accumulation step = 96.
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
 export NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
-export GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-4}"
+export BATCH_SIZE="${BATCH_SIZE:-48}"
+DEFAULT_ACCUMULATION=1
+[[ "${NPROC_PER_NODE}" != 1 ]] || DEFAULT_ACCUMULATION=2
+export GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-${DEFAULT_ACCUMULATION}}"
+export MAX_GRAD_NORM="${MAX_GRAD_NORM:-1.0}"
 
 PUBMED_SOURCE_DIR="${PUBMED_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/datasets/pubmed}"
 PROCESSED_DATA_DIR="${PROCESSED_DATA_DIR:-${ROOT}/datasets/pubmed}"
@@ -29,20 +33,26 @@ RAW_DATA_DIR="${RAW_DATA_DIR:-${ROOT}/datasets/raw/pubmed}"
 AFMR_ARCHITECTURE="${AFMR_ARCHITECTURE:-afmr_value_anchor}"
 AFMR_GROUNDED_COPY="${AFMR_GROUNDED_COPY:-true}"
 AFMR_SEMANTIC_READ="${AFMR_SEMANTIC_READ:-${AFMR_GROUNDED_COPY}}"
+AFMR_SEMANTIC_VARIANT="${AFMR_SEMANTIC_VARIANT:-independent_bounded}"
+case "${AFMR_SEMANTIC_VARIANT}" in
+  shared_v1|shared_bounded|independent_unbounded|independent_bounded) ;;
+  *) echo "Unsupported AFMR_SEMANTIC_VARIANT: ${AFMR_SEMANTIC_VARIANT}" >&2; exit 1 ;;
+esac
 [[ "${AFMR_GROUNDED_COPY}" == true || "${AFMR_GROUNDED_COPY}" == false ]] || { echo "AFMR_GROUNDED_COPY must be true or false" >&2; exit 1; }
 [[ "${AFMR_SEMANTIC_READ}" == true || "${AFMR_SEMANTIC_READ}" == false ]] || { echo "AFMR_SEMANTIC_READ must be true or false" >&2; exit 1; }
 [[ "${AFMR_SEMANTIC_READ}" == false || "${AFMR_GROUNDED_COPY}" == true ]] || { echo "Semantic read requires grounded copy" >&2; exit 1; }
 COPY_VARIANT=lm
 [[ "${AFMR_GROUNDED_COPY}" == false ]] || COPY_VARIANT=copy
-[[ "${AFMR_SEMANTIC_READ}" == false ]] || COPY_VARIANT=copy_read
-RUN_ROOT="${ROOT}/runs/eviseq_update/pubmed_pair_${AFMR_ARCHITECTURE}_${COPY_VARIANT}"
+[[ "${AFMR_SEMANTIC_READ}" == false ]] || COPY_VARIANT="copy_read_${AFMR_SEMANTIC_VARIANT}"
+RUN_ROOT="${RUN_ROOT:-${ROOT}/runs/eviseq_update/pubmed_pair_${AFMR_ARCHITECTURE}_${COPY_VARIANT}}"
 GENERATED_CONFIG_DIR="${RUN_ROOT}/configs"
-LOG_DIR="${ROOT}/logs/afmr"
+LOG_DIR="${LOG_DIR:-${ROOT}/logs/afmr}"
 PPLX_ENCODER="${PPLX_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/pplx-embed-v1-0.6b}"
 QWEN_ENCODER="${QWEN_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-Embedding-0.6B}"
 DECODER_MODEL="${DECODER_MODEL:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-0.6B}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-64}"
 OVERWRITE_OUTPUT_DIR="${OVERWRITE_OUTPUT_DIR:-false}"
+read -r -a ENCODER_NAMES <<< "${RUN_ENCODERS:-pplx qwen_embedding}"
 
 mkdir -p "${LOG_DIR}" "${RUN_ROOT}" "${GENERATED_CONFIG_DIR}"
 LOG_FILE="${LOG_DIR}/pubmed_pair_$(date +%Y%m%d_%H%M%S).log"
@@ -54,10 +64,17 @@ die() {
 }
 
 [[ -x "${PYTHON_BIN}" || "$(command -v "${PYTHON_BIN}" 2>/dev/null || true)" ]] || die "Python not found: ${PYTHON_BIN}"
-[[ -d "${PPLX_ENCODER}" ]] || die "PPLX encoder not found: ${PPLX_ENCODER}"
-[[ -d "${QWEN_ENCODER}" ]] || die "Qwen embedding encoder not found: ${QWEN_ENCODER}"
+for name in "${ENCODER_NAMES[@]}"; do
+  case "${name}" in
+    pplx) [[ -d "${PPLX_ENCODER}" ]] || die "PPLX encoder not found: ${PPLX_ENCODER}" ;;
+    qwen_embedding) [[ -d "${QWEN_ENCODER}" ]] || die "Qwen embedding encoder not found: ${QWEN_ENCODER}" ;;
+    *) die "RUN_ENCODERS supports pplx and qwen_embedding" ;;
+  esac
+done
+[[ ${#ENCODER_NAMES[@]} -gt 0 ]] || die "RUN_ENCODERS must select at least one encoder"
 [[ -d "${DECODER_MODEL}" ]] || die "Qwen decoder not found: ${DECODER_MODEL}"
 [[ "${EVAL_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || die "EVAL_BATCH_SIZE must be a positive integer"
+[[ "${BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || die "BATCH_SIZE must be a positive integer"
 [[ "${NPROC_PER_NODE}" =~ ^[1-9][0-9]*$ ]] || die "NPROC_PER_NODE must be a positive integer"
 [[ "${GRADIENT_ACCUMULATION_STEPS}" =~ ^[1-9][0-9]*$ ]] || die "GRADIENT_ACCUMULATION_STEPS must be a positive integer"
 [[ "${AFMR_ARCHITECTURE}" == afmr_value_anchor || "${AFMR_ARCHITECTURE}" == afmr_v1 ]] || die "Unsupported AFMR_ARCHITECTURE"
@@ -80,15 +97,14 @@ PY
 
 echo "=== AFMR PubMed sequential benchmark ==="
 echo "=== GPU: CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ==="
-echo "=== Training: ${NPROC_PER_NODE} GPU worker(s); accumulation=${GRADIENT_ACCUMULATION_STEPS} ==="
+echo "=== Training: ${BATCH_SIZE} examples/GPU; ${NPROC_PER_NODE} GPU worker(s); accumulation=${GRADIENT_ACCUMULATION_STEPS}; clip=${MAX_GRAD_NORM} ==="
 echo "=== Evaluation: one GPU after each training run ==="
 echo "=== Architecture: ${AFMR_ARCHITECTURE}; FP32 updates, BF16 compute ==="
 echo "=== Grounded copy: ${AFMR_GROUNDED_COPY} ==="
-echo "=== Shared semantic read: ${AFMR_SEMANTIC_READ} ==="
+echo "=== Semantic read: ${AFMR_SEMANTIC_READ}; variant=${AFMR_SEMANTIC_VARIANT} ==="
 echo "=== Python: ${PYTHON_BIN} ==="
 echo "=== Log: ${LOG_FILE} ==="
-echo "=== Main run: PPLX encoder -> Qwen3 decoder ==="
-echo "=== Control run: Qwen3-Embedding encoder -> Qwen3 decoder ==="
+echo "=== Encoder queue: ${ENCODER_NAMES[*]} -> Qwen3 decoder ==="
 
 if [[ ! -s "${PROCESSED_DATA_DIR}/train.jsonl" || ! -s "${PROCESSED_DATA_DIR}/validation.jsonl" || ! -s "${PROCESSED_DATA_DIR}/test.jsonl" ]]; then
   [[ -d "${PUBMED_SOURCE_DIR}" ]] || die "PubMed source directory not found: ${PUBMED_SOURCE_DIR}"
@@ -115,7 +131,7 @@ make_config() {
   local output_config="$2"
   local encoder_name="$3"
   local output_dir="$4"
-"${PYTHON_BIN}" - "${base_config}" "${output_config}" "${encoder_name}" "${DECODER_MODEL}" "${output_dir}" "${PROCESSED_DATA_DIR}" "${AFMR_ARCHITECTURE}" "${AFMR_GROUNDED_COPY}" "${AFMR_SEMANTIC_READ}" <<'PY'
+"${PYTHON_BIN}" - "${base_config}" "${output_config}" "${encoder_name}" "${DECODER_MODEL}" "${output_dir}" "${PROCESSED_DATA_DIR}" "${AFMR_ARCHITECTURE}" "${AFMR_GROUNDED_COPY}" "${AFMR_SEMANTIC_READ}" "${AFMR_SEMANTIC_VARIANT}" <<'PY'
 import os
 import sys
 from pathlib import Path
@@ -124,22 +140,33 @@ import yaml
 
 from eviseq_update.config import load_config, validate_config
 
-base, destination, encoder, decoder, output_dir, data_dir, architecture, grounded_copy, semantic_read = sys.argv[1:]
+base, destination, encoder, decoder, output_dir, data_dir, architecture, grounded_copy, semantic_read, variant = sys.argv[1:]
 config = load_config(base)
 config["architecture"]["name"] = architecture
 config["decoder"]["grounded_copy"]["enabled"] = grounded_copy == "true"
 config["decoder"]["grounded_copy"]["semantic_read"]["enabled"] = semantic_read == "true"
+attention, cap = {
+    "shared_v1": ("shared_copy", None),
+    "shared_bounded": ("shared_copy", 0.1),
+    "independent_unbounded": ("independent_source", None),
+    "independent_bounded": ("independent_source", 0.1),
+}[variant]
+config["decoder"]["grounded_copy"]["semantic_read"].update(attention=attention, max_relative_rms=cap)
 config.pop("_meta", None)
 config["model"]["encoder_name"] = encoder
 config["model"]["decoder_name"] = decoder
 config["experiment"]["output_dir"] = output_dir
+config["training"]["batch_size"] = int(os.environ["BATCH_SIZE"])
 config["training"]["gradient_accumulation_steps"] = int(os.environ["GRADIENT_ACCUMULATION_STEPS"])
+clip = os.environ["MAX_GRAD_NORM"].strip().lower()
+config["training"]["max_grad_norm"] = None if clip in {"none", "null"} else float(clip)
 config["data"]["train_file"] = str(Path(data_dir) / "train.jsonl")
 config["data"]["validation_file"] = str(Path(data_dir) / "validation.jsonl")
 config["data"]["test_file"] = str(Path(data_dir) / "test.jsonl")
 validate_config(config)
 effective_batch = config["training"]["batch_size"] * int(os.environ["NPROC_PER_NODE"]) * config["training"]["gradient_accumulation_steps"]
 print(f"=== Effective batch: {effective_batch} examples/update ===")
+print(f"=== Epochs: {config['training']['interface_warmup_epochs']} warmup + {config['training']['full_finetune_epochs']} full; clip={config['training']['max_grad_norm']} ===")
 Path(destination).write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8")
 PY
 }
@@ -175,9 +202,14 @@ run_one() {
   fi
 }
 
-run_one "pplx" "${PPLX_ENCODER}"
-run_one "qwen_embedding" "${QWEN_ENCODER}"
+for name in "${ENCODER_NAMES[@]}"; do
+  case "${name}" in
+    pplx) run_one "pplx" "${PPLX_ENCODER}" ;;
+    qwen_embedding) run_one "qwen_embedding" "${QWEN_ENCODER}" ;;
+  esac
+done
 
 echo "=== PubMed pair completed ==="
-echo "PPLX output: ${RUN_ROOT}/pplx"
-echo "Qwen embedding output: ${RUN_ROOT}/qwen_embedding"
+for name in "${ENCODER_NAMES[@]}"; do
+  echo "${name} output: ${RUN_ROOT}/${name}"
+done

@@ -14,10 +14,15 @@ from eviseq_update.training.optimizer import build_optimizer, set_stage_trainabi
 ROOT = Path(__file__).parents[1]
 
 
-def model_config():
+def model_config(variant="shared_v1"):
     config = load_config(ROOT / "configs/afmr_smoke.yaml")
     config["decoder"]["grounded_copy"]["enabled"] = True
     config["decoder"]["grounded_copy"]["semantic_read"] = {"enabled": True, "rank": 6, "gate_init": 0.05}
+    if variant == "independent_bounded":
+        config["decoder"]["grounded_copy"]["semantic_read"].update(
+            attention="independent_source",
+            max_relative_rms=0.1,
+        )
     config["decoder"]["ce_chunk_size"] = 7
     return config
 
@@ -40,8 +45,9 @@ def problem():
     return head, lm, embedding, hidden, memory, bias, state
 
 
-def test_zero_output_preserves_copy_only_model_weights_logits_and_loss():
-    config = model_config()
+@pytest.mark.parametrize("variant", ["shared_v1", "independent_bounded"])
+def test_zero_output_preserves_copy_only_model_weights_logits_and_loss(variant):
+    config = model_config(variant)
     torch.manual_seed(41)
     updated = EviSeqAFMR(config).eval()
     control_config = copy.deepcopy(config)
@@ -162,9 +168,10 @@ def test_attention_is_computed_once_and_chunked_vocabulary_sees_only_supervised_
 
 
 @pytest.mark.parametrize("autocast", [False, True])
-def test_semantic_modules_learn_in_warmup_and_full_stages_with_fp32_updates(autocast):
+@pytest.mark.parametrize("variant", ["shared_v1", "independent_bounded"])
+def test_semantic_modules_learn_in_warmup_and_full_stages_with_fp32_updates(autocast, variant):
     torch.manual_seed(33)
-    config = model_config()
+    config = model_config(variant)
     model = EviSeqAFMR(config)
     batch = next(iter(build_loaders(config, max_train_examples=2)["train"]))
     tensors = {key: value for key, value in batch.items() if isinstance(value, torch.Tensor)}
@@ -176,6 +183,7 @@ def test_semantic_modules_learn_in_warmup_and_full_stages_with_fp32_updates(auto
         assert all(id(parameter) in optimized_ids for parameter in head.parameters())
         for step in range(2):
             optimizer.zero_grad(set_to_none=True)
+            before = {name: parameter.detach().clone() for name, parameter in head.named_parameters()}
             with torch.autocast("cpu", dtype=torch.bfloat16, enabled=autocast):
                 loss = model(**tensors, return_logits=False).loss
             loss.backward()
@@ -185,6 +193,9 @@ def test_semantic_modules_learn_in_warmup_and_full_stages_with_fp32_updates(auto
                 if step or stage == "full_finetune" or name == "semantic_output.weight":
                     assert parameter.grad.abs().sum() > 0, name
             optimizer.step()
+            if step:
+                for name, parameter in head.named_parameters():
+                    assert not torch.equal(before[name], parameter), name
         if stage == "interface_warmup":
             assert all(parameter.grad is None for parameter in model.encoder.parameters())
         else:

@@ -244,6 +244,8 @@ class QwenCrossDecoder(nn.Module):
                     semantic_read=bool(semantic_config.get("enabled", False)),
                     semantic_rank=int(semantic_config.get("rank", 128)),
                     semantic_gate_init=float(semantic_config.get("gate_init", 0.05)),
+                    semantic_attention=str(semantic_config.get("attention", "shared_copy")),
+                    semantic_max_relative_rms=semantic_config.get("max_relative_rms"),
                 )
         if int(config.get("cross_attention_every", 1)) != 1:
             raise ValueError("AFMR requires cross-attention in every decoder layer")

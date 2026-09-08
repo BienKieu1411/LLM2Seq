@@ -74,6 +74,8 @@ def main() -> None:
             "architecture": config["architecture"]["name"],
             "grounded_copy": True,
             "semantic_read": True,
+            "semantic_attention": head.semantic_attention,
+            "semantic_max_relative_rms": head.semantic_max_relative_rms,
             "initial_loss": initial_loss,
             "final_loss": float(final.loss),
             "checkpoint_epoch": metadata["epoch"],

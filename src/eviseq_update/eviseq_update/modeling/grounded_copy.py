@@ -16,11 +16,25 @@ class CopyState:
     mask: torch.Tensor
     bias: torch.Tensor
     semantic_values: torch.Tensor | None = None
+    semantic_keys: torch.Tensor | None = None
+    semantic_mask: torch.Tensor | None = None
+    semantic_bias: torch.Tensor | None = None
 
     def index_select(self, indices: torch.Tensor) -> CopyState:
         return CopyState(
-            *(value.index_select(0, indices) for value in (self.keys, self.token_ids, self.mask, self.bias)),
-            None if self.semantic_values is None else self.semantic_values.index_select(0, indices),
+            *(
+                None if value is None else value.index_select(0, indices)
+                for value in (
+                    self.keys,
+                    self.token_ids,
+                    self.mask,
+                    self.bias,
+                    self.semantic_values,
+                    self.semantic_keys,
+                    self.semantic_mask,
+                    self.semantic_bias,
+                )
+            ),
         )
 
 
@@ -34,6 +48,8 @@ class GroundedCopyHead(nn.Module):
         semantic_read: bool = False,
         semantic_rank: int = 128,
         semantic_gate_init: float = 0.05,
+        semantic_attention: str = "shared_copy",
+        semantic_max_relative_rms: float | None = None,
     ):
         super().__init__()
         if key_dim <= 0 or not 0 < gate_init < 1:
@@ -46,17 +62,28 @@ class GroundedCopyHead(nn.Module):
         nn.init.constant_(self.gate.bias, math.log(gate_init / (1 - gate_init)))
         if semantic_rank <= 0 or not 0 < semantic_gate_init < 1:
             raise ValueError("Semantic read requires rank > 0 and 0 < gate_init < 1")
+        if semantic_attention not in {"shared_copy", "independent_source"}:
+            raise ValueError("semantic_attention must be shared_copy or independent_source")
+        if semantic_max_relative_rms is not None and not 0 < float(semantic_max_relative_rms) < math.inf:
+            raise ValueError("semantic_max_relative_rms must be null or a finite positive number")
         self.semantic_read_enabled = bool(semantic_read)
+        self.semantic_attention = semantic_attention
+        self.semantic_max_relative_rms = None if semantic_max_relative_rms is None else float(semantic_max_relative_rms)
         self.semantic_value = self.semantic_output = self.semantic_gate = None
+        self.semantic_key = self.semantic_query = None
         if self.semantic_read_enabled:
             # Keep downstream initialization identical to the copy-only control.
             with torch.random.fork_rng(devices=[]):
                 self.semantic_value = nn.Linear(hidden_size, semantic_rank, bias=False)
                 self.semantic_output = nn.Linear(semantic_rank, hidden_size, bias=False)
-                self.semantic_gate = nn.Linear(key_dim + semantic_rank, 1)
+                query_dim = semantic_rank if semantic_attention == "independent_source" else key_dim
+                self.semantic_gate = nn.Linear(query_dim + semantic_rank, 1)
                 nn.init.zeros_(self.semantic_output.weight)
                 nn.init.zeros_(self.semantic_gate.weight)
                 nn.init.constant_(self.semantic_gate.bias, math.log(semantic_gate_init / (1 - semantic_gate_init)))
+                if semantic_attention == "independent_source":
+                    self.semantic_key = nn.Linear(hidden_size, semantic_rank, bias=False)
+                    self.semantic_query = nn.Linear(hidden_size, semantic_rank, bias=False)
 
     @staticmethod
     def _norm(states):
@@ -105,9 +132,27 @@ class GroundedCopyHead(nn.Module):
         lexical = lexical_bank[inverse]
         keys = self._norm(pooled + lexical.float())
         semantic_values = None
+        semantic_keys = semantic_mask = semantic_bias = None
         if self.semantic_read_enabled:
-            semantic_values = overlap_pool(self.semantic_value(normalized_memory.to(self.semantic_value.weight.dtype)))
-        return CopyState(keys, copy_token_ids, copy_token_mask & totals.gt(0), bias, semantic_values)
+            semantic_values = self.semantic_value(normalized_memory.to(self.semantic_value.weight.dtype))
+            if self.semantic_attention == "independent_source":
+                # Read native encoder positions. Copy-token boundaries and lexical
+                # embeddings must not decide which semantic values the LM reads.
+                semantic_keys = self._norm(self.semantic_key(normalized_memory.to(self.semantic_key.weight.dtype)))
+                semantic_mask = content_mask.bool()
+                semantic_bias = source_bias.float()
+            else:
+                semantic_values = overlap_pool(semantic_values)
+        return CopyState(
+            keys,
+            copy_token_ids,
+            copy_token_mask & totals.gt(0),
+            bias,
+            semantic_values,
+            semantic_keys,
+            semantic_mask,
+            semantic_bias,
+        )
 
     def _attention(self, hidden: torch.Tensor, state: CopyState):
         query = self.query(self._norm(hidden).to(self.query.weight.dtype)).float()
@@ -127,13 +172,29 @@ class GroundedCopyHead(nn.Module):
         return self._attention(hidden, state)[1:]
 
     def read(self, hidden: torch.Tensor, state: CopyState):
-        """Use one attention distribution for both exact copy and LM conditioning."""
+        """Condition the LM while preserving the exact-copy distribution.
+
+        Missing new config fields retain the original shared, uncapped graph.
+        """
         query, log_attention, log_copy, log_generate = self._attention(hidden, state)
         generation_hidden = hidden
         if self.semantic_read_enabled:
             if state.semantic_values is None:
                 raise ValueError("Semantic read is enabled but cached source values are missing")
-            context = torch.matmul(log_attention.exp(), state.semantic_values.float())
+            semantic_mask = state.mask
+            if self.semantic_attention == "independent_source":
+                if state.semantic_keys is None or state.semantic_mask is None or state.semantic_bias is None:
+                    raise ValueError("Independent semantic read requires cached native source keys, mask and bias")
+                query = self.semantic_query(self._norm(hidden).to(self.semantic_query.weight.dtype)).float()
+                scores = torch.matmul(query, state.semantic_keys.float().transpose(1, 2)) / math.sqrt(query.shape[-1])
+                scores = scores + state.semantic_bias.float()[:, None, :]
+                semantic_mask = state.semantic_mask
+                floor = torch.finfo(torch.float32).min
+                semantic_log_attention = F.log_softmax(scores.masked_fill(~semantic_mask[:, None, :], floor), dim=-1)
+                semantic_log_attention = semantic_log_attention.masked_fill(~semantic_mask[:, None, :], floor)
+            else:
+                semantic_log_attention = log_attention
+            context = torch.matmul(semantic_log_attention.exp(), state.semantic_values.float())
             normalized_context = self._norm(context)
             gate = torch.sigmoid(
                 self.semantic_gate(
@@ -141,9 +202,20 @@ class GroundedCopyHead(nn.Module):
                 ).float()
             )
             residual = self.semantic_output(normalized_context.to(self.semantic_output.weight.dtype)).float()
+            delta = gate * residual
+            if self.semantic_max_relative_rms is not None:
+                # Smoothly bound RMS(delta) <= rho * RMS(hidden), including
+                # learned projection growth. A sigmoid gate alone cannot do so.
+                # vector_norm has a defined zero gradient at the zero vector.
+                cap = (
+                    self.semantic_max_relative_rms
+                    * torch.linalg.vector_norm(hidden.float(), dim=-1, keepdim=True)
+                    / math.sqrt(hidden.shape[-1])
+                )
+                delta = delta * cap / torch.sqrt(cap.square() + delta.square().mean(-1, keepdim=True) + 1e-12)
             generation_hidden = torch.where(
-                state.mask.any(-1)[:, None, None],
-                (hidden.float() + gate * residual).to(hidden.dtype),
+                semantic_mask.any(-1)[:, None, None],
+                (hidden.float() + delta).to(hidden.dtype),
                 hidden,
             )
         return generation_hidden, (log_attention, log_copy, log_generate)

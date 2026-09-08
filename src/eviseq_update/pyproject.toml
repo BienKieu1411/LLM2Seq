@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "eviseq-update"
 version = "1.0.0"
-description = "EviSeq with shared source attention for vocabulary generation and grounded copy"
+description = "EviSeq with independent source attention, bounded semantic residual and grounded copy"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
