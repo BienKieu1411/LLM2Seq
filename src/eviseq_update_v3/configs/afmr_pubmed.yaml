@@ -1,0 +1,33 @@
+_base_: afmr_base.yaml
+
+experiment:
+  name: eviseq_update_v3_pubmed
+  output_dir: runs/eviseq_update_v3/pubmed_gated_multihead
+
+data:
+  train_file: datasets/pubmed/train.jsonl
+  validation_file: datasets/pubmed/validation.jsonl
+  test_file: datasets/pubmed/test.jsonl
+  encoder_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
+  decoder_prompt: "Summarize the encoded biomedical article as a concise, factual abstract. Cover the objective, methods, key results, and conclusion when supported. Preserve numbers and the direction of findings. Output only the abstract."
+  decoder_prefix: "Abstract:\n"
+  detokenize: true
+
+generation:
+  max_new_tokens: 512
+  min_new_tokens: 32
+  repetition_penalty: 1.05
+  no_repeat_ngram_size: 3
+
+model:
+  encoder_name: /absolute/path/to/pplx-embed-v1-0.6b
+  decoder_name: /absolute/path/to/Qwen3-0.6B
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 3
+  # Match the reported new baseline: global batch 96, four epochs, clip 1.0.
+  # Single GPU: 48 x accumulation 2. Two GPUs: override accumulation to 1.
+  batch_size: 48
+  gradient_accumulation_steps: 2
+  max_grad_norm: 1.0

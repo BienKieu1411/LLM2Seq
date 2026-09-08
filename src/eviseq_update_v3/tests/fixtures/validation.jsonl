@@ -1,0 +1,2 @@
+{"id":"validation-0","text":["The river flooded the road.","Officials opened a shelter."],"summary":["The river flooded the road."],"label":[0],"preparation":"afmr_unicode_greedy_v1"}
+{"id":"validation-1","text":["The experiment used three groups.","Results favored the new method."],"summary":["Results favored the new method."],"label":[1],"preparation":"afmr_unicode_greedy_v1"}

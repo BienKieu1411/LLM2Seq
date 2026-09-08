@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eviseq-update-v3"
+version = "1.0.0"
+description = "EviSeq v3 with query-gated cross-attention and multihead semantic read, trained with gold CE"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.6",
+  "transformers>=5.2,<6",
+  "accelerate>=1.2",
+  "safetensors>=0.4",
+  "pyyaml>=6.0",
+  "numpy>=1.24",
+  "rouge==1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.9"]
+
+[project.scripts]
+eviseq-update-v3 = "eviseq_update_v3.cli:main"
+
+[tool.setuptools]
+packages = ["eviseq_update_v3", "eviseq_update_v3.data", "eviseq_update_v3.evaluation", "eviseq_update_v3.modeling", "eviseq_update_v3.training"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
