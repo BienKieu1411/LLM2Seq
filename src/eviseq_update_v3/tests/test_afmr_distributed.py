@@ -78,8 +78,18 @@ def _sgd_run(config, distributed):
         )
         if head is not None and head.semantic_output is not None:
             branches = ["semantic_value", "semantic_output", "semantic_gate"]
-            if head.semantic_attention == "independent_source":
+            if head.semantic_attention != "shared_copy":
                 branches.extend(("semantic_key", "semantic_query"))
+            if head.planner is not None:
+                branches.extend(
+                    (
+                        "planner.query",
+                        "planner.usage_gate",
+                        "planner.coverage_raw",
+                        "planner.continuity_raw",
+                        "semantic_head_gate",
+                    )
+                )
             for branch in branches:
                 assert any(
                     branch in name and grad is not None and grad.abs().sum() > 0 for name, grad in gradients[-1].items()
@@ -92,17 +102,29 @@ def _worker(config_path):
     config = load_config(config_path)
     root = Path(config_path).parent
     with training_process_group("cpu"):
-        for mode in ("plain", "copy", "shared", "semantic", "v3"):
+        for mode in ("plain", "copy", "shared", "semantic", "v3", "planned"):
             case = copy.deepcopy(config)
             case["experiment"]["output_dir"] = str(root / mode)
             case["decoder"]["grounded_copy"]["enabled"] = mode != "plain"
             case["decoder"]["query_cross_gate"] = mode == "v3"
             case["decoder"]["grounded_copy"]["semantic_read"].update(
-                enabled=mode in {"shared", "semantic", "v3"}, num_heads=4 if mode == "v3" else 1
+                enabled=mode in {"shared", "semantic", "v3", "planned"},
+                num_heads=4 if mode == "v3" else 1,
+                rank=8,
+                attention="independent_source",
+                fusion="residual",
             )
-            case["training"]["max_grad_norm"] = 1.0 if mode in {"shared", "semantic", "v3"} else None
+            case["training"]["max_grad_norm"] = 1.0 if mode in {"shared", "semantic", "v3", "planned"} else None
             if mode == "shared":
                 case["decoder"]["grounded_copy"]["semantic_read"].update(attention="shared_copy", max_relative_rms=None)
+            if mode == "planned":
+                case["decoder"]["grounded_copy"]["semantic_read"].update(
+                    attention="hierarchical_coverage",
+                    fusion="norm_preserving",
+                    rank=32,
+                    num_heads=4,
+                    planner={"region_size": 1},
+                )
             model, metrics, gradients = _sgd_run(case, True)
             torch.save(
                 {"model": model.state_dict(), "metrics": metrics, "gradients": gradients},
@@ -149,8 +171,14 @@ def test_two_process_training_matches_serial_and_resumes(tmp_path):
     )
     config["decoder"]["grounded_copy"]["enabled"] = True
     config["decoder"]["grounded_copy"]["semantic_read"]["enabled"] = True
-    config["decoder"]["query_cross_gate"] = True
-    config["decoder"]["grounded_copy"]["semantic_read"]["num_heads"] = 4
+    config["decoder"]["query_cross_gate"] = False
+    config["decoder"]["grounded_copy"]["semantic_read"].update(
+        num_heads=4,
+        rank=32,
+        attention="hierarchical_coverage",
+        fusion="norm_preserving",
+        planner={"region_size": 1},
+    )
     # Deliberately unequal target lengths, odd train/validation sizes and an
     # accumulation remainder: rank 1 must backpropagate a zero-label batch.
     rows = [
@@ -184,18 +212,30 @@ def test_two_process_training_matches_serial_and_resumes(tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
-    for mode in ("plain", "copy", "shared", "semantic", "v3"):
+    for mode in ("plain", "copy", "shared", "semantic", "v3", "planned"):
         case = copy.deepcopy(config)
         case["training"].update(batch_size=2, validation_batch_size=2)
         case["experiment"]["output_dir"] = str(tmp_path / f"serial_{mode}")
         case["decoder"]["grounded_copy"]["enabled"] = mode != "plain"
         case["decoder"]["query_cross_gate"] = mode == "v3"
         case["decoder"]["grounded_copy"]["semantic_read"].update(
-            enabled=mode in {"shared", "semantic", "v3"}, num_heads=4 if mode == "v3" else 1
+            enabled=mode in {"shared", "semantic", "v3", "planned"},
+            num_heads=4 if mode == "v3" else 1,
+            rank=8,
+            attention="independent_source",
+            fusion="residual",
         )
-        case["training"]["max_grad_norm"] = 1.0 if mode in {"shared", "semantic", "v3"} else None
+        case["training"]["max_grad_norm"] = 1.0 if mode in {"shared", "semantic", "v3", "planned"} else None
         if mode == "shared":
             case["decoder"]["grounded_copy"]["semantic_read"].update(attention="shared_copy", max_relative_rms=None)
+        if mode == "planned":
+            case["decoder"]["grounded_copy"]["semantic_read"].update(
+                attention="hierarchical_coverage",
+                fusion="norm_preserving",
+                rank=32,
+                num_heads=4,
+                planner={"region_size": 1},
+            )
         expected_model, expected_metrics, expected_gradients = _sgd_run(case, False)
         states = [torch.load(tmp_path / f"{mode}_rank{r}.pt", weights_only=False) for r in (0, 1)]
         for step, expected in enumerate(expected_gradients):

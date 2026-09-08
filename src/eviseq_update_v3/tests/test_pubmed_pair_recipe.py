@@ -18,6 +18,7 @@ from eviseq_update_v3.config import load_config
         ("shared_bounded", True, "shared_copy", 0.1),
         ("independent_unbounded", True, "independent_source", None),
         ("independent_bounded", False, "independent_source", 0.1),
+        ("hierarchical_coverage", True, "hierarchical_coverage", 0.1),
     ],
 )
 @pytest.mark.parametrize("workers", [1, 2])
@@ -79,6 +80,8 @@ def test_pair_generates_fair_protocol_and_selected_graph(
     assert semantic["enabled"] == enabled and semantic["attention"] == attention
     assert semantic["max_relative_rms"] == cap
     assert semantic["num_heads"] == (1 if attention == "shared_copy" else 4)
+    assert semantic["rank"] == 512
+    assert semantic["fusion"] == ("norm_preserving" if attention == "hierarchical_coverage" else "residual")
     assert "Effective batch: 96" in result.stdout
     assert not (tmp_path / "runs/configs/qwen_embedding.yaml").exists()
 

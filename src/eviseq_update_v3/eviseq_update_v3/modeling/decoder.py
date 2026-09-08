@@ -282,7 +282,10 @@ class QwenCrossDecoder(nn.Module):
                     semantic_attention=str(semantic_config.get("attention", "shared_copy")),
                     semantic_max_relative_rms=semantic_config.get("max_relative_rms"),
                     semantic_num_heads=int(semantic_config.get("num_heads", 1)),
+                    semantic_fusion=str(semantic_config.get("fusion", "residual")),
+                    semantic_planner=semantic_config.get("planner", {}),
                 )
+        self._semantic_history = None
         if int(config.get("cross_attention_every", 1)) != 1:
             raise ValueError("AFMR requires cross-attention in every decoder layer")
         gate_init = float(config.get("cross_gate_init", 0.10))
@@ -330,6 +333,7 @@ class QwenCrossDecoder(nn.Module):
     ) -> tuple[Optional[torch.Tensor], Optional[Any], Optional[torch.Tensor]]:
         if (self.grounded_copy is None) != (copy_state is None):
             raise ValueError("Decoder grounded-copy configuration and source state disagree")
+        cached_length = 0 if past_key_values is None else past_key_values.get_seq_length()
         position_ids = None
         if attention_mask is not None:
             position_ids = attention_mask.long().cumsum(-1) - 1
@@ -347,20 +351,48 @@ class QwenCrossDecoder(nn.Module):
             encoder_value_states=value_memory,
         )
         hidden = outputs.last_hidden_state
+        plan = None
+        if self.grounded_copy is not None and self.grounded_copy.planner is not None:
+            if use_cache and self.training:
+                raise ValueError("Prefix history caching is for evaluation; training uses a parallel causal scan")
+            if attention_mask is None:
+                positions = torch.arange(cached_length, cached_length + input_ids.shape[1], device=input_ids.device)[
+                    None, :
+                ]
+                current_valid = torch.ones_like(input_ids, dtype=torch.bool)
+            else:
+                positions = (attention_mask.long().cumsum(-1) - 1)[:, -input_ids.shape[1] :]
+                current_valid = attention_mask[:, -input_ids.shape[1] :].bool()
+            prompt_lengths = copy_state.prompt_lengths
+            if prompt_lengths is None:
+                raise ValueError("Hierarchical read requires source-cache prompt lengths to exclude instruction tokens")
+            summary_mask = current_valid & positions.ge(prompt_lengths[:, None])
+            history = self._semantic_history if use_cache and cached_length else None
+            if use_cache and cached_length and history is None:
+                raise ValueError("Self-attention cache has no matching semantic prefix history")
+            plan, final_history = self.grounded_copy.planner(hidden, copy_state, summary_mask, history)
+            if use_cache:
+                self._semantic_history = final_history
         output_hidden = hidden[:, -1:] if use_cache else hidden
+        output_plan = plan.slice(-1) if plan is not None and use_cache else plan
         logits = None
         if return_logits:
             logits = (
                 self.lm_head(output_hidden)
                 if self.grounded_copy is None
-                else self.grounded_copy.output_logits(output_hidden, copy_state, self.lm_head)
+                else self.grounded_copy.output_logits(output_hidden, copy_state, self.lm_head, output_plan)
             )
         loss = None
         if labels is not None:
             shift_labels = labels[:, 1:].contiguous()
             if self.grounded_copy is not None and logits is None:
                 loss = self.grounded_copy.loss(
-                    hidden[:, :-1], shift_labels, copy_state, self.lm_head, self.ce_chunk_size
+                    hidden[:, :-1],
+                    shift_labels,
+                    copy_state,
+                    self.lm_head,
+                    self.ce_chunk_size,
+                    None if plan is None else plan.slice(0, -1),
                 )
                 return logits, getattr(outputs, "past_key_values", None) if use_cache else None, loss
             if logits is not None:
@@ -397,16 +429,20 @@ class QwenCrossDecoder(nn.Module):
 
     @torch.no_grad()
     def prepare_cross_cache(self, memory: torch.Tensor, value_memory: Optional[torch.Tensor] = None) -> None:
+        self._semantic_history = None
         for layer in self.backbone.layers:
             if isinstance(layer, DecoderLayerWithCross):
                 layer.prepare_cache(memory, value_memory)
 
     def clear_cross_cache(self) -> None:
+        self._semantic_history = None
         for layer in self.backbone.layers:
             if isinstance(layer, DecoderLayerWithCross):
                 layer.clear_cache()
 
     def select_cross_cache(self, indices: torch.Tensor) -> None:
+        if self._semantic_history is not None:
+            self._semantic_history = self._semantic_history.index_select(indices)
         for layer in self.backbone.layers:
             if isinstance(layer, DecoderLayerWithCross) and layer.cross._cache is not None:
                 layer.cross._cache = tuple(value.index_select(0, indices) for value in layer.cross._cache)

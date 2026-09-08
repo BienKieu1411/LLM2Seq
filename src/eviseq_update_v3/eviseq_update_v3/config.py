@@ -217,7 +217,7 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("decoder.grounded_copy.semantic_read must be a mapping")
     _check_keys(
         semantic_config,
-        {"enabled", "rank", "gate_init", "attention", "max_relative_rms", "num_heads"},
+        {"enabled", "rank", "gate_init", "attention", "max_relative_rms", "num_heads", "fusion", "planner"},
         "decoder.grounded_copy.semantic_read",
     )
     if not isinstance(semantic_config.get("enabled", False), bool):
@@ -226,16 +226,55 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("Semantic read requires decoder.grounded_copy.enabled=true")
     if int(semantic_config.get("rank", 128)) <= 0 or not 0 < float(semantic_config.get("gate_init", 0.05)) < 1:
         raise ValueError("Semantic read requires rank > 0 and 0 < gate_init < 1")
-    if semantic_config.get("attention", "shared_copy") not in {"shared_copy", "independent_source"}:
-        raise ValueError("Semantic attention must be shared_copy or independent_source")
+    if semantic_config.get("attention", "shared_copy") not in {
+        "shared_copy",
+        "independent_source",
+        "hierarchical_coverage",
+    }:
+        raise ValueError("Unknown semantic attention mode")
     heads = semantic_config.get("num_heads", 1)
     if type(heads) is not int or heads < 1 or int(semantic_config.get("rank", 128)) % heads:
         raise ValueError("Semantic num_heads must be a positive integer dividing rank")
-    if heads > 1 and semantic_config.get("attention", "shared_copy") != "independent_source":
-        raise ValueError("Multiple semantic heads require independent_source attention")
+    if heads > 1 and semantic_config.get("attention", "shared_copy") == "shared_copy":
+        raise ValueError("Multiple semantic heads require independent_source or hierarchical_coverage attention")
     relative_rms = semantic_config.get("max_relative_rms")
     if relative_rms is not None and not 0 < float(relative_rms) < float("inf"):
         raise ValueError("Semantic max_relative_rms must be null or a finite positive number")
+    fusion = semantic_config.get("fusion", "residual")
+    if fusion not in {"residual", "norm_preserving"}:
+        raise ValueError("Semantic fusion must be residual or norm_preserving")
+    if fusion == "norm_preserving" and (relative_rms is None or not 0 < float(relative_rms) < 1):
+        raise ValueError("Norm-preserving fusion requires 0 < max_relative_rms < 1")
+    planner = semantic_config.get("planner", {})
+    if not isinstance(planner, dict):
+        raise ValueError("Semantic planner must be a mapping")
+    _check_keys(
+        planner,
+        {
+            "region_size",
+            "partition_heads",
+            "use_coverage",
+            "use_continuity",
+            "coverage_scale",
+            "coverage_init",
+            "coverage_max",
+            "continuity_init",
+            "continuity_max",
+        },
+        "semantic planner",
+    )
+    if type(planner.get("region_size", 64)) is not int or planner.get("region_size", 64) < 1:
+        raise ValueError("Planner region_size must be a positive integer")
+    if not isinstance(planner.get("partition_heads", True), bool):
+        raise ValueError("Planner partition_heads must be a boolean")
+    for name in ("use_coverage", "use_continuity"):
+        if not isinstance(planner.get(name, True), bool):
+            raise ValueError(f"Planner {name} must be a boolean")
+    if not 0 < float(planner.get("coverage_scale", 8)) < float("inf"):
+        raise ValueError("Planner coverage_scale must be finite and positive")
+    for name in ("coverage", "continuity"):
+        if not 0 < float(planner.get(name + "_init", 0.2)) < float(planner.get(name + "_max", 2.0)) < float("inf"):
+            raise ValueError(f"Planner {name} requires 0 < init < max < infinity")
     training = config["training"]
     _check_keys(
         training,

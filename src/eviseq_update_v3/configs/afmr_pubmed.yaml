@@ -2,7 +2,7 @@ _base_: afmr_base.yaml
 
 experiment:
   name: eviseq_update_v3_pubmed
-  output_dir: runs/eviseq_update_v3/pubmed_gated_multihead
+  output_dir: runs/eviseq_update_v3/pubmed_planned_4x128
 
 data:
   train_file: datasets/pubmed/train.jsonl

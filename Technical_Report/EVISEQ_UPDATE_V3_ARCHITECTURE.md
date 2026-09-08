@@ -1,5 +1,11 @@
 # EviSeq Update v3: cải tiến kiến trúc đọc nguồn với CE-only
 
+> **Thiết kế ban đầu, đã được thay thế.** Sau yêu cầu xử lý bốn hạn chế và dùng
+> 4×128, cấu hình hiện hành là hierarchical coverage + norm-preserving fusion,
+> tắt cross gate mới trong backbone. Xem
+> [report bản sửa hiện tại](EVISEQ_UPDATE_V3_COVERAGE_REVISION.md).
+> Các mô tả/defaults và 253 tests phía dưới thuộc lần triển khai trước.
+
 Ngày: 2026-09-08. Tài liệu ghi lại cơ sở nghiên cứu, thiết kế đã chọn và protocol
 đánh giá. Phạm vi triển khai riêng: `src/eviseq_update_v3`, xuất phát từ bản CE-only
 v2 tại commit `381ebe7`; API generation temperature/top-p được giữ lại từ nhánh

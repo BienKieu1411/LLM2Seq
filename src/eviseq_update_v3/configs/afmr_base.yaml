@@ -39,7 +39,8 @@ decoder:
   initialize_cross_from_self: true
   cross_gate_init: 0.10
   cross_gate_max: 1.0
-  query_cross_gate: true
+  # Preserve the v2 trunk/copy path; adaptive head gating now lives in semantic read.
+  query_cross_gate: false
   attention_dropout: 0.0
   ce_chunk_size: 1024
   grounded_copy:
@@ -48,11 +49,22 @@ decoder:
     gate_init: 0.05
     semantic_read:
       enabled: true
-      rank: 128
+      rank: 512  # Total: 4 heads x 128 dimensions, not 4 x 32.
       num_heads: 4
       gate_init: 0.05
-      attention: independent_source
+      attention: hierarchical_coverage
       max_relative_rms: 0.10
+      fusion: norm_preserving
+      planner:
+        region_size: 64
+        partition_heads: true
+        use_coverage: true
+        use_continuity: true
+        coverage_scale: 8.0
+        coverage_init: 0.2
+        coverage_max: 2.0
+        continuity_init: 0.2
+        continuity_max: 2.0
 
 training:
   interface_warmup_epochs: 1

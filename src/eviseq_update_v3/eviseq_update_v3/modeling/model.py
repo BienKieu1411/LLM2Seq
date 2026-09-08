@@ -64,6 +64,8 @@ class EviSeqAFMR(nn.Module):
                 self.decoder.embed_tokens,
                 **copy_inputs,
             )
+            if self.decoder.grounded_copy.planner is not None:
+                bridge.copy_state.prompt_lengths = decoder_prompt_mask.long().sum(-1)
         elif copy_inputs:
             raise ValueError("Copy alignment supplied to a decoder without grounded copy")
         return bridge

@@ -1,161 +1,173 @@
-# EviSeq Update v3: query-gated cross-attention + multihead semantic read
+# EviSeq Update v3 — 4×128, prefix coverage, fusion giữ norm
 
-V3 là package độc lập `eviseq_update_v3`, scaffold từ bản CE-only v2 ở commit
-`381ebe7`. Không cần import hoặc cài package `eviseq_update`. Bản cũ được giữ nguyên.
+Bản hiện tại dùng **4 semantic heads × 128 chiều**, đọc nguồn theo vùng rồi token,
+theo dõi usage của prefix và giữ norm khi fusion với LM hidden. Đây là bản sửa
+tiếp của v3; chưa có ROUGE PubMed để xác nhận vượt v2/new/T5Gemma.
 
-Kết quả người dùng cung cấp: new **49.626 / 21.901 / 45.895** và v2
-**49.488 / 21.953 / 45.776** (ROUGE-1/2/L). Chênh lệch nhỏ này chưa chứng minh
-nguyên nhân hồi quy, ý nghĩa thống kê hay hiệu quả v3. **V3 chưa có kết quả PubMed.**
+Package độc lập `eviseq_update_v3`; `src/eviseq_update` cũ được giữ nguyên.
+Xem [report phương pháp hiện hành](../../Technical_Report/EVISEQ_UPDATE_V3_COVERAGE_REVISION.md).
+[Report v3 ban đầu](../../Technical_Report/EVISEQ_UPDATE_V3_ARCHITECTURE.md) được
+giữ làm lịch sử thiết kế, không mô tả mặc định hiện tại.
 
-## Thay đổi kiến trúc
+## Bốn thay đổi
 
-1. **Cross gate theo target token/head.** Mỗi layer dùng
-   `2 * sigmoid(W_g * query_states + b_g)` sau SDPA, trước output projection.
-   Gate mới zero-init nên hệ số ban đầu bằng 1; static layer gate và các
-   projections sao chép từ pretrained decoder giữ nguyên.
-2. **Semantic read 4 head, tổng rank 128.** Mỗi head đọc native source riêng
-   với 32 chiều. Keys chuẩn hóa RMS theo head; contexts nối lại rồi đi qua
-   semantic gate/output/residual như v2. Số tham số và số phần tử cache của
-   nhánh semantic bằng bản 1 head cùng rank.
+1. **Matching đủ128 chiều/head.** Tổng rank512; các head nhận tập vùng nguồn rời
+   nhau. Mỗi vùng64 content tokens được giao cho head theo `region_id % 4`.
+   Đọc region→token và gate riêng từng head giúp điều chỉnh đóng góp các vùng.
+   Các vùng khác nhau vẫn có thể chứa cùng một fact.
+2. **Coverage và continuity từ prefix.** Một tracker học bằng CE ước lượng vùng
+   đang được diễn đạt; cumulative usage làm giảm ưu tiên vùng đã dùng, tín hiệu
+   vùng gần nhất hỗ trợ tiếp nối. Prompt/padding không tăng coverage.
+3. **Fusion giữ norm.** Correction được chiếu vuông góc với hidden, giới hạn
+   relative RMS0.10 rồi chuẩn hóa về norm hidden gốc. Nhánh mới thay hướng hidden,
+   không dùng tăng magnitude của LM input như một cách thay scale logits.
+4. **Giữ đường copy v2.** Mặc định tắt query gate mới trong backbone; gate theo
+   head đặt trong semantic read. Copy nhận hidden trước fusion, giữ cùng công
+   thức attention/gate/marginalization. Shared weights vẫn học qua CE nên không
+   có cam kết ROUGE-2 bất biến sau training.
 
-Giữ lexical copy, AFMR value anchor, source prior, semantic output zero-init,
-scalar semantic gate 0.05 và residual cap 0.10. Không đổi post-norm fusion,
-nới cap hoặc tăng rank cùng lúc. Không thêm encoder/decoder forward.
+Coverage là ước lượng học được, không phải kiểm chứng fact hoặc sentence planner
+biết chắc các ý đã hoàn thành. Phân vùng có thể cắt câu và ép head đọc các vùng
+khác nhau; hiệu quả thực cần ablation.
 
-Cơ sở: [Attention Is All You Need](https://papers.neurips.cc/paper/7181-attention-is-all-you-need)
-và [Gated Attention, NeurIPS 2025](https://arxiv.org/abs/2505.06708).
-Gate `2*sigmoid` giữ function ban đầu là adaptation ở đây; không phải công thức
-nguyên bản của paper, cũng không tự chứng minh novelty hoặc tăng ROUGE PubMed.
+## Objective và tính toán
 
-Xem [report phương pháp và kế hoạch đối chứng](../../Technical_Report/EVISEQ_UPDATE_V3_ARCHITECTURE.md).
+Chỉ dùng gold-token CE của mixture LM/copy. Không contrastive, evidence mining,
+R-Drop, NEFTune, teacher hay sinh thêm dữ liệu trong training. Temperature/top-p
+chỉ có trong API sinh candidates ngoài training.
 
-## Objective và gradient
+Một encoder/decoder forward như cũ. Prefix tracker tính song song với cumulative
+sum, không autoregressively sinh thêm một summary. CE chunk nhận đúng prefix
+state xuyên ranh giới chunk. Generation lưu coverage/recent-region state và
+compact cùng self/cross/source caches.
 
-Chỉ tối ưu gold-token CE của distribution trộn LM/copy. Không có contrastive,
-evidence mining/cache, R-Drop, NEFTune, teacher, self-improve hoặc sinh candidates
-trong training. Reference chỉ dùng theo teacher forcing và CE.
+Với PubMed: FP32 parameters/gradients/AdamW, BF16 autocast CUDA, clip1.0. Gradient
+checkpointing tính lại activations trong backward như cũ. Tất cả semantic/planner
+parameters thuộc optimizer group `cross_attention`, train ở cả hai stages.
 
-Cross gate học từ bước đầu. Semantic output zero-init học trước; Q/K/V và
-semantic gate nhận gradient có ích sau khi output projection khác 0. Tất cả
-tham số mới thuộc nhóm optimizer `cross_attention`, được cập nhật trong cả
-interface warmup và full finetune.
+## Config chính
 
-Với PubMed: FP32 parameters/gradients/AdamW, BF16 autocast trên CUDA, gradient
-clipping 1.0. CE chuẩn hóa theo số gold tokens thực trên tất cả ranks và các
-microbatch trong một optimizer update. Gradient checkpointing tính lại activations
-khi backward; đó không phải một objective hay một lượt sinh dữ liệu bổ sung.
+```yaml
+decoder:
+  query_cross_gate: false
+  grounded_copy:
+    enabled: true
+    key_dim: 128
+    gate_init: 0.05
+    semantic_read:
+      enabled: true
+      rank: 512          # Tổng rank = 4 × 128
+      num_heads: 4
+      attention: hierarchical_coverage
+      fusion: norm_preserving
+      max_relative_rms: 0.10
+      gate_init: 0.05
+      planner:
+        region_size: 64
+        partition_heads: true
+        use_coverage: true
+        use_continuity: true
+        coverage_scale: 8.0
+        coverage_init: 0.2
+        coverage_max: 2.0
+        continuity_init: 0.2
+        continuity_max: 2.0
+```
 
-## Cài đặt và dữ liệu
+`rank:128,num_heads:4` nghĩa là4×32, không phải4×128.
+Checkpoint spec ghi các thay đổi graph; không resume checkpoint v2 hoặc v3 ban
+đầu vào bản revised này. Train các đối chứng từ cùng pretrained backbones.
 
-Chạy từ thư mục `src/eviseq_update_v3`:
+## Cài đặt và chạy
+
+Từ thư mục `src/eviseq_update_v3`:
 
 ```bash
 python -m pip install -e '.[dev]'
+RUN_ENCODERS=pplx EVAL_SPLIT=validation bash scripts/run_pubmed_pair.sh
 ```
 
-Dữ liệu canonical là JSONL `id/source/target`; script có thể chuẩn bị dữ liệu từ
-`train.label.jsonl`, `val.label.jsonl`, `test.label.jsonl`. Có thể dùng lại đúng
-bản dữ liệu đã chuẩn bị cho v2 bằng `PROCESSED_DATA_DIR`; không cần evidence cache.
+Mặc định script chạy PPLX rồi Qwen-Embedding tuần tự, mỗi run dùng2GPU. Lệnh trên
+chỉ chạy PPLX và eval validation để chọn kiến trúc. Với benchmark cấu hình đã chốt,
+dùng `EVAL_SPLIT=test` (mặc định). Eval dùng `last.pt`, greedy, mộtGPU.
 
-## Chạy PubMed
-
-`scripts/run_pubmed_pair.sh` mặc định chạy PPLX rồi Qwen-Embedding **tuần tự**;
-mỗi run train trên 2 GPU, sau đó greedy eval `last.pt` trên tập test bằng 1 GPU.
-Để chỉ chạy PPLX:
-
-```bash
-RUN_ENCODERS=pplx bash scripts/run_pubmed_pair.sh
-```
-
-Đường dẫn model/data có mặc định theo server cũ; nếu server khác, đặt:
+Đường dẫn model/data có mặc định theo server cũ; có thể đặt lại:
 
 ```bash
 PPLX_ENCODER=/path/to/pplx-embed-v1-0.6b \
 DECODER_MODEL=/path/to/Qwen3-0.6B \
 PROCESSED_DATA_DIR=/path/to/prepared/pubmed \
-RUN_ENCODERS=pplx \
+RUN_ENCODERS=pplx EVAL_SPLIT=validation \
 bash scripts/run_pubmed_pair.sh
 ```
 
-- 2 GPU mặc định: batch 48/GPU × 2 × accum 1 = **96 examples/update**.
-- 1 GPU: `CUDA_VISIBLE_DEVICES=0 NPROC_PER_NODE=1`, mặc định batch 48 × accum 2 = 96.
-- Muốn batch 84/GPU: `BATCH_SIZE=84 GRADIENT_ACCUMULATION_STEPS=1`; trên 2 GPU
-  thành global batch 168, cần chạy đối chứng cùng setting để so sánh kiến trúc.
-- `EVAL_BATCH_SIZE=64` mặc định; eval batch không đổi global batch training.
-- `MAX_GRAD_NORM=1.0`, 1 epoch interface warmup + 3 epochs full finetune.
-  LR decay **linear theo từng stage**, giữ recipe CE-only ở commit v2 nói trên.
-  Interface warmup là giai đoạn freeze backbone, không phải LR warmup.
-- Kết quả v2 vừa báo chưa có resolved config để xác nhận protocol.
-  Không mặc nhiên coi cấu hình hiện tại là cấu hình của run đó.
+- 2GPU: `BATCH_SIZE=48` mỗiGPU, accum1 ⇒ global96.
+- 1GPU: `CUDA_VISIBLE_DEVICES=0 NPROC_PER_NODE=1`, mặc định48×accum2 ⇒96.
+- 84/GPU: `BATCH_SIZE=84 GRADIENT_ACCUMULATION_STEPS=1` ⇒ global168 trên2GPU;
+  cần đối chứng cùng protocol, không coi như tái lập global96.
+- `EVAL_BATCH_SIZE=64`, `MAX_GRAD_NORM=1.0`.
+- 1 epoch interface warmup +3 epochs full finetune; linear decay từng stage.
+  Interface warmup là freeze backbone, không phải LR warmup.
+- Dùng lại dữ liệu canonical JSONL `id/source/target` đã chuẩn bị cho v2 bằng
+  `PROCESSED_DATA_DIR`; không cần evidence cache.
+- Output/log trong `runs/eviseq_update_v3`, `logs/eviseq_update_v3`; tên run ghi
+  variant, rank, heads, fusion và planner flags. `resolved_config.yaml` lưu
+  cấu hình thực. Đặt `RUN_ROOT` riêng khi đổi seed/batch/data.
 
-Output/log nằm dưới `runs/eviseq_update_v3` và `logs/eviseq_update_v3`.
-Tên output phân biệt query gate và số head. `RUN_ROOT` cho phép chỉ định thư mục
-riêng, ví dụ khi đổi seed hoặc batch. `resolved_config.yaml` lưu cấu hình thực chạy.
+## Ablation
 
-## Ablation chỉ thay kiến trúc
+| Đối chứng | Thiết lập thêm |
+|---|---|
+| V2 control1×128 | `AFMR_SEMANTIC_VARIANT=independent_bounded SEMANTIC_RANK=128 SEMANTIC_HEADS=1` |
+| Free heads4×32 | `AFMR_SEMANTIC_VARIANT=independent_bounded SEMANTIC_RANK=128` |
+| Free heads4×128 | `AFMR_SEMANTIC_VARIANT=independent_bounded` |
+| Revised v3 đầy đủ | Mặc định |
+| Không phân vùng head | `PARTITION_HEADS=false` |
+| Không coverage | `USE_COVERAGE=false` |
+| Không continuity | `USE_CONTINUITY=false` |
+| Fusion cộng residual cũ | `SEMANTIC_FUSION=residual` |
 
-Mặc định `CROSS_QUERY_GATE=true SEMANTIC_HEADS=4`. Chạy từng đối chứng cùng
-data, seed, global batch, số epochs, LR, clip, source/target limits và decoding:
+`CROSS_QUERY_GATE=false` mặc định. Muốn đối chứng v3 ban đầu:
+free heads4×32 với `CROSS_QUERY_GATE=true`.
 
-| Ablation | CROSS_QUERY_GATE | SEMANTIC_HEADS |
-|---|---|---|
-| Graph CE-only v2 | false | 1 |
-| Chỉ gate mới | true | 1 |
-| Chỉ semantic nhiều head | false | 4 |
-| V3 đầy đủ | true | 4 |
+Script chọn fusion cũ cho independent/shared variants, fusion giữ norm cho
+hierarchical_coverage. `SEMANTIC_FUSION` cho phép override. Cần giữ cùng
+data/model/seed/global batch/LR/stages/clip/limits/decoding và chọn bằng validation.
 
-Ví dụ control v2:
+## ROUGE và sampling
 
-```bash
-RUN_ENCODERS=pplx CROSS_QUERY_GATE=false SEMANTIC_HEADS=1 \
-bash scripts/run_pubmed_pair.sh
-```
+Benchmark giữ `num_beams=1,do_sample=false`. Config validation từ chối sampling
+trong benchmark. API `evaluation.generate.generate_sampled` giữ `temperature`,
+`top_p`, `generator`; training không gọi API đó.
 
-Head count được ghi vào checkpoint architecture spec dù shapes của weights
-giống nhau. Không resume v2 checkpoint vào v3 đầy đủ. Control gate-off/head1 giữ
-spec và arithmetic v2; mỗi run kiến trúc mới nên train từ cùng pretrained base.
-
-Runner giữ last-epoch test eval cho benchmark cố định trước. Khi chọn ablation
-hoặc điều chỉnh hyperparameters, dùng validation trước, chốt cấu hình rồi mới
-đánh giá test; không chọn kiến trúc dựa trên việc thử đi thử lại test.
-
-## Greedy evaluation và sampling
-
-Benchmark eval giữ `num_beams=1, do_sample=false`, không dùng temperature/top-p.
-Config validation chủ động từ chối bật sampling trong benchmark.
-
-API `eviseq_update_v3.evaluation.generate.generate_sampled` giữ
-`temperature`, `top_p` và `generator` riêng cho sinh candidates khi cần.
-Training không gọi API này. Chọn `temperature > 0`, `0 < top_p <= 1`.
-
-`evaluate` mặc định báo Python `rouge==1.0.0`. Để đối chiếu các điểm người dùng
-báo bằng **ROUGE-1.5.5**, đặt `ROUGE155_SCRIPT=/path/to/rouge155_wrapper.py`.
-Runner gọi wrapper theo giao diện:
+Evaluator mặc định báo Python `rouge==1.0.0`. Để so các score ROUGE155 đã báo,
+đặt `ROUGE155_SCRIPT=/path/to/rouge155_wrapper.py`; runner gọi:
 
 ```bash
 python /path/to/rouge155_wrapper.py predictions.jsonl --output scores.rouge155.json
 ```
 
-Wrapper/Perl/ROUGE resources phải có sẵn trên máy chạy. Giữ tokenizer,
-detokenization và các flags ROUGE giống baseline; không so trực tiếp hai backend.
+Giữ wrapper/Perl/resources/flags và detokenization giống baseline. Nếu không đặt
+wrapper, script ghi rõ ROUGE155 bị bỏ qua; không coi Python score là Perl score.
 
-## Kiểm chứng
+## Kiểm chứng và chi phí
 
 ```bash
 PYTHONPATH=. python -m pytest -q -p no:cacheprovider
 PYTHONPATH=. python scripts/smoke_test.py
 ```
 
-Test dùng tiny models offline: attention oracle, gradient CE FP32/BF16,
-dense/chunk parity, source masks, zero-label batch, optimizer hai stage,
-checkpoint compatibility, cached prefix/compaction và DDP hai tiến trình Gloo.
-Smoke bật gate mới và 4 semantic heads, train 2 stage rồi checkpoint/resume/eval.
+Tests kiểm tra oracle hierarchy, source-region ownership, prefix scan/incremental
+parity, prompt/padding/future exclusion, FP32/BF16 gradients, dense/chunk CE,
+fusion norm/bound, copy isolation, optimizer2stages, checkpoint và DDP2tiến trình
+Gloo. Smoke dùng tiny4heads với rank thu nhỏ, bật đúng planned graph.
 
-Kết quả local 2026-09-08: **253 tests passed**, smoke passed. Control gate-off/head1
-đã được đối chiếu trực tiếp với commit CE v2: logits, CE và gradients khớp chính
-xác trên tiny model ở FP32/BF16, kể cả khi semantic residual đã khác zero.
+Kiểm tra local 2026-09-08: **286 tests passed**, smoke passed. Chưa chạy full
+PubMed hoặc NCCL/CUDA trong môi trường này.
 
-Những kiểm tra này không thay thế phép đo tốc độ/VRAM trên CUDA, full PubMed
-training hoặc chứng minh v3 vượt new/T5Gemma. QKV/cache semantic giữ nguyên tổng
-chiều; softmax có thêm heads. SDPA có thể dùng fused kernels, nhưng thời gian và
-VRAM thực còn tùy kernel, batch và độ dài dữ liệu.
+Ở hidden1024: semantic+planner có2,627,592 tham số, so với524,545 của v2.
+Semantic K/V rộng512 thay128 nên riêng cache này tăng4 lần. Thêm tracker theo vùng
+và scatter/cumsum; chưa có đo throughput/VRAM CUDA. Không có cơ sở nói tổng train
+chậm4 lần, cũng chưa có cơ sở gán một phần trăm overhead nhỏ cố định.
+
+Các tests không thay thế full PubMed training hoặc chứng minh tăng R1/R2/L.

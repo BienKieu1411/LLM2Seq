@@ -28,6 +28,8 @@ decoder:
       enabled: false
       rank: 8
       num_heads: 1
+      attention: independent_source
+      fusion: residual
 
 training:
   interface_warmup_epochs: 1

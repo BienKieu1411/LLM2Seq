@@ -5,6 +5,7 @@ import torch
 from eviseq_update_v3.evaluation.generate import _sample_token, generate_greedy, generate_sampled
 from eviseq_update_v3.modeling.model import EviSeqAFMR
 from eviseq_update_v3.runtime import _TinyTokenizer, build_loaders
+from test_planned_semantic_v3 import config_planned
 from test_semantic_read import model_config
 
 
@@ -18,12 +19,15 @@ def test_top_p_retains_highest_probability_and_temperature_changes_concentration
     assert hot.eq(0).float().mean() < 0.6
 
 
-def test_sampling_reproducible_cached_and_independent_of_reference():
+@pytest.mark.parametrize("planned", [False, True])
+def test_sampling_reproducible_cached_and_independent_of_reference(planned):
     torch.manual_seed(42)
     cfg = model_config("independent_bounded")
     cfg["decoder"]["query_cross_gate"] = True
     cfg["decoder"]["grounded_copy"]["semantic_read"]["rank"] = 8
     cfg["decoder"]["grounded_copy"]["semantic_read"]["num_heads"] = 4
+    if planned:
+        cfg = config_planned()
     model = EviSeqAFMR(cfg).eval()
     raw_batch = next(iter(build_loaders(cfg, max_train_examples=2)["train"]))
     batch = {key: value for key, value in raw_batch.items() if isinstance(value, torch.Tensor)}

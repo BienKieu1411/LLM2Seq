@@ -24,10 +24,16 @@ from eviseq_update_v3.training.engine import AFMRTrainer, seed_everything  # noq
 def main() -> None:
     seed_everything(7)
     config = load_config(ROOT / "configs/afmr_smoke.yaml")
-    config["decoder"]["query_cross_gate"] = True
+    config["decoder"]["query_cross_gate"] = False
     config["decoder"]["grounded_copy"]["enabled"] = True
-    config["decoder"]["grounded_copy"]["semantic_read"]["enabled"] = True
-    config["decoder"]["grounded_copy"]["semantic_read"]["num_heads"] = 4
+    config["decoder"]["grounded_copy"]["semantic_read"].update(
+        enabled=True,
+        num_heads=4,
+        rank=32,
+        attention="hierarchical_coverage",
+        fusion="norm_preserving",
+        planner={"region_size": 1},
+    )
     config["generation"]["max_new_tokens"] = 4
     loaders = build_loaders(config, max_train_examples=4, max_validation_examples=2)
     model = EviSeqAFMR(config)
@@ -80,6 +86,7 @@ def main() -> None:
             "semantic_max_relative_rms": head.semantic_max_relative_rms,
             "query_cross_gate": config["decoder"]["query_cross_gate"],
             "semantic_heads": config["decoder"]["grounded_copy"]["semantic_read"]["num_heads"],
+            "semantic_fusion": head.semantic_fusion,
             "initial_loss": initial_loss,
             "final_loss": float(final.loss),
             "checkpoint_epoch": metadata["epoch"],

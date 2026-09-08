@@ -62,6 +62,22 @@ def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
                 spec["grounded_copy"]["semantic_read"].update(
                     graph="multihead_source_residual_v3", num_heads=heads, key_norm="per_head_rms"
                 )
+            semantic_spec = spec["grounded_copy"]["semantic_read"]
+            if semantic_config.get("fusion", "residual") != "residual":
+                semantic_spec["fusion"] = "tangent_norm_preserving_v1"
+            if attention == "hierarchical_coverage":
+                planner = semantic_config.get("planner", {})
+                semantic_spec.update(
+                    graph="hierarchical_prefix_coverage_v3",
+                    num_heads=heads,
+                    region_size=int(planner.get("region_size", 64)),
+                    partition_heads=bool(planner.get("partition_heads", True)),
+                    use_coverage=bool(planner.get("use_coverage", True)),
+                    use_continuity=bool(planner.get("use_continuity", True)),
+                    coverage_scale=float(planner.get("coverage_scale", 8.0)),
+                    coverage_max=float(planner.get("coverage_max", 2.0)),
+                    continuity_max=float(planner.get("continuity_max", 2.0)),
+                )
     return spec
 
 
