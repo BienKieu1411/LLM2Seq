@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.9"]
+dev = ["pytest>=8.0", "ruff==0.15.20"]
 
 [project.scripts]
 eviseq-afmr = "eviseq_afmr.cli:main"

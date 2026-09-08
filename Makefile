@@ -4,7 +4,7 @@ setup:
 	@echo "Creating virtual environment..."
 	python3 -m venv .venv
 	@echo "Installing pre-commit hooks..."
-	.venv/bin/python -m pip install pre-commit ruff
+	.venv/bin/python -m pip install pre-commit "ruff==0.15.20"
 	.venv/bin/pre-commit install
 	@echo "Installing frontend dependencies..."
 	cd App/frontend && npm install
