@@ -241,7 +241,7 @@ class GroundedCopyHead(nn.Module):
         mixed = torch.logaddexp(logits.float() - normalizer + log_generate, log_source + log_copy) + normalizer
         return torch.where(state.mask.any(-1)[:, None, None], mixed, logits.float())
 
-    def loss(self, hidden: torch.Tensor, labels: torch.Tensor, state: CopyState, lm_head, chunk_size: int):
+    def loss_sum(self, hidden: torch.Tensor, labels: torch.Tensor, state: CopyState, lm_head, chunk_size: int):
         def chunk_loss(states, targets):
             generation_hidden, (log_attention, log_copy, log_generate) = self.read(states, state)
             matches = targets[..., None].eq(state.token_ids[:, None, :]) & state.mask[:, None, :]
@@ -263,4 +263,154 @@ class GroundedCopyHead(nn.Module):
                 else chunk_loss(states, targets)
             )
         total = torch.stack(losses).sum() if losses else hidden.sum() * 0.0
-        return total / labels.ne(-100).sum().clamp_min(1)
+        return total
+
+    def loss(self, hidden: torch.Tensor, labels: torch.Tensor, state: CopyState, lm_head, chunk_size: int):
+        return self.loss_sum(hidden, labels, state, lm_head, chunk_size) / labels.ne(-100).sum().clamp_min(1)
+
+    @staticmethod
+    def _set_logsumexp(values: torch.Tensor, owner: torch.Tensor, size: int) -> torch.Tensor:
+        """Stable logsumexp over sparse candidate sets grouped by target owner."""
+
+        maximum = torch.full((size,), float("-inf"), device=values.device, dtype=torch.float32)
+        maximum.scatter_reduce_(0, owner, values.float(), reduce="amax", include_self=True)
+        total = torch.zeros((size,), device=values.device, dtype=torch.float32)
+        total.scatter_add_(0, owner, torch.exp(values.float() - maximum.index_select(0, owner)))
+        return maximum + total.clamp_min(torch.finfo(torch.float32).tiny).log()
+
+    def _contrastive_branch(
+        self,
+        query: torch.Tensor,
+        keys: torch.Tensor,
+        bias: torch.Tensor,
+        mask: torch.Tensor,
+        unit_batch_index: torch.Tensor,
+        unit_confidence: torch.Tensor,
+        unit_valid: torch.Tensor,
+        target_unit: torch.Tensor,
+        target_weight: torch.Tensor,
+        owner: torch.Tensor,
+        source_position: torch.Tensor,
+        positive: torch.Tensor,
+    ) -> torch.Tensor:
+        """Set-based multi-positive InfoNCE on the actual read logits."""
+
+        zero = query.sum() * 0.0
+        target_count = query.shape[0]
+        if target_count == 0:
+            return zero
+        if owner.numel() == 0:
+            if unit_valid.any():
+                raise ValueError("Active evidence unit has no candidates for an enabled contrastive branch")
+            return zero
+        if owner.ndim != source_position.ndim or owner.shape != source_position.shape or owner.shape != positive.shape:
+            raise ValueError("Evidence candidate tensors must have matching one-dimensional shapes")
+        if owner.numel() and (owner.min() < 0 or owner.max() >= target_count):
+            raise ValueError("Evidence candidate owner lies outside target rows")
+        target_active = unit_valid.index_select(0, target_unit).bool()
+        candidate_active = target_active.index_select(0, owner)
+        owner = owner[candidate_active]
+        source_position = source_position[candidate_active]
+        positive = positive[candidate_active]
+        if owner.numel() == 0:
+            return zero
+        source_batch = unit_batch_index.index_select(0, target_unit).index_select(0, owner)
+        if source_position.min() < 0 or source_position.max() >= keys.shape[1]:
+            raise ValueError("Evidence source position lies outside the active read keys")
+        if not mask[source_batch, source_position].all():
+            raise ValueError("Evidence candidate points to a masked source position")
+        active_owner = torch.nonzero(target_active, as_tuple=False).flatten()
+        positives = torch.bincount(owner[positive], minlength=target_count)
+        negatives = torch.bincount(owner[~positive], minlength=target_count)
+        if (positives.index_select(0, active_owner) == 0).any() or (negatives.index_select(0, active_owner) == 0).any():
+            raise ValueError("Every active evidence timestep needs both positive and negative candidates")
+        score = (query.index_select(0, owner).float() * keys[source_batch, source_position].float()).sum(
+            -1
+        ) / math.sqrt(query.shape[-1]) + bias[source_batch, source_position].float()
+        all_lse = self._set_logsumexp(score, owner, target_count)
+        positive_lse = self._set_logsumexp(score[positive], owner[positive], target_count)
+        loss = all_lse.index_select(0, active_owner) - positive_lse.index_select(0, active_owner)
+        weight = (
+            unit_confidence.index_select(0, target_unit.index_select(0, active_owner)).float()
+            * target_weight.index_select(0, active_owner).float()
+        )
+        return (loss * weight).sum()
+
+    def evidence_loss(
+        self, hidden: torch.Tensor, state: CopyState, evidence: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return copy and semantic contrastive sums without global normalization."""
+
+        required = (
+            "evidence_unit_batch_index",
+            "evidence_unit_confidence",
+            "evidence_unit_valid",
+            "evidence_target_unit",
+            "evidence_target_hidden_pos",
+            "evidence_target_weight",
+        )
+        missing = [key for key in required if key not in evidence]
+        if missing:
+            raise ValueError(f"Evidence batch is missing {missing}")
+        unit_batch = evidence["evidence_unit_batch_index"]
+        unit_confidence = evidence["evidence_unit_confidence"]
+        unit_valid = evidence["evidence_unit_valid"]
+        target_unit = evidence["evidence_target_unit"]
+        target_hidden = evidence["evidence_target_hidden_pos"]
+        target_weight = evidence["evidence_target_weight"]
+        if unit_batch.ndim != 1 or target_unit.ndim != 1 or target_hidden.ndim != 1 or target_weight.ndim != 1:
+            raise ValueError("Evidence unit and target tensors must be one-dimensional")
+        if not (unit_batch.shape == unit_confidence.shape == unit_valid.shape):
+            raise ValueError("Evidence unit tensors must have matching shapes")
+        if not (target_unit.shape == target_hidden.shape == target_weight.shape):
+            raise ValueError("Evidence target tensors must have matching shapes")
+        zero = hidden.sum() * 0.0
+        if target_unit.numel() == 0:
+            return zero, zero
+        if target_unit.min() < 0 or target_unit.max() >= unit_batch.numel():
+            raise ValueError("Evidence target refers to an unknown unit")
+        if target_hidden.min() < 0 or target_hidden.max() >= hidden.shape[1]:
+            raise ValueError("Evidence target hidden position lies outside decoder states")
+        batch = unit_batch.index_select(0, target_unit)
+        query_hidden = hidden[batch, target_hidden]
+        copy_query = self.query(self._norm(query_hidden).to(self.query.weight.dtype)).float()
+        copy_owner = evidence.get("evidence_copy_owner")
+        copy_sum = zero
+        if copy_owner is not None and copy_owner.numel():
+            copy_sum = self._contrastive_branch(
+                copy_query,
+                state.keys,
+                state.bias,
+                state.mask,
+                unit_batch,
+                unit_confidence,
+                unit_valid,
+                target_unit,
+                target_weight,
+                copy_owner,
+                evidence["evidence_copy_source_position"],
+                evidence["evidence_copy_positive"],
+            )
+        semantic_sum = zero
+        semantic_owner = evidence.get("evidence_semantic_owner")
+        if semantic_owner is not None and semantic_owner.numel():
+            if not self.semantic_read_enabled or self.semantic_attention != "independent_source":
+                raise ValueError("Evidence semantic contrastive training requires independent semantic read")
+            if state.semantic_keys is None or state.semantic_mask is None or state.semantic_bias is None:
+                raise ValueError("Semantic evidence requires native source keys, mask and bias")
+            semantic_query = self.semantic_query(self._norm(query_hidden).to(self.semantic_query.weight.dtype)).float()
+            semantic_sum = self._contrastive_branch(
+                semantic_query,
+                state.semantic_keys,
+                state.semantic_bias,
+                state.semantic_mask,
+                unit_batch,
+                unit_confidence,
+                unit_valid,
+                target_unit,
+                target_weight,
+                semantic_owner,
+                evidence["evidence_semantic_source_position"],
+                evidence["evidence_semantic_positive"],
+            )
+        return copy_sum, semantic_sum

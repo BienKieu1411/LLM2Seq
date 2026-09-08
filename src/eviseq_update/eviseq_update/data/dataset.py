@@ -9,12 +9,20 @@ from typing import Any
 
 from torch.utils.data import Dataset
 
+from .evidence_cache import EvidenceCacheReader
 from .normalization import detokenize
 from .schema import CanonicalRecord
 
 
 class JsonlSummarizationDataset(Dataset[CanonicalRecord]):
-    def __init__(self, path: str | Path, data_config: dict[str, Any], *, max_examples: int = 0):
+    def __init__(
+        self,
+        path: str | Path,
+        data_config: dict[str, Any],
+        *,
+        max_examples: int = 0,
+        evidence_cache_path: str | Path | None = None,
+    ):
         self.path = Path(path)
         if not self.path.is_file():
             raise FileNotFoundError(f"Dataset not found: {self.path}")
@@ -36,6 +44,9 @@ class JsonlSummarizationDataset(Dataset[CanonicalRecord]):
                         break
         if not self.offsets:
             raise ValueError(f"Dataset is empty: {self.path}")
+        self.evidence_cache = (
+            EvidenceCacheReader(evidence_cache_path, expected_rows=len(self.offsets)) if evidence_cache_path else None
+        )
         self[0]
 
     def __len__(self) -> int:
@@ -59,15 +70,27 @@ class JsonlSummarizationDataset(Dataset[CanonicalRecord]):
         )
         if config.get("detokenize", False):
             record = replace(record, source=detokenize(record.source), target=detokenize(record.target))
-        return record if record.example_id else replace(record, example_id=str(index + 1))
+        if not record.example_id:
+            record = replace(record, example_id=str(index + 1))
+        if self.evidence_cache is not None:
+            evidence = self.evidence_cache.get(index)
+            evidence.validate_record(index, record.example_id, record.source, record.target)
+            record = replace(record, evidence=evidence)
+        return record
 
     def __getstate__(self):
         state = self.__dict__.copy()
         state["_handle"] = None
         state["_pid"] = None
+        if state.get("evidence_cache") is not None:
+            state["evidence_cache"]._handle = None
+            state["evidence_cache"]._pid = None
         return state
 
     def __del__(self):
         handle = getattr(self, "_handle", None)
         if handle is not None:
             handle.close()
+        cache = getattr(self, "evidence_cache", None)
+        if cache is not None:
+            cache.close()

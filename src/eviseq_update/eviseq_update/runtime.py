@@ -23,6 +23,7 @@ from .config import load_config, resolve_path
 from .data.collate import SummarizationCollator
 from .data.copy_alignment import COPY_INPUT_KEYS
 from .data.dataset import JsonlSummarizationDataset
+from .data.evidence_cache import validate_cache_manifest
 from .data.sampling import DistributedBatchSampler, DistributedCollator, DistributedDataset, LengthBucketBatchSampler
 from .distributed import rank, run_on_main, training_process_group, world_size
 from .modeling.model import EviSeqAFMR
@@ -117,17 +118,29 @@ def build_loaders(
     encoder_tokenizer, decoder_tokenizer = _tokenizers(config)
     data = config["data"]
     paths = {"train": data["train_file"], "validation": data["validation_file"], "test": data["test_file"]}
+    evidence_config = config["training"].get("evidence_contrastive", {})
     selected = (split,) if split else ("train", "validation")
     loaders = {}
     for name in selected:
         split_data = copy.deepcopy(data)
         limit = max_train_examples if name == "train" else max_validation_examples if name == "validation" else 0
-        dataset = JsonlSummarizationDataset(resolve_path(paths[name], config), split_data, max_examples=limit)
+        cache_path = None
+        evidence_mode = None
+        if name == "train" and evidence_config.get("enabled", False):
+            cache_path = resolve_path(str(evidence_config["cache_path"]), config)
+            if cache_path.is_dir():
+                cache_path = cache_path / "evidence.jsonl"
+            validate_cache_manifest(cache_path, config)
+            evidence_mode = str(evidence_config.get("mode", "both"))
+        dataset = JsonlSummarizationDataset(
+            resolve_path(paths[name], config), split_data, max_examples=limit, evidence_cache_path=cache_path
+        )
         collator = SummarizationCollator(
             encoder_tokenizer,
             decoder_tokenizer,
             split_data,
             grounded_copy=bool(config["decoder"].get("grounded_copy", {}).get("enabled", False)),
+            evidence_mode=evidence_mode,
         )
         batch_size = (
             int(config["training"].get("validation_batch_size", 4))
@@ -176,12 +189,13 @@ def build_loaders(
             **({"multiprocessing_context": "spawn"} if distributed and workers > 0 else {}),
         )
         LOGGER.info(
-            "[data] split=%s | examples=%d | batch=%d | workers=%d | length_bucketing=%s",
+            "[data] split=%s | examples=%d | batch=%d | workers=%d | length_bucketing=%s | evidence=%s",
             name,
             len(dataset),
             batch_size,
             workers,
             "batch_sampler" in sampling,
+            evidence_mode or "off",
         )
     return loaders
 
@@ -244,6 +258,12 @@ def _train(
         if gradient_accumulation_steps <= 0:
             raise ValueError("gradient_accumulation_steps must be positive")
         config["training"]["gradient_accumulation_steps"] = int(gradient_accumulation_steps)
+    evidence = config["training"].get("evidence_contrastive", {})
+    if evidence.get("enabled", False):
+        cache_path = resolve_path(str(evidence["cache_path"]), config)
+        if cache_path.is_dir():
+            cache_path = cache_path / "evidence.jsonl"
+        evidence["cache_path"] = str(cache_path)
     config["model"]["dtype"] = "float32"
     config["model"].setdefault("compute_dtype", "bfloat16")
     _configure_precision(config)

@@ -15,6 +15,11 @@ giới hạn kết luận và kế hoạch đối chứng trong
 [báo cáo regression](../../Technical_Report/EVISEQ_UPDATE_REGRESSION_2026_09_08.md).
 Ý tưởng v1 trước đó nằm trong [báo cáo nghiên cứu](../../Technical_Report/AFMR_FOUNDATION_WORLD_MODEL_NEXT_STEPS.md).
 
+Recipe PubMed dùng **CE trên gold reference**, LR warmup + cosine. Training
+chỉ dùng source/reference, một lượt teacher forcing mỗi microbatch.
+Cơ sở paper, công thức, chi phí và cách kiểm
+chứng claim nằm trong [báo cáo training](../../Technical_Report/EVISEQ_EVIDENCE_CONTRASTIVE_DESIGN.md).
+
 ## Computational graph
 
 ```text
@@ -119,6 +124,8 @@ config ngoài `configs/` resolve từ thư mục chứa chính config đó.
 
 PubMed mặc định **1 epoch warm-up + 3 epoch full**, batch hiệu dụng **96**, clip **1.0**.
 Một GPU: batch 48, accumulation 2. Hai GPU: batch 48/GPU, accumulation 1.
+Training dùng embedding gốc và một lượt teacher forcing, không thêm input noise.
+Mỗi stage có 5% bước LR warmup rồi cosine decay; các LR đỉnh từng nhóm giữ nguyên.
 
 ```bash
 cd src/eviseq_update
@@ -129,7 +136,7 @@ CUDA_VISIBLE_DEVICES=0 PYTHON=python3 \
 # Hai GPU
 CUDA_VISIBLE_DEVICES=0,1 NPROC_PER_NODE=2 GRADIENT_ACCUMULATION_STEPS=1 PYTHON=python3 \
   bash scripts/run_afmr.sh train configs/afmr_pubmed.yaml \
-  --output-dir runs/eviseq_update/pubmed_copy_read_v2_2gpu
+  --output-dir runs/eviseq_update/pubmed_copy_read_v2_cosine_2gpu
 ```
 
 Script dùng `torchrun`/NCCL/DDP. Loss được cân theo **tổng supervised tokens trên mọi
@@ -181,8 +188,8 @@ CUDA_VISIBLE_DEVICES=0 NPROC_PER_NODE=1 RUN_ENCODERS=pplx \
 
 Ví dụ `RUN_ENCODERS=pplx AFMR_SEMANTIC_VARIANT=shared_v1 bash scripts/run_pubmed_pair.sh`.
 `AFMR_SEMANTIC_READ=false` chạy copy-only. V2 ghi vào
-`runs/eviseq_update/pubmed_pair_afmr_value_anchor_copy_read_independent_bounded/pplx`.
-Các graph semantic có directory riêng; `RUN_ROOT`/`LOG_DIR` cho phép đổi nơi lưu.
+`runs/eviseq_update/pubmed_pair_afmr_value_anchor_copy_read_independent_bounded_cosine/pplx`.
+Các graph và training recipes có directory riêng; `RUN_ROOT`/`LOG_DIR` cho phép đổi nơi lưu.
 Dùng directory mới khi đổi protocol/seed. Queue không tự ghi đè run có sẵn;
 `OVERWRITE_OUTPUT_DIR=true` là yêu cầu reset run có chủ đích.
 
@@ -190,15 +197,86 @@ Eval epoch 3 trên test cho run recipe trực tiếp một GPU:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 PYTHON=python3 bash scripts/run_afmr.sh evaluate \
-  runs/eviseq_update/pubmed_value_anchor_copy_read_v2/resolved_config.yaml \
-  runs/eviseq_update/pubmed_value_anchor_copy_read_v2/epoch_003.pt \
-  runs/eviseq_update/pubmed_value_anchor_copy_read_v2/epoch003_test_predictions.jsonl \
+  runs/eviseq_update/pubmed_value_anchor_copy_read_v2_cosine/resolved_config.yaml \
+  runs/eviseq_update/pubmed_value_anchor_copy_read_v2_cosine/epoch_003.pt \
+  runs/eviseq_update/pubmed_value_anchor_copy_read_v2_cosine/epoch003_test_predictions.jsonl \
   --split test --batch-size 32
 ```
 
 Runtime báo Python ROUGE 1.0.0. Muốn so Perl ROUGE 1.5.5, chấm predictions bằng cùng
 wrapper/tokenization/flags của baseline. Queue chỉ chấm Perl nếu có `ROUGE155_SCRIPT`.
 Chọn graph/hyperparameters/checkpoint bằng validation; test dùng cho đánh giá đã chốt.
+
+## Training recipes và sampling
+
+Chọn bằng `AFMR_TRAINING_RECIPE=... bash scripts/run_pubmed_pair.sh`:
+
+| Recipe | LR | Full-stage regularization | Lượt model / microbatch | Batch × GPU × accum mặc định |
+|---|---|---|---|---|
+| `ce` | Linear, không LR warmup | Không | 1 | 48 × 2 × 1 |
+| `cosine` (mặc định) | 5% warmup + cosine | Không | 1 | 48 × 2 × 1 |
+| `dropout` | 5% warmup + cosine | Cross-attention dropout 0.1 | 1 | 48 × 2 × 1 |
+| `evidence` | 5% warmup + cosine | Query–source contrastive on copy + semantic reads | 1 | 48 × 2 × 1 |
+
+Log ghi `ce`, LR, gradient norm và throughput. Checkpoint lưu recipe và chặn
+resume khi đổi scheduler hoặc LR warmup. NEFTune đã bị loại bỏ: config cũ có
+`neftune_noise_alpha` không được chấp nhận; checkpoint đã train với alpha khác 0
+không thể tiếp tục như một run CE tương đương. Bắt đầu run CE riêng để đối chứng.
+Weights cũ vẫn cùng graph và có thể đánh giá bằng bản sao config bỏ trường đã xóa;
+không sửa provenance/resolved config gốc. Config thiếu scheduler dùng CE + linear.
+
+Recipe `evidence` chuẩn bị một sidecar JSONL trước khi train cho từng encoder. Với
+mỗi từ/number xuất hiện ở nhiều vị trí source, cache giữ source context phù hợp làm
+positive và context cùng từ nhưng khác nghĩa làm hard negative. Train vẫn chỉ có
+một encoder pass và một decoder teacher-forcing pass: query/key từ copy read và
+native semantic read nhận gradient trực tiếp qua set-based multi-positive InfoNCE.
+Không có candidate generation, target encoder hay pseudo-reference. Cache kiểm tra
+hash source/target token IDs, config/tokenizer fingerprint và checksum trước train;
+đổi tokenizer, prefix, length hay mining config thì phải build lại.
+
+```bash
+cd src/eviseq_update
+RUN_ENCODERS=pplx AFMR_TRAINING_RECIPE=evidence \
+  bash scripts/run_pubmed_pair.sh
+```
+
+Queue tạo `runs/.../evidence/pplx/evidence.jsonl`, ghi manifest cùng thư mục, sau
+đó mới `torchrun` train. Có thể chuẩn bị cache riêng để audit trước:
+
+```bash
+python scripts/prepare_evidence.py --config /path/to/resolved_config.yaml \
+  --split train --output-dir /path/to/evidence/pplx
+```
+
+`--audit-size 200` vẫn build cache cho toàn split, đồng thời ghi 200 hàng đầu vào
+`audit_examples.jsonl`; `summary.json` ghi coverage, số unit và các lý do bị lọc.
+
+`AFMR_EVIDENCE_MODE=copy|semantic|both` chọn ablation; `both` là bản chính và lấy
+trung bình hai nhánh. `AFMR_EVIDENCE_MAX_WEIGHT` mặc định `0.05`,
+`AFMR_EVIDENCE_RAMP_RATIO` mặc định `0.10`; lambda chỉ tăng trong full fine-tune,
+warm-up interface vẫn là CE. Metrics ghi `evidence_copy`, `evidence_semantic`,
+`evidence_lambda` và `evidence_units` cạnh CE. Ví dụ đặt batch 84 mỗi GPU và
+không accumulation: `BATCH_SIZE=84 GRADIENT_ACCUMULATION_STEPS=1`.
+
+Temperature/top-p đã có **Python API riêng** cho sinh candidates khi cần:
+
+```python
+import torch
+from eviseq_update.evaluation.generate import generate_sampled
+
+# model, batch, tokenizer đã được nạp; batch ở cùng device với model.
+generator = torch.Generator(device=next(model.parameters()).device).manual_seed(42)
+texts, token_ids = generate_sampled(
+    model, batch, tokenizer, temperature=0.7, top_p=0.9,
+    generator=generator, max_new_tokens=512, min_new_tokens=32,
+    repetition_penalty=1.05, no_repeat_ngram_size=3,
+)
+```
+
+Training không gọi API này; CLI `evaluate` và queue vẫn greedy, không sampling.
+Queue mặc định chấm `last.pt` trên test sau train, không chọn checkpoint bằng test.
+Để chọn `best.pt`, chạy evaluate trên validation trước và chốt tiêu chí cho tất cả
+baselines. `best.pt` được lưu theo validation CE, chưa phải best ROUGE/factuality.
 
 ## Xác minh offline
 
@@ -210,7 +288,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
   python3 -m pytest -q -p no:cacheprovider
 ```
 
-Smoke dùng tiny Qwen ngẫu nhiên, tắt mạng, bật copy và semantic read; chạy hai stages,
+Smoke mặc định CE + cosine, dùng tiny Qwen ngẫu nhiên, tắt mạng, bật copy và semantic read; chạy hai stages,
 checkpoint round-trip, dense/chunked CE, greedy eval và prediction resume. Dữ liệu
 nằm trong `tests/fixtures`, output trong temporary directory tự xóa. Kết quả phải có
 `"status": "ok"`, `"semantic_read": true`. Fixture `afmr_smoke.yaml` tắt copy/semantic
@@ -223,6 +301,8 @@ và compatibility checkpoint. Test hai tiến trình CPU/Gloo so gradient trư�
 step và weights sau update với một tiến trình ở cả warm-up/full, bốn chế độ LM/copy/
 v1/v2, target dài/ngắn, accumulation dư và rank không có labels. Nó cũng kiểm tra
 AdamW resume, RNG từng rank và eval checkpoint DDP bằng một tiến trình.
+Tests kiểm tra một lượt forward không sinh text, gradient BF16/FP32 và resume
+hai tiến trình với dropout để xác minh RNG khi có phép tính ngẫu nhiên.
 
 Test queue chạy config generator thật nhưng giả lập CUDA/train/eval; không chứng minh
 queue đã train trên GPU ở máy này. Smoke model thực trên GPU, có directory riêng:
@@ -234,3 +314,8 @@ CUDA_VISIBLE_DEVICES=0 PYTHON=python3 \
 
 Đọc phân cấp, long-source encoding, BRIO và world-model predictor vẫn là các hướng
 nghiên cứu riêng; chưa ghép thêm vào lần sửa này.
+
+Thiết kế objective contrastive theo cơ chế copy/read, các tiền lệ cần trích dẫn và
+ablation dự kiến nằm trong
+[đề xuất training](../../Technical_Report/EVISEQ_EVIDENCE_CONTRASTIVE_DESIGN.md).
+Objective đó đang ở mức thiết kế; recipe thực thi hiện tại là CE.

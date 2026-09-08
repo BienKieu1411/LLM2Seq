@@ -16,9 +16,11 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 
 from ..data.copy_alignment import COPY_INPUT_KEYS
+from ..data.evidence import EVIDENCE_TENSOR_KEYS
 from ..distributed import run_on_main, world_size
 from .checkpoint import load_checkpoint, save_checkpoint
 from .optimizer import build_optimizer, set_stage_trainability
+from .schedule import lr_multiplier
 
 LOGGER = logging.getLogger("eviseq_update.train")
 
@@ -71,11 +73,50 @@ class _LossOnlyModel(torch.nn.Module):
         super().__init__()
         self.model = model
 
-    def forward(self, *args, **kwargs):
-        loss = self.model(*args, **kwargs).loss_ce
-        if loss is None:
-            raise RuntimeError("AFMR training requires decoder labels")
-        return loss
+    def forward(
+        self,
+        *args,
+        ce_scale: float = 1.0,
+        evidence_scale: float = 0.0,
+        copy_weight: float = 0.0,
+        semantic_weight: float = 0.0,
+        local_token_count: int = 0,
+        **kwargs,
+    ):
+        output = self.model(*args, **kwargs)
+        statistics = getattr(output, "loss_statistics", None)
+        if statistics is None:
+            loss_ce = getattr(output, "loss_ce", None)
+            if loss_ce is None:
+                raise RuntimeError("AFMR training requires decoder labels")
+            if evidence_scale != 0.0:
+                raise RuntimeError("Evidence contrastive training requires an AFMR model with loss statistics")
+            ce_sum = loss_ce * int(local_token_count)
+            zero = loss_ce * 0.0
+            statistics = type(
+                "_LegacyStatistics",
+                (),
+                {
+                    "ce_sum": ce_sum,
+                    "copy_sum": zero,
+                    "semantic_sum": zero,
+                    "gold_token_count": torch.as_tensor(local_token_count, device=loss_ce.device),
+                    "evidence_count": torch.zeros((), dtype=torch.long, device=loss_ce.device),
+                },
+            )()
+        backward = statistics.ce_sum * float(ce_scale)
+        backward = backward + statistics.copy_sum * float(evidence_scale * copy_weight)
+        backward = backward + statistics.semantic_sum * float(evidence_scale * semantic_weight)
+        # The first tensor is the sole backward root.  The remaining values are
+        # detached logging statistics and do not create a second DDP graph.
+        return (
+            backward,
+            statistics.ce_sum.detach(),
+            statistics.copy_sum.detach(),
+            statistics.semantic_sum.detach(),
+            statistics.gold_token_count.detach(),
+            statistics.evidence_count.detach(),
+        )
 
 
 class AFMRTrainer:
@@ -97,6 +138,19 @@ class AFMRTrainer:
         self._elapsed_before_fit = 0.0
         self._loss_model = _LossOnlyModel(self.model)
         self._ddp_model = None
+        evidence = self.config["training"].get("evidence_contrastive", {})
+        self._evidence_enabled = bool(evidence.get("enabled", False))
+        self._evidence_config = evidence
+        self._evidence_stage_steps = 1
+
+    def _evidence_weight(self, stage: str) -> float:
+        if not self._evidence_enabled or stage != "full_finetune":
+            return 0.0
+        maximum = float(self._evidence_config.get("max_weight", 0.05))
+        ramp = int(math.ceil(float(self._evidence_config.get("ramp_ratio", 0.10)) * self._evidence_stage_steps))
+        if ramp <= 0:
+            return maximum
+        return maximum * min(1.0, self.stage_optimizer_step / ramp)
 
     def _configure_distributed(self) -> None:
         # Warmup and full finetuning have different trainable parameters.
@@ -139,30 +193,46 @@ class AFMRTrainer:
         forward_model = self._ddp_model if train and self._ddp_model is not None else self._loss_model
         accum = int(self.config["training"]["gradient_accumulation_steps"])
         ce_sum = torch.zeros((), device=self.device, dtype=torch.float64)
-        token_total = 0
+        copy_sum = torch.zeros_like(ce_sum)
+        semantic_sum = torch.zeros_like(ce_sum)
+        token_total = evidence_total = 0
         iterator = iter(loader)
         epoch_step = 0
         epoch_steps = math.ceil(len(loader) / accum) if train else len(loader)
         global_epoch = int(global_epoch or self.epoch or 1)
         total_epochs = int(total_epochs or global_epoch)
         total_training_steps = int(total_training_steps or epoch_steps * total_epochs)
+        mode = str(self._evidence_config.get("mode", "both"))
+        copy_weight, semantic_weight = (0.5, 0.5) if mode == "both" else (1.0, 0.0) if mode == "copy" else (0.0, 1.0)
         if train and self.device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(self.device)
         epoch_started_at = time.monotonic()
         while window := list(islice(iterator, accum if train else 1)):
             started = time.monotonic()
             counts = [int(raw["labels"][:, 1:].ne(-100).sum()) for raw in window]
+            evidence_counts = [
+                int(raw.get("evidence_unit_valid", torch.empty(0, dtype=torch.bool)).sum()) for raw in window
+            ]
             window_tokens = sum(counts)
+            window_evidence = sum(evidence_counts)
             examples = sum(int(raw.get("example_count", raw["input_ids"].shape[0])) for raw in window)
             if train and world_size() > 1:
-                totals = torch.tensor([window_tokens, examples], device=self.device, dtype=torch.long)
+                totals = torch.tensor([window_tokens, window_evidence, examples], device=self.device, dtype=torch.long)
                 dist.all_reduce(totals)
-                window_tokens, examples = totals.tolist()
+                window_tokens, window_evidence, examples = totals.tolist()
             if train:
                 optimizer.zero_grad(set_to_none=True)
-            step_loss = torch.zeros_like(ce_sum)
-            for microstep, (raw_batch, tokens) in enumerate(zip(window, counts)):
+            step_ce = torch.zeros_like(ce_sum)
+            step_copy = torch.zeros_like(ce_sum)
+            step_semantic = torch.zeros_like(ce_sum)
+            evidence_weight = self._evidence_weight(stage) if train else 0.0
+            for microstep, raw_batch in enumerate(window):
                 batch = _move(raw_batch, self.device)
+                evidence = (
+                    {key: batch[key] for key in EVIDENCE_TENSOR_KEYS if key in batch}
+                    if evidence_weight > 0.0 and window_evidence > 0
+                    else None
+                )
                 sync = (
                     self._ddp_model.no_sync()
                     if train and self._ddp_model is not None and microstep < len(window) - 1
@@ -170,7 +240,7 @@ class AFMRTrainer:
                 )
                 with sync, torch.set_grad_enabled(train):
                     with torch.autocast("cuda", dtype=torch.bfloat16) if self.use_bf16 else nullcontext():
-                        loss_ce = forward_model(
+                        backward, local_ce, local_copy, local_semantic, _, _ = forward_model(
                             batch["input_ids"],
                             batch["attention_mask"],
                             batch["source_content_mask"],
@@ -180,18 +250,25 @@ class AFMRTrainer:
                             batch.get("decoder_attention_mask"),
                             batch.get("labels"),
                             return_logits=False,
+                            evidence=evidence,
+                            ce_scale=(world_size() / max(1, window_tokens)) if train else 1.0,
+                            evidence_scale=(world_size() * evidence_weight / max(1, window_evidence)) if train else 0.0,
+                            copy_weight=copy_weight,
+                            semantic_weight=semantic_weight,
+                            local_token_count=counts[microstep],
                             **{key: batch[key] for key in COPY_INPUT_KEYS if key in batch},
                         )
-                        # DDP averages rank gradients. Undo that averaging to
-                        # obtain the mean over all real target tokens globally.
-                        scale = world_size() if train else 1
-                        loss = loss_ce * (scale * tokens / max(1, window_tokens))
                     if train:
-                        loss.backward()
-                step_loss += loss_ce.detach().double() * tokens
-                ce_sum += loss_ce.detach().double() * tokens
-                token_total += tokens
-                del loss_ce, batch, loss
+                        backward.backward()
+                step_ce += local_ce.double()
+                step_copy += local_copy.double()
+                step_semantic += local_semantic.double()
+                ce_sum += local_ce.double()
+                copy_sum += local_copy.double()
+                semantic_sum += local_semantic.double()
+                token_total += counts[microstep]
+                evidence_total += evidence_counts[microstep]
+                del backward, local_ce, local_copy, local_semantic, batch
             if train:
                 max_grad_norm = self.config["training"].get("max_grad_norm")
                 grad = torch.nn.utils.clip_grad_norm_(
@@ -212,9 +289,12 @@ class AFMRTrainer:
                 self.stage_optimizer_step += 1
                 epoch_step += 1
                 if self.global_step % int(self.config["training"]["log_every_steps"]) == 0:
+                    step_totals = torch.stack((step_ce, step_copy, step_semantic))
                     if world_size() > 1:
-                        dist.all_reduce(step_loss)
-                    step_loss /= max(1, window_tokens)
+                        dist.all_reduce(step_totals)
+                    step_ce_value = float(step_totals[0]) / max(1, window_tokens)
+                    step_copy_value = float(step_totals[1]) / max(1, window_evidence)
+                    step_semantic_value = float(step_totals[2]) / max(1, window_evidence)
                     window_elapsed = time.monotonic() - started
                     epoch_elapsed = time.monotonic() - epoch_started_at
                     epoch_progress = epoch_step / max(1, epoch_steps)
@@ -241,7 +321,11 @@ class AFMRTrainer:
                         "epoch_percent": round(100.0 * epoch_progress, 3),
                         "total_progress": round(total_progress, 6),
                         "total_percent": round(100.0 * total_progress, 3),
-                        "ce": round(float(step_loss), 6),
+                        "ce": round(step_ce_value, 6),
+                        "evidence_copy": round(step_copy_value, 6),
+                        "evidence_semantic": round(step_semantic_value, 6),
+                        "evidence_lambda": evidence_weight,
+                        "evidence_units": window_evidence,
                         "grad_norm": round(float(grad), 6),
                         "max_grad_norm": max_grad_norm,
                         "learning_rate": {
@@ -262,7 +346,7 @@ class AFMRTrainer:
                     }
                     self._write_metric(record)
                     LOGGER.info(
-                        "[train] stage=%s | epoch=%d/%d | epoch_progress=%s %5.1f%% | step=%d/%d | total_step=%d/%d | CE=%.5f | grad=%.4f | lr=%s | elapsed=%s | epoch_eta=%s | total_eta=%s | vram=%s | ex/s=%.2f | tok/s=%.0f",
+                        "[train] stage=%s | epoch=%d/%d | epoch_progress=%s %5.1f%% | step=%d/%d | total_step=%d/%d | CE=%.5f | evidence=(%.5f, %.5f; lambda=%.4f; units=%d) | grad=%.4f | lr=%s | elapsed=%s | epoch_eta=%s | total_eta=%s | vram=%s | ex/s=%.2f | tok/s=%.0f",
                         _stage_label(stage),
                         global_epoch,
                         total_epochs,
@@ -272,7 +356,11 @@ class AFMRTrainer:
                         epoch_steps,
                         self.global_step,
                         total_training_steps,
-                        float(step_loss),
+                        step_ce_value,
+                        step_copy_value,
+                        step_semantic_value,
+                        evidence_weight,
+                        window_evidence,
                         float(grad),
                         learning_rates,
                         _format_duration(total_elapsed),
@@ -282,16 +370,39 @@ class AFMRTrainer:
                         examples / max(window_elapsed, 1e-9),
                         window_tokens / max(window_elapsed, 1e-9),
                     )
-        totals = torch.stack((ce_sum, ce_sum.new_tensor(token_total)))
+        totals = torch.stack(
+            (ce_sum, ce_sum.new_tensor(token_total), copy_sum, semantic_sum, ce_sum.new_tensor(evidence_total))
+        )
         if world_size() > 1:
             dist.all_reduce(totals)
         ce = float(totals[0]) / max(1, float(totals[1]))
-        return {"loss": ce, "ce": ce}
+        evidence_denominator = max(1, float(totals[4]))
+        return {
+            "loss": ce,
+            "ce": ce,
+            "evidence_copy": float(totals[2]) / evidence_denominator,
+            "evidence_semantic": float(totals[3]) / evidence_denominator,
+            "evidence_units": float(totals[4]),
+        }
 
     def fit(self, train_loader, validation_loader=None, resume_checkpoint: str | None = None) -> None:
         resume_info = None
         if resume_checkpoint:
             resume_info = load_checkpoint(resume_checkpoint, self.model, config=self.config)
+            previous = resume_info.get("training_spec") or {}
+            if previous.get("neftune_noise_alpha", 0.0) != 0.0:
+                raise ValueError("Cannot resume a removed NEFTune recipe; start a separate CE run")
+            for key, default in (
+                ("lr_scheduler", "linear"),
+                ("lr_warmup_ratio", 0.0),
+                ("evidence_contrastive", {}),
+            ):
+                if previous.get(key, default) != self.config["training"].get(key, default):
+                    raise ValueError(f"Resume cannot change training.{key}; use the original resolved config")
+            if "decoder_attention_dropout" in previous and previous["decoder_attention_dropout"] != self.config[
+                "decoder"
+            ].get("attention_dropout", 0.0):
+                raise ValueError("Resume must preserve decoder attention dropout")
             self.global_step = int(resume_info.get("step") or 0)
             self.best_metric = resume_info.get("best_metric")
             self._elapsed_before_fit = float(resume_info.get("elapsed_train_seconds") or 0.0)
@@ -321,8 +432,19 @@ class AFMRTrainer:
                         optimizer.state[parameter] = carried_state[parameter]
             carried_state = {}
             total_steps = max(1, steps_per_epoch * epochs)
+            self._evidence_stage_steps = total_steps if stage == "full_finetune" else 1
+
+            def schedule(step, total=total_steps):
+                return lr_multiplier(
+                    step,
+                    total,
+                    training.get("lr_scheduler", "linear"),
+                    float(training.get("lr_warmup_ratio", 0.0)),
+                )
+
             self.scheduler = torch.optim.lr_scheduler.LambdaLR(
-                optimizer, lambda step, total=total_steps: max(0.0, 1.0 - step / total)
+                optimizer,
+                schedule,
             )
             start_epoch = 1
             self.stage_optimizer_step = 0
@@ -331,7 +453,7 @@ class AFMRTrainer:
                 start_epoch = int(resume_info.get("stage_epoch") or 0) + 1
                 self.stage_optimizer_step = max(0, start_epoch - 1) * steps_per_epoch
                 for group, base_lr in zip(optimizer.param_groups, self.scheduler.base_lrs):
-                    group["lr"] = base_lr * max(0.0, 1.0 - self.stage_optimizer_step / total_steps)
+                    group["lr"] = base_lr * schedule(self.stage_optimizer_step)
             self._configure_distributed()
             for epoch in range(start_epoch, epochs + 1):
                 self.epoch = epoch + (stages[0][1] if stage == "full_finetune" else 0)

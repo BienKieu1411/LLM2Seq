@@ -257,6 +257,9 @@ def validate_config(config: dict[str, Any]) -> None:
             "persistent_workers",
             "fused_optimizer",
             "tf32",
+            "lr_scheduler",
+            "lr_warmup_ratio",
+            "evidence_contrastive",
         },
         "training",
     )
@@ -266,10 +269,62 @@ def validate_config(config: dict[str, Any]) -> None:
     if int(training.get("batch_size", 0)) == 0 or int(training.get("gradient_accumulation_steps", 0)) == 0:
         raise ValueError("batch_size and gradient_accumulation_steps must be positive")
     max_grad_norm = training.get("max_grad_norm")
+    if training.get("lr_scheduler", "linear") not in {"linear", "cosine"}:
+        raise ValueError("training.lr_scheduler must be linear or cosine")
+    if not 0 <= float(training.get("lr_warmup_ratio", 0.0)) < 1:
+        raise ValueError("training.lr_warmup_ratio must be in [0,1)")
+    if not 0 <= float(decoder.get("attention_dropout", 0.0)) < 1:
+        raise ValueError("decoder.attention_dropout must be in [0,1)")
     if max_grad_norm is not None and not 0 < float(max_grad_norm) < float("inf"):
         raise ValueError("training.max_grad_norm must be null (disabled) or a finite positive number")
     if int(training.get("interface_warmup_epochs", 0)) + int(training.get("full_finetune_epochs", 0)) == 0:
         raise ValueError("At least one AFMR training epoch is required")
+    evidence = training.get("evidence_contrastive", {})
+    if not isinstance(evidence, dict):
+        raise ValueError("training.evidence_contrastive must be a mapping")
+    _check_keys(
+        evidence,
+        {"enabled", "cache_path", "mode", "max_weight", "ramp_ratio", "mining"},
+        "training.evidence_contrastive",
+    )
+    if bool(evidence.get("enabled", False)):
+        if architecture.get("name") != "afmr_value_anchor":
+            raise ValueError("Evidence contrastive training requires architecture.name=afmr_value_anchor")
+        if not copy_config.get("enabled", False):
+            raise ValueError("Evidence contrastive training requires decoder.grounded_copy.enabled=true")
+        if not semantic_config.get("enabled", False) or semantic_config.get("attention") != "independent_source":
+            raise ValueError("Evidence contrastive training requires independent_source semantic read")
+        if evidence.get("mode", "both") not in {"copy", "semantic", "both"}:
+            raise ValueError("evidence_contrastive.mode must be copy, semantic, or both")
+        if not str(evidence.get("cache_path", "")).strip():
+            raise ValueError("Evidence contrastive training requires evidence_contrastive.cache_path")
+        if not 0 < float(evidence.get("max_weight", 0.05)) < float("inf"):
+            raise ValueError("evidence_contrastive.max_weight must be finite and positive")
+        if not 0 <= float(evidence.get("ramp_ratio", 0.10)) <= 1:
+            raise ValueError("evidence_contrastive.ramp_ratio must lie in [0, 1]")
+    mining = evidence.get("mining", {})
+    if not isinstance(mining, dict):
+        raise ValueError("evidence_contrastive.mining must be a mapping")
+    _check_keys(
+        mining,
+        {
+            "min_positive_score",
+            "max_negative_score",
+            "positive_band",
+            "min_context_gap",
+            "min_context_matches",
+            "max_units_per_example",
+            "max_positive_sentences",
+            "max_negative_sentences",
+        },
+        "training.evidence_contrastive.mining",
+    )
+    for key in ("min_positive_score", "max_negative_score", "positive_band", "min_context_gap"):
+        if key in mining and not 0 <= float(mining[key]) <= 1:
+            raise ValueError(f"evidence_contrastive.mining.{key} must lie in [0, 1]")
+    for key in ("min_context_matches", "max_units_per_example", "max_positive_sentences", "max_negative_sentences"):
+        if key in mining and int(mining[key]) <= 0:
+            raise ValueError(f"evidence_contrastive.mining.{key} must be positive")
     data = config["data"]
     if int(decoder.get("ce_chunk_size", 1024)) <= 0:
         raise ValueError("decoder.ce_chunk_size must be positive")

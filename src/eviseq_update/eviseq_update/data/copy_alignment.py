@@ -13,7 +13,9 @@ COPY_INPUT_KEYS = (
 )
 
 
-def align_copy_tokens(source: str, prefix_length: int, encoder_offsets, tokenizer: Any) -> dict[str, list]:
+def _align_copy_tokens_with_offsets(
+    source: str, prefix_length: int, encoder_offsets, tokenizer: Any
+) -> dict[str, list]:
     spans = [
         (i, start - prefix_length, end - prefix_length)
         for i, (start, end) in enumerate(encoder_offsets)
@@ -27,7 +29,7 @@ def align_copy_tokens(source: str, prefix_length: int, encoder_offsets, tokenize
     special.update(
         getattr(tokenizer, name, None) for name in ("pad_token_id", "bos_token_id", "eos_token_id", "unk_token_id")
     )
-    ids, enc_indices, token_indices, weights = [], [], [], []
+    ids, enc_indices, token_indices, weights, copy_offsets = [], [], [], [], []
     cursor = 0
     for token, (start, end) in zip(encoded["input_ids"], encoded["offset_mapping"]):
         if token in special or end <= start or (visible_end < len(source) and end >= visible_end):
@@ -48,6 +50,7 @@ def align_copy_tokens(source: str, prefix_length: int, encoder_offsets, tokenize
             continue
         destination = len(ids)
         ids.append(int(token))
+        copy_offsets.append((int(start), int(end)))
         total = sum(size for _, size in overlap)
         for index, size in overlap:
             enc_indices.append(index)
@@ -58,7 +61,27 @@ def align_copy_tokens(source: str, prefix_length: int, encoder_offsets, tokenize
         copy_encoder_indices=enc_indices,
         copy_token_indices=token_indices,
         copy_alignment_weights=weights,
+        copy_offsets=copy_offsets,
     )
+
+
+def align_copy_tokens(source: str, prefix_length: int, encoder_offsets, tokenizer: Any) -> dict[str, list]:
+    """Return the stable copy inputs used by the model.
+
+    ``copy_offsets`` is intentionally kept out of this public payload: it is
+    useful when preparing offline evidence annotations but must never reach
+    ``GroundedCopyHead.prepare``.
+    """
+
+    result = _align_copy_tokens_with_offsets(source, prefix_length, encoder_offsets, tokenizer)
+    result.pop("copy_offsets")
+    return result
+
+
+def align_copy_tokens_with_offsets(source: str, prefix_length: int, encoder_offsets, tokenizer: Any) -> dict[str, list]:
+    """Return copy inputs plus source character offsets for offline mining."""
+
+    return _align_copy_tokens_with_offsets(source, prefix_length, encoder_offsets, tokenizer)
 
 
 def pad_copy_alignments(rows: list[dict[str, list]]) -> dict[str, torch.Tensor]:

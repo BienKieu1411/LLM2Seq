@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Optional
+
+from .evidence import EvidenceAnnotation
 
 
 def _as_text(value: Any, separator: str = "\n") -> str:
@@ -20,6 +22,7 @@ class CanonicalRecord:
     example_id: str
     source: str
     target: str
+    evidence: Optional[EvidenceAnnotation] = None
 
     @classmethod
     def from_mapping(

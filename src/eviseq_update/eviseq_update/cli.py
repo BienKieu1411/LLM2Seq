@@ -21,6 +21,7 @@ def main(argv: list[str] | None = None) -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
     smoke = subparsers.add_parser("smoke")
     smoke.add_argument("--python", default=sys.executable)
+    smoke.add_argument("--recipe", choices=("ce", "cosine"), default="cosine")
     train = subparsers.add_parser("train")
     train.add_argument("config")
     train.add_argument("--device", default=None)
@@ -54,7 +55,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.command == "smoke":
         script = Path(__file__).resolve().parents[1] / "scripts" / "smoke_test.py"
-        raise SystemExit(subprocess.call([args.python, str(script)]))
+        raise SystemExit(subprocess.call([args.python, str(script), "--recipe", args.recipe]))
     if args.command == "validate-config":
         config = load_config(args.config)
         print(f"valid AFMR config: {config['_meta']['config_path']}")

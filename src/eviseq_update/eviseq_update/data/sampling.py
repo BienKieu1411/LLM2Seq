@@ -95,5 +95,8 @@ class DistributedCollator:
         for index, (_, real) in enumerate(rows):
             if not real:
                 batch["labels"][index].fill_(-100)
+                if "evidence_unit_batch_index" in batch:
+                    invalid_units = batch["evidence_unit_batch_index"].eq(index)
+                    batch["evidence_unit_valid"][invalid_units] = False
         batch["example_count"] = sum(real for _, real in rows)
         return batch

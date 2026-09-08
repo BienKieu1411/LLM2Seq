@@ -2,7 +2,7 @@ _base_: afmr_base.yaml
 
 experiment:
   name: eviseq_update_pubmed
-  output_dir: runs/eviseq_update/pubmed_value_anchor_copy_read_v2
+  output_dir: runs/eviseq_update/pubmed_value_anchor_copy_read_v2_cosine
 
 data:
   train_file: datasets/pubmed/train.jsonl
@@ -23,11 +23,17 @@ model:
   encoder_name: /absolute/path/to/pplx-embed-v1-0.6b
   decoder_name: /absolute/path/to/Qwen3-0.6B
 
+decoder:
+  attention_dropout: 0.0
+
 training:
   interface_warmup_epochs: 1
   full_finetune_epochs: 3
-  # Match the reported new baseline: global batch 96, four epochs, clip 1.0.
-  # Single GPU: 48 x accumulation 2. Two GPUs: override accumulation to 1.
+  # Gold-reference CE with LR warmup and cosine; one teacher-forced pass.
+  # Keep 96 sources/update: 48 x accum 2 (1 GPU) or 48 x 2 x accum 1.
   batch_size: 48
   gradient_accumulation_steps: 2
   max_grad_norm: 1.0
+  lr_scheduler: cosine
+  lr_warmup_ratio: 0.05
+  save_best: true

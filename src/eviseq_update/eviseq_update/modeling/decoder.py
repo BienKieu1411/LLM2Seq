@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .grounded_copy import CopyState, GroundedCopyHead
+from .outputs import DecoderResult, LossStatistics
 
 try:
     from transformers.modeling_layers import GradientCheckpointingLayer
@@ -272,7 +273,7 @@ class QwenCrossDecoder(nn.Module):
     def embed_tokens(self) -> nn.Module:
         return self.backbone.embed_tokens
 
-    def forward(
+    def _compute(
         self,
         input_ids: torch.Tensor,
         memory: torch.Tensor,
@@ -285,7 +286,8 @@ class QwenCrossDecoder(nn.Module):
         return_logits: bool = True,
         value_memory: Optional[torch.Tensor] = None,
         copy_state: Optional[CopyState] = None,
-    ) -> tuple[Optional[torch.Tensor], Optional[Any], Optional[torch.Tensor]]:
+        evidence: Optional[dict[str, torch.Tensor]] = None,
+    ) -> DecoderResult:
         if (self.grounded_copy is None) != (copy_state is None):
             raise ValueError("Decoder grounded-copy configuration and source state disagree")
         position_ids = None
@@ -314,15 +316,16 @@ class QwenCrossDecoder(nn.Module):
                 else self.grounded_copy.output_logits(output_hidden, copy_state, self.lm_head)
             )
         loss = None
+        statistics = None
         if labels is not None:
             shift_labels = labels[:, 1:].contiguous()
+            token_count = shift_labels.ne(-100).sum()
             if self.grounded_copy is not None and logits is None:
-                loss = self.grounded_copy.loss(
+                ce_sum = self.grounded_copy.loss_sum(
                     hidden[:, :-1], shift_labels, copy_state, self.lm_head, self.ce_chunk_size
                 )
-                return logits, getattr(outputs, "past_key_values", None) if use_cache else None, loss
-            if logits is not None:
-                loss = F.cross_entropy(
+            elif logits is not None:
+                ce_sum = F.cross_entropy(
                     logits[:, :-1].float().reshape(-1, logits.shape[-1]),
                     shift_labels.reshape(-1),
                     ignore_index=-100,
@@ -349,9 +352,78 @@ class QwenCrossDecoder(nn.Module):
                         if torch.is_grad_enabled()
                         else chunk_ce(states, targets)
                     )
-                loss = torch.stack(losses).sum() if losses else hidden.sum() * 0.0
-            loss = loss / shift_labels.ne(-100).sum().clamp_min(1)
-        return logits, getattr(outputs, "past_key_values", None) if use_cache else None, loss
+                ce_sum = torch.stack(losses).sum() if losses else hidden.sum() * 0.0
+            copy_sum = semantic_sum = hidden.sum() * 0.0
+            evidence_count = torch.zeros((), dtype=torch.long, device=hidden.device)
+            if evidence is not None:
+                if self.grounded_copy is None or copy_state is None:
+                    raise ValueError("Evidence contrastive loss requires grounded copy source state")
+                copy_sum, semantic_sum = self.grounded_copy.evidence_loss(hidden[:, :-1], copy_state, evidence)
+                evidence_count = evidence["evidence_unit_valid"].sum(dtype=torch.long)
+            statistics = LossStatistics(ce_sum, token_count, copy_sum, semantic_sum, evidence_count)
+            loss = ce_sum / token_count.clamp_min(1)
+        elif evidence is not None:
+            raise ValueError("Evidence contrastive loss requires decoder labels")
+        return DecoderResult(logits, getattr(outputs, "past_key_values", None) if use_cache else None, loss, statistics)
+
+    def forward_with_statistics(
+        self,
+        input_ids: torch.Tensor,
+        memory: torch.Tensor,
+        memory_mask: torch.Tensor,
+        source_bias: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Any] = None,
+        use_cache: bool = False,
+        return_logits: bool = True,
+        value_memory: Optional[torch.Tensor] = None,
+        copy_state: Optional[CopyState] = None,
+        evidence: Optional[dict[str, torch.Tensor]] = None,
+    ) -> DecoderResult:
+        return self._compute(
+            input_ids,
+            memory,
+            memory_mask,
+            source_bias,
+            attention_mask,
+            labels,
+            past_key_values,
+            use_cache,
+            return_logits,
+            value_memory,
+            copy_state,
+            evidence,
+        )
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        memory: torch.Tensor,
+        memory_mask: torch.Tensor,
+        source_bias: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Any] = None,
+        use_cache: bool = False,
+        return_logits: bool = True,
+        value_memory: Optional[torch.Tensor] = None,
+        copy_state: Optional[CopyState] = None,
+    ) -> tuple[Optional[torch.Tensor], Optional[Any], Optional[torch.Tensor]]:
+        result = self._compute(
+            input_ids,
+            memory,
+            memory_mask,
+            source_bias,
+            attention_mask,
+            labels,
+            past_key_values,
+            use_cache,
+            return_logits,
+            value_memory,
+            copy_state,
+        )
+        return result.logits, result.past_key_values, result.loss_ce
 
     @torch.no_grad()
     def prepare_cross_cache(self, memory: torch.Tensor, value_memory: Optional[torch.Tensor] = None) -> None:

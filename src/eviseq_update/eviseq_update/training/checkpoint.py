@@ -109,6 +109,7 @@ def _save_checkpoint(
         "architecture_spec": architecture_spec(config),
         "training_spec": {
             **training,
+            "decoder_attention_dropout": float(config["decoder"].get("attention_dropout", 0.0)),
             "world_size": len(rng_states),
             "effective_batch_size": (
                 int(training["batch_size"]) * int(training["gradient_accumulation_steps"]) * len(rng_states)

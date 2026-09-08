@@ -7,6 +7,7 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 
+from ..data.evidence import EVIDENCE_TENSOR_KEYS
 from .afmr import AdaptiveFullMemoryResidualBridge
 from .decoder import QwenCrossDecoder
 from .encoder import build_encoder, resolve_dtype
@@ -80,8 +81,13 @@ class EviSeqAFMR(nn.Module):
         labels: Optional[torch.Tensor] = None,
         output_budget: Optional[torch.Tensor] = None,
         return_logits: bool = True,
+        evidence: Optional[dict[str, torch.Tensor]] = None,
         **copy_inputs: torch.Tensor,
     ) -> AFMROutput:
+        implicit_evidence = {key: copy_inputs.pop(key) for key in tuple(copy_inputs) if key in EVIDENCE_TENSOR_KEYS}
+        if evidence is not None and implicit_evidence:
+            raise ValueError("Supply evidence either as a mapping or flat tensors, not both")
+        evidence = evidence if evidence is not None else (implicit_evidence or None)
         if output_budget is None:
             output_budget = torch.full(
                 (input_ids.shape[0],),
@@ -98,7 +104,7 @@ class EviSeqAFMR(nn.Module):
             output_budget,
             **copy_inputs,
         )
-        logits, _, loss_ce = self.decoder(
+        decoder_result = self.decoder.forward_with_statistics(
             decoder_input_ids,
             bridge.memory,
             bridge.memory_mask,
@@ -108,5 +114,12 @@ class EviSeqAFMR(nn.Module):
             return_logits=return_logits,
             value_memory=bridge.value_memory,
             copy_state=bridge.copy_state,
+            evidence=evidence,
         )
-        return AFMROutput(logits, loss_ce, loss_ce, bridge)
+        return AFMROutput(
+            decoder_result.logits,
+            decoder_result.loss_ce,
+            decoder_result.loss_ce,
+            bridge,
+            decoder_result.loss_statistics,
+        )

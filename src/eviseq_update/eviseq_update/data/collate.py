@@ -9,6 +9,7 @@ from typing import Any, Sequence
 import torch
 
 from .copy_alignment import align_copy_tokens, pad_copy_alignments
+from .evidence import EVIDENCE_TENSOR_KEYS, empty_evidence_tensors, ids_sha256
 from .schema import CanonicalRecord
 
 
@@ -43,12 +44,18 @@ class SummarizationCollator:
         data_config: dict[str, Any],
         *,
         grounded_copy: bool = False,
+        evidence_mode: str | None = None,
     ):
         self.encoder_tokenizer = encoder_tokenizer
         self.decoder_tokenizer = decoder_tokenizer
         self.data = data_config
         self.include_targets = True
         self.grounded_copy = grounded_copy
+        if evidence_mode not in {None, "copy", "semantic", "both"}:
+            raise ValueError("evidence_mode must be copy, semantic, both, or None")
+        if evidence_mode is not None and not grounded_copy:
+            raise ValueError("Evidence contrastive training requires grounded copy")
+        self.evidence_mode = evidence_mode
         instruction = str(data_config.get("decoder_prompt", ""))
         if data_config.get("decoder_chat_template", False):
             if not instruction.strip():
@@ -111,6 +118,7 @@ class SummarizationCollator:
         decoder_rows: list[list[int]] = []
         label_rows: list[list[int]] = []
         copy_rows = []
+        target_rows: list[list[int]] = []
         for record in records:
             source, content, offsets = self._encode_source(record, return_offsets=True)
             if self.grounded_copy:
@@ -133,6 +141,7 @@ class SummarizationCollator:
                 if self.include_targets
                 else []
             )
+            target_rows.append(target)
             eos_target = getattr(self.decoder_tokenizer, "eos_token_id", None)
             if eos_target is not None and self.include_targets:
                 target = target + [int(eos_target)]
@@ -161,4 +170,150 @@ class SummarizationCollator:
         }
         if self.grounded_copy:
             result.update(pad_copy_alignments(copy_rows))
+        if self.evidence_mode is not None and self.include_targets:
+            result.update(
+                self._evidence_tensors(
+                    records,
+                    target_rows,
+                    prompt_rows,
+                    labels,
+                    input_ids,
+                    attention_mask,
+                    source_content_mask.bool(),
+                    copy_rows,
+                )
+            )
+        return result
+
+    @staticmethod
+    def _span_positions(spans, width: int) -> set[int]:
+        positions: set[int] = set()
+        for start, end in spans:
+            if not 0 <= start < end <= width:
+                raise ValueError("Evidence semantic span lies outside the encoded source")
+            positions.update(range(start, end))
+        return positions
+
+    def _evidence_tensors(
+        self,
+        records: Sequence[CanonicalRecord],
+        target_rows: Sequence[Sequence[int]],
+        prompt_rows: Sequence[Sequence[int]],
+        labels: torch.Tensor,
+        source_input_ids: torch.Tensor,
+        source_attention_mask: torch.Tensor,
+        source_content_mask: torch.Tensor,
+        copy_rows: Sequence[dict[str, list]],
+    ) -> dict[str, torch.Tensor]:
+        result = empty_evidence_tensors()
+        if not any(record.evidence is not None for record in records):
+            return result
+        if not all(record.evidence is not None for record in records):
+            raise ValueError("Evidence recipe requires cache annotations for every training record")
+        unit_batches: list[int] = []
+        confidences: list[float] = []
+        target_units: list[int] = []
+        target_hidden: list[int] = []
+        target_weights: list[float] = []
+        copy_owner: list[int] = []
+        copy_position: list[int] = []
+        copy_positive: list[bool] = []
+        semantic_owner: list[int] = []
+        semantic_position: list[int] = []
+        semantic_positive: list[bool] = []
+        for batch_index, (record, target_ids, prompt, copy) in enumerate(
+            zip(records, target_rows, prompt_rows, copy_rows)
+        ):
+            annotation = record.evidence
+            assert annotation is not None
+            source_ids = source_input_ids[batch_index, source_attention_mask[batch_index].bool()].tolist()
+            if annotation.source_input_ids_sha256 != ids_sha256(source_ids):
+                raise ValueError("Evidence source tokenizer hash mismatch; rebuild the cache")
+            if annotation.target_input_ids_sha256 != ids_sha256(target_ids):
+                raise ValueError("Evidence target tokenizer hash mismatch; rebuild the cache")
+            copy_ids = copy["copy_token_ids"]
+            for unit in annotation.units:
+                semantic_pos = self._span_positions(unit.semantic_positive_spans, source_input_ids.shape[1])
+                semantic_neg = self._span_positions(unit.semantic_negative_spans, source_input_ids.shape[1])
+                semantic_pos = {
+                    position for position in semantic_pos if bool(source_content_mask[batch_index, position])
+                }
+                semantic_neg = {
+                    position for position in semantic_neg if bool(source_content_mask[batch_index, position])
+                }
+                if not semantic_pos or not semantic_neg or semantic_pos & semantic_neg:
+                    continue
+                positive_map, negative_map = unit.copy_positive, unit.copy_negative
+                eligible: list[tuple[int, tuple[int, ...], tuple[int, ...]]] = []
+                for target_position in unit.target_positions:
+                    if not 0 <= target_position < len(target_ids):
+                        continue
+                    positives = tuple(
+                        position for position in positive_map.get(target_position, ()) if position < len(copy_ids)
+                    )
+                    negatives = tuple(
+                        position for position in negative_map.get(target_position, ()) if position < len(copy_ids)
+                    )
+                    copy_ok = bool(positives and negatives and not set(positives) & set(negatives))
+                    if copy_ok and any(
+                        copy_ids[position] != target_ids[target_position] for position in (*positives, *negatives)
+                    ):
+                        raise ValueError("Evidence copy candidate does not match its gold target token")
+                    if self.evidence_mode == "copy" and not copy_ok:
+                        continue
+                    if self.evidence_mode == "both" and not copy_ok:
+                        continue
+                    label_position = len(prompt) + target_position
+                    hidden_position = label_position - 1
+                    if (
+                        hidden_position < 0
+                        or label_position >= labels.shape[1]
+                        or int(labels[batch_index, label_position]) != target_ids[target_position]
+                    ):
+                        raise ValueError("Evidence target position no longer matches shifted decoder labels")
+                    eligible.append((target_position, positives, negatives))
+                if not eligible:
+                    continue
+                unit_index = len(unit_batches)
+                unit_batches.append(batch_index)
+                confidences.append(unit.confidence)
+                for target_position, positives, negatives in eligible:
+                    owner = len(target_units)
+                    target_units.append(unit_index)
+                    target_hidden.append(len(prompt) + target_position - 1)
+                    target_weights.append(1.0 / len(eligible))
+                    if self.evidence_mode in {"copy", "both"}:
+                        for position in positives:
+                            copy_owner.append(owner)
+                            copy_position.append(position)
+                            copy_positive.append(True)
+                        for position in negatives:
+                            copy_owner.append(owner)
+                            copy_position.append(position)
+                            copy_positive.append(False)
+                    if self.evidence_mode in {"semantic", "both"}:
+                        for position in sorted(semantic_pos):
+                            semantic_owner.append(owner)
+                            semantic_position.append(position)
+                            semantic_positive.append(True)
+                        for position in sorted(semantic_neg):
+                            semantic_owner.append(owner)
+                            semantic_position.append(position)
+                            semantic_positive.append(False)
+        if not unit_batches:
+            return result
+        result.update(
+            evidence_unit_batch_index=torch.tensor(unit_batches, dtype=torch.long),
+            evidence_unit_confidence=torch.tensor(confidences, dtype=torch.float32),
+            evidence_unit_valid=torch.ones(len(unit_batches), dtype=torch.bool),
+            evidence_target_unit=torch.tensor(target_units, dtype=torch.long),
+            evidence_target_hidden_pos=torch.tensor(target_hidden, dtype=torch.long),
+            evidence_target_weight=torch.tensor(target_weights, dtype=torch.float32),
+            evidence_copy_owner=torch.tensor(copy_owner, dtype=torch.long),
+            evidence_copy_source_position=torch.tensor(copy_position, dtype=torch.long),
+            evidence_copy_positive=torch.tensor(copy_positive, dtype=torch.bool),
+            evidence_semantic_owner=torch.tensor(semantic_owner, dtype=torch.long),
+            evidence_semantic_source_position=torch.tensor(semantic_position, dtype=torch.long),
+            evidence_semantic_positive=torch.tensor(semantic_positive, dtype=torch.bool),
+        )
         return result

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -22,10 +23,18 @@ from eviseq_update.training.engine import AFMRTrainer, seed_everything  # noqa: 
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--recipe", choices=("ce", "cosine"), default="cosine")
+    recipe = parser.parse_args().recipe
     seed_everything(7)
     config = load_config(ROOT / "configs/afmr_smoke.yaml")
     config["decoder"]["grounded_copy"]["enabled"] = True
     config["decoder"]["grounded_copy"]["semantic_read"]["enabled"] = True
+    config["decoder"]["attention_dropout"] = 0.0
+    config["training"].update(
+        lr_scheduler="linear" if recipe == "ce" else "cosine",
+        lr_warmup_ratio=0.0 if recipe == "ce" else 0.05,
+    )
     config["generation"]["max_new_tokens"] = 4
     loaders = build_loaders(config, max_train_examples=4, max_validation_examples=2)
     model = EviSeqAFMR(config)
@@ -76,6 +85,7 @@ def main() -> None:
             "semantic_read": True,
             "semantic_attention": head.semantic_attention,
             "semantic_max_relative_rms": head.semantic_max_relative_rms,
+            "training_recipe": recipe,
             "initial_loss": initial_loss,
             "final_loss": float(final.loss),
             "checkpoint_epoch": metadata["epoch"],
