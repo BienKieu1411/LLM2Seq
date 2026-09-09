@@ -54,6 +54,7 @@ class GroundedCopyHead(nn.Module):
         semantic_max_relative_rms: float | None = None,
         semantic_num_heads: int = 1,
         semantic_fusion: str = "residual",
+        semantic_head_gate_position: str = "pre_norm",
         semantic_planner: dict | None = None,
     ):
         super().__init__()
@@ -77,6 +78,8 @@ class GroundedCopyHead(nn.Module):
             raise ValueError("semantic_max_relative_rms must be null or a finite positive number")
         if semantic_fusion not in {"residual", "norm_preserving"}:
             raise ValueError("semantic_fusion must be residual or norm_preserving")
+        if semantic_head_gate_position not in {"pre_norm", "post_norm"}:
+            raise ValueError("semantic_head_gate_position must be pre_norm or post_norm")
         if semantic_fusion == "norm_preserving" and (
             semantic_max_relative_rms is None or not 0 < float(semantic_max_relative_rms) < 1
         ):
@@ -84,6 +87,9 @@ class GroundedCopyHead(nn.Module):
         self.semantic_read_enabled = bool(semantic_read)
         self.semantic_attention = semantic_attention
         self.semantic_fusion = semantic_fusion
+        # Missing fields retain the old graph for resolved configs/checkpoints.
+        # Shipped recipes explicitly select post_norm and unrestricted heads.
+        self.semantic_head_gate_position = semantic_head_gate_position
         self.semantic_num_heads = semantic_num_heads
         self.semantic_head_dim = semantic_rank // semantic_num_heads
         self.semantic_max_relative_rms = None if semantic_max_relative_rms is None else float(semantic_max_relative_rms)
@@ -327,6 +333,7 @@ class GroundedCopyHead(nn.Module):
         query, log_attention, log_copy, log_generate = self._attention(hidden, state)
         generation_hidden = hidden
         if self.semantic_read_enabled:
+            gain = None
             if state.semantic_values is None:
                 raise ValueError("Semantic read is enabled but cached source values are missing")
             semantic_mask = state.mask
@@ -344,10 +351,11 @@ class GroundedCopyHead(nn.Module):
                     gain = 2 * torch.sigmoid(
                         self.semantic_head_gate(self._norm(hidden).to(self.semantic_head_gate.weight.dtype)).float()
                     )
-                    context = (
-                        context.reshape(*hidden.shape[:2], self.semantic_num_heads, self.semantic_head_dim)
-                        * gain[..., None]
-                    ).flatten(-2)
+                    if self.semantic_head_gate_position == "pre_norm":
+                        context = (
+                            context.reshape(*hidden.shape[:2], self.semantic_num_heads, self.semantic_head_dim)
+                            * gain[..., None]
+                        ).flatten(-2)
             else:
                 context = torch.matmul(log_attention.exp(), state.semantic_values.float())
             normalized_context = self._norm(context)
@@ -356,7 +364,16 @@ class GroundedCopyHead(nn.Module):
                     torch.cat((query, normalized_context), dim=-1).to(self.semantic_gate.weight.dtype)
                 ).float()
             )
-            residual = self.semantic_output(normalized_context.to(self.semantic_output.weight.dtype)).float()
+            output_context = normalized_context
+            if gain is not None and self.semantic_head_gate_position == "post_norm":
+                # Normalize once, then gate without another normalization.
+                # A shared reduction of all head gains now really attenuates
+                # the correction; global gating reads the ungated evidence.
+                output_context = (
+                    normalized_context.reshape(*hidden.shape[:2], self.semantic_num_heads, self.semantic_head_dim)
+                    * gain[..., None]
+                ).flatten(-2)
+            residual = self.semantic_output(output_context.to(self.semantic_output.weight.dtype)).float()
             delta = gate * residual
             generation_hidden = torch.where(
                 semantic_mask.any(-1)[:, None, None],

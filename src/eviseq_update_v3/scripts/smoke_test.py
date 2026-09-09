@@ -32,7 +32,8 @@ def main() -> None:
         rank=32,
         attention="hierarchical_coverage",
         fusion="norm_preserving",
-        planner={"region_size": 1},
+        head_gate_position="post_norm",
+        planner={"region_size": 1, "partition_heads": False},
     )
     config["generation"]["max_new_tokens"] = 4
     loaders = build_loaders(config, max_train_examples=4, max_validation_examples=2)
@@ -87,6 +88,8 @@ def main() -> None:
             "query_cross_gate": config["decoder"]["query_cross_gate"],
             "semantic_heads": config["decoder"]["grounded_copy"]["semantic_read"]["num_heads"],
             "semantic_fusion": head.semantic_fusion,
+            "semantic_head_gate_position": head.semantic_head_gate_position,
+            "partition_heads": head.partition_heads,
             "initial_loss": initial_loss,
             "final_loss": float(final.loss),
             "checkpoint_epoch": metadata["epoch"],

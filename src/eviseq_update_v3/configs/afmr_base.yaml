@@ -55,9 +55,11 @@ decoder:
       attention: hierarchical_coverage
       max_relative_rms: 0.10
       fusion: norm_preserving
+      head_gate_position: post_norm
       planner:
         region_size: 64
-        partition_heads: true
+        # All heads can select any region, including on short documents.
+        partition_heads: false
         use_coverage: true
         use_continuity: true
         coverage_scale: 8.0

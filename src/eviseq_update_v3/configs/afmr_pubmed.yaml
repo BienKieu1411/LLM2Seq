@@ -2,7 +2,7 @@ _base_: afmr_base.yaml
 
 experiment:
   name: eviseq_update_v3_pubmed
-  output_dir: runs/eviseq_update_v3/pubmed_planned_4x128
+  output_dir: runs/eviseq_update_v3/pubmed_free_heads_4x128_post_norm
 
 data:
   train_file: datasets/pubmed/train.jsonl

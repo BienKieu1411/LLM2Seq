@@ -67,6 +67,10 @@ def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
                 semantic_spec["fusion"] = "tangent_norm_preserving_v1"
             if attention == "hierarchical_coverage":
                 planner = semantic_config.get("planner", {})
+                # Preserve legacy specs when the field is absent/pre_norm.
+                # Equal weight shapes do not make post_norm the same graph.
+                if semantic_config.get("head_gate_position", "pre_norm") == "post_norm":
+                    semantic_spec["head_gate_position"] = "post_norm"
                 semantic_spec.update(
                     graph="hierarchical_prefix_coverage_v3",
                     num_heads=heads,

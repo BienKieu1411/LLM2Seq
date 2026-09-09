@@ -16,7 +16,7 @@ from eviseq_update_v3.training.optimizer import build_optimizer, set_stage_train
 from test_semantic_read import model_config
 
 
-def config_planned():
+def config_planned(reviewed=False):
     config = model_config("independent_bounded")
     config["decoder"]["query_cross_gate"] = False
     config["decoder"]["grounded_copy"]["semantic_read"].update(
@@ -24,12 +24,13 @@ def config_planned():
         num_heads=4,
         attention="hierarchical_coverage",
         fusion="norm_preserving",
-        planner={"region_size": 1},
+        head_gate_position="post_norm" if reviewed else "pre_norm",
+        planner={"region_size": 1, "partition_heads": not reviewed},
     )
     return config
 
 
-def problem(active=True):
+def problem(active=True, *, reviewed=False):
     torch.manual_seed(132)
     head = GroundedCopyHead(
         8,
@@ -41,7 +42,8 @@ def problem(active=True):
         semantic_attention="hierarchical_coverage",
         semantic_max_relative_rms=0.1,
         semantic_fusion="norm_preserving",
-        semantic_planner={"region_size": 2},
+        semantic_head_gate_position="post_norm" if reviewed else "pre_norm",
+        semantic_planner={"region_size": 2, "partition_heads": not reviewed},
     )
     if active:
         with torch.no_grad():
@@ -70,15 +72,18 @@ def problem(active=True):
     return head, lm, hidden, memory, bias, embedding, state, summary, plan
 
 
-def test_partitioned_full_width_attention_matches_loop_oracle():
-    head, _, hidden, memory, bias, _, state, _, plan = problem()
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_hierarchical_attention_matches_loop_oracle(reviewed):
+    head, _, hidden, memory, bias, _, state, _, plan = problem(reviewed=reviewed)
     q = head.semantic_query(head._norm(hidden)).float()
     actual = head._hierarchical_context(q, state, plan)
     contexts = []
     for h in range(4):
         sl = slice(4 * h, 4 * (h + 1))
         scores = q[..., sl] @ state.region_keys[..., sl].transpose(1, 2) / 2
-        valid = state.region_mask[:, None, :] & (torch.arange(9) % 4).eq(h)[None, None, :]
+        valid = state.region_mask[:, None, :]
+        if not reviewed:
+            valid = valid & (torch.arange(9) % 4).eq(h)[None, None, :]
         rp = head.planner.masked_softmax(scores + state.region_bias[:, None, :] + head.planner.bias(plan), valid)
         out = torch.zeros(2, 6, 4)
         for region in range(9):
@@ -149,9 +154,10 @@ def test_coverage_reduces_used_region_while_recent_state_favors_continuation():
 
 @pytest.mark.parametrize("autocast", [False, True])
 @pytest.mark.parametrize("chunk_size", [1, 7, 1024])
-def test_planned_dense_chunked_ce_and_all_gradients_match(autocast, chunk_size):
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_planned_dense_chunked_ce_and_all_gradients_match(autocast, chunk_size, reviewed):
     with torch.autocast("cpu", dtype=torch.bfloat16, enabled=autocast):
-        head, lm, hidden, memory, bias, embedding, state, _, plan = problem()
+        head, lm, hidden, memory, bias, embedding, state, _, plan = problem(reviewed=reviewed)
         labels = torch.tensor([[-100, 4, 5, 28, 12, 9], [-100, -100, 7, 25, -100, -100]])
         logits = head.output_logits(hidden, state, lm, plan)
         expected = F.cross_entropy(logits.reshape(-1, 32), labels.reshape(-1))
@@ -203,8 +209,9 @@ def test_semantic_changes_leave_copy_distribution_exact_for_fixed_base_hidden():
 
 
 @pytest.mark.parametrize("autocast", [False, True])
-def test_model_cached_prefix_and_compaction_match_dense_with_live_planner(autocast):
-    config = config_planned()
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_model_cached_prefix_and_compaction_match_dense_with_live_planner(autocast, reviewed):
+    config = config_planned(reviewed=reviewed)
     model = EviSeqAFMR(config).eval()
     with torch.no_grad():
         model.decoder.grounded_copy.semantic_output.weight.normal_(std=0.1)
@@ -256,8 +263,11 @@ def test_model_cached_prefix_and_compaction_match_dense_with_live_planner(autoca
     torch.testing.assert_close(got[:, -1], expected[:, -1], atol=4e-3 if autocast else 2e-6, rtol=1e-3)
 
 
-def test_planner_receives_ce_gradients_and_updates_after_zero_output_opens():
-    config = config_planned()
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_planner_receives_ce_gradients_and_updates_after_zero_output_opens(reviewed):
+    config = config_planned(reviewed=reviewed)
+    if reviewed:
+        config["decoder"]["grounded_copy"]["semantic_read"]["rank"] = 512  # Actual 4 × 128 matching.
     model = EviSeqAFMR(config).train()
     batch = next(iter(build_loaders(config, max_train_examples=2)["train"]))
     inputs = {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)}
@@ -293,8 +303,9 @@ def test_checkpoint_rejects_changed_region_semantics_and_fusion(tmp_path):
             load_checkpoint(path, EviSeqAFMR(other), config=other)
 
 
-def test_observed_prefix_counts_are_correct_with_left_padding_and_unequal_prompts():
-    config = config_planned()
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_observed_prefix_counts_are_correct_with_left_padding_and_unequal_prompts(reviewed):
+    config = config_planned(reviewed=reviewed)
     model = EviSeqAFMR(config).eval()
     batch = next(iter(build_loaders(config, max_train_examples=2)["train"]))
     keys = {
@@ -333,8 +344,9 @@ def test_observed_prefix_counts_are_correct_with_left_padding_and_unequal_prompt
     torch.testing.assert_close(got[:, -1], full[:, -1], atol=2e-6, rtol=1e-5)
 
 
-def test_planned_semantic_branch_does_not_modify_v2_trunk_or_copy_for_shared_weights():
-    config = config_planned()
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_planned_semantic_branch_does_not_modify_v2_trunk_or_copy_for_shared_weights(reviewed):
+    config = config_planned(reviewed=reviewed)
     control_config = copy.deepcopy(config)
     control_config["decoder"]["grounded_copy"]["semantic_read"].update(
         rank=8, num_heads=1, attention="independent_source", fusion="residual"

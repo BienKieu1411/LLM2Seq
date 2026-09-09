@@ -1,6 +1,11 @@
 # EviSeq v3: 4×128, đọc phân cấp có trạng thái prefix và fusion giữ norm
 
-Ngày: 2026-09-08. Đây là thiết kế hiện hành trong `src/eviseq_update_v3`, thay thế
+> **Snapshot trước Luna review, đã được cập nhật.** Mặc định hiện tại bỏ hard
+> partition và đặt head gate sau context normalization. Xem
+> [bản sửa sau review](EVISEQ_UPDATE_V3_REVIEW_REVISION.md).
+> Mô tả partition/gate và kết quả tests bên dưới thuộc snapshot trước.
+
+Ngày: 2026-09-08. Đây là thiết kế tại thời điểm đó trong `src/eviseq_update_v3`, thay thế
 bản v3 ban đầu có cross gate trong backbone và semantic4×32. Training chỉ dùng
 gold-token CE. Temperature/top-p vẫn chỉ là API sinh candidates ngoài training.
 Chưa có kết quả PubMed của bản sửa này.

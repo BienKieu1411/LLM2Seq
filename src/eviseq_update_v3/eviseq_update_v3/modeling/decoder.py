@@ -283,6 +283,7 @@ class QwenCrossDecoder(nn.Module):
                     semantic_max_relative_rms=semantic_config.get("max_relative_rms"),
                     semantic_num_heads=int(semantic_config.get("num_heads", 1)),
                     semantic_fusion=str(semantic_config.get("fusion", "residual")),
+                    semantic_head_gate_position=str(semantic_config.get("head_gate_position", "pre_norm")),
                     semantic_planner=semantic_config.get("planner", {}),
                 )
         self._semantic_history = None

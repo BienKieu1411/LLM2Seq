@@ -102,28 +102,31 @@ def _worker(config_path):
     config = load_config(config_path)
     root = Path(config_path).parent
     with training_process_group("cpu"):
-        for mode in ("plain", "copy", "shared", "semantic", "v3", "planned"):
+        for mode in ("plain", "copy", "shared", "semantic", "v3", "planned", "reviewed"):
             case = copy.deepcopy(config)
             case["experiment"]["output_dir"] = str(root / mode)
             case["decoder"]["grounded_copy"]["enabled"] = mode != "plain"
             case["decoder"]["query_cross_gate"] = mode == "v3"
             case["decoder"]["grounded_copy"]["semantic_read"].update(
-                enabled=mode in {"shared", "semantic", "v3", "planned"},
+                enabled=mode in {"shared", "semantic", "v3", "planned", "reviewed"},
                 num_heads=4 if mode == "v3" else 1,
                 rank=8,
                 attention="independent_source",
                 fusion="residual",
             )
-            case["training"]["max_grad_norm"] = 1.0 if mode in {"shared", "semantic", "v3", "planned"} else None
+            case["training"]["max_grad_norm"] = (
+                1.0 if mode in {"shared", "semantic", "v3", "planned", "reviewed"} else None
+            )
             if mode == "shared":
                 case["decoder"]["grounded_copy"]["semantic_read"].update(attention="shared_copy", max_relative_rms=None)
-            if mode == "planned":
+            if mode in {"planned", "reviewed"}:
                 case["decoder"]["grounded_copy"]["semantic_read"].update(
                     attention="hierarchical_coverage",
                     fusion="norm_preserving",
                     rank=32,
                     num_heads=4,
-                    planner={"region_size": 1},
+                    head_gate_position="post_norm" if mode == "reviewed" else "pre_norm",
+                    planner={"region_size": 1, "partition_heads": mode != "reviewed"},
                 )
             model, metrics, gradients = _sgd_run(case, True)
             torch.save(
@@ -177,7 +180,8 @@ def test_two_process_training_matches_serial_and_resumes(tmp_path):
         rank=32,
         attention="hierarchical_coverage",
         fusion="norm_preserving",
-        planner={"region_size": 1},
+        head_gate_position="post_norm",
+        planner={"region_size": 1, "partition_heads": False},
     )
     # Deliberately unequal target lengths, odd train/validation sizes and an
     # accumulation remainder: rank 1 must backpropagate a zero-label batch.
@@ -212,29 +216,30 @@ def test_two_process_training_matches_serial_and_resumes(tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
-    for mode in ("plain", "copy", "shared", "semantic", "v3", "planned"):
+    for mode in ("plain", "copy", "shared", "semantic", "v3", "planned", "reviewed"):
         case = copy.deepcopy(config)
         case["training"].update(batch_size=2, validation_batch_size=2)
         case["experiment"]["output_dir"] = str(tmp_path / f"serial_{mode}")
         case["decoder"]["grounded_copy"]["enabled"] = mode != "plain"
         case["decoder"]["query_cross_gate"] = mode == "v3"
         case["decoder"]["grounded_copy"]["semantic_read"].update(
-            enabled=mode in {"shared", "semantic", "v3", "planned"},
+            enabled=mode in {"shared", "semantic", "v3", "planned", "reviewed"},
             num_heads=4 if mode == "v3" else 1,
             rank=8,
             attention="independent_source",
             fusion="residual",
         )
-        case["training"]["max_grad_norm"] = 1.0 if mode in {"shared", "semantic", "v3", "planned"} else None
+        case["training"]["max_grad_norm"] = 1.0 if mode in {"shared", "semantic", "v3", "planned", "reviewed"} else None
         if mode == "shared":
             case["decoder"]["grounded_copy"]["semantic_read"].update(attention="shared_copy", max_relative_rms=None)
-        if mode == "planned":
+        if mode in {"planned", "reviewed"}:
             case["decoder"]["grounded_copy"]["semantic_read"].update(
                 attention="hierarchical_coverage",
                 fusion="norm_preserving",
                 rank=32,
                 num_heads=4,
-                planner={"region_size": 1},
+                head_gate_position="post_norm" if mode == "reviewed" else "pre_norm",
+                planner={"region_size": 1, "partition_heads": mode != "reviewed"},
             )
         expected_model, expected_metrics, expected_gradients = _sgd_run(case, False)
         states = [torch.load(tmp_path / f"{mode}_rank{r}.pt", weights_only=False) for r in (0, 1)]

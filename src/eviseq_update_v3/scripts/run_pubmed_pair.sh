@@ -38,7 +38,8 @@ CROSS_QUERY_GATE="${CROSS_QUERY_GATE:-false}"
 SEMANTIC_HEADS="${SEMANTIC_HEADS:-4}"
 SEMANTIC_RANK="${SEMANTIC_RANK:-512}"
 SEMANTIC_FUSION="${SEMANTIC_FUSION:-auto}"
-PARTITION_HEADS="${PARTITION_HEADS:-true}"
+PARTITION_HEADS="${PARTITION_HEADS:-false}"
+export SEMANTIC_HEAD_GATE_POSITION="${SEMANTIC_HEAD_GATE_POSITION:-post_norm}"
 USE_COVERAGE="${USE_COVERAGE:-true}"
 USE_CONTINUITY="${USE_CONTINUITY:-true}"
 EVAL_SPLIT="${EVAL_SPLIT:-test}"
@@ -61,6 +62,7 @@ if [[ "${SEMANTIC_FUSION}" == auto ]]; then
   [[ "${AFMR_SEMANTIC_VARIANT}" != hierarchical_coverage ]] || SEMANTIC_FUSION=norm_preserving
 fi
 [[ "${SEMANTIC_FUSION}" == residual || "${SEMANTIC_FUSION}" == norm_preserving ]] || { echo "Invalid SEMANTIC_FUSION" >&2; exit 1; }
+[[ "${SEMANTIC_HEAD_GATE_POSITION}" == pre_norm || "${SEMANTIC_HEAD_GATE_POSITION}" == post_norm ]] || { echo "SEMANTIC_HEAD_GATE_POSITION must be pre_norm or post_norm" >&2; exit 1; }
 if [[ "${AFMR_SEMANTIC_VARIANT}" == shared_* && "${SEMANTIC_HEADS}" != 1 ]]; then
   echo "Shared-copy semantic variants require SEMANTIC_HEADS=1" >&2
   exit 1
@@ -68,7 +70,7 @@ fi
 COPY_VARIANT=lm
 [[ "${AFMR_GROUNDED_COPY}" == false ]] || COPY_VARIANT=copy
 [[ "${AFMR_SEMANTIC_READ}" == false ]] || COPY_VARIANT="copy_read_${AFMR_SEMANTIC_VARIANT}"
-RUN_TAG="${AFMR_ARCHITECTURE}_${COPY_VARIANT}_qgate_${CROSS_QUERY_GATE}_h${SEMANTIC_HEADS}_r${SEMANTIC_RANK}_${SEMANTIC_FUSION}_part${PARTITION_HEADS}_cov${USE_COVERAGE}_cont${USE_CONTINUITY}"
+RUN_TAG="${AFMR_ARCHITECTURE}_${COPY_VARIANT}_qgate_${CROSS_QUERY_GATE}_h${SEMANTIC_HEADS}_r${SEMANTIC_RANK}_${SEMANTIC_FUSION}_hgate_${SEMANTIC_HEAD_GATE_POSITION}_part${PARTITION_HEADS}_cov${USE_COVERAGE}_cont${USE_CONTINUITY}"
 RUN_ROOT="${RUN_ROOT:-${ROOT}/runs/eviseq_update_v3/pubmed_pair_${RUN_TAG}}"
 GENERATED_CONFIG_DIR="${RUN_ROOT}/configs"
 LOG_DIR="${LOG_DIR:-${ROOT}/logs/eviseq_update_v3}"
@@ -129,6 +131,7 @@ echo "=== Grounded copy: ${AFMR_GROUNDED_COPY} ==="
 echo "=== Semantic read: ${AFMR_SEMANTIC_READ}; variant=${AFMR_SEMANTIC_VARIANT} ==="
 echo "=== V3: query cross gate=${CROSS_QUERY_GATE}; ${SEMANTIC_HEADS} semantic heads x $((SEMANTIC_RANK / SEMANTIC_HEADS)) dimensions; fusion=${SEMANTIC_FUSION} ==="
 echo "=== Planner: partition=${PARTITION_HEADS}; coverage=${USE_COVERAGE}; continuity=${USE_CONTINUITY}; eval=${EVAL_SPLIT} ==="
+echo "=== Semantic head gate: ${SEMANTIC_HEAD_GATE_POSITION} ==="
 echo "=== Python: ${PYTHON_BIN} ==="
 echo "=== Log: ${LOG_FILE} ==="
 echo "=== Encoder queue: ${ENCODER_NAMES[*]} -> Qwen3 decoder ==="
@@ -180,6 +183,7 @@ config["decoder"]["grounded_copy"]["semantic_read"]["enabled"] = semantic_read =
 config["decoder"]["grounded_copy"]["semantic_read"]["num_heads"] = int(semantic_heads)
 config["decoder"]["grounded_copy"]["semantic_read"]["rank"] = int(semantic_rank)
 config["decoder"]["grounded_copy"]["semantic_read"]["fusion"] = fusion
+config["decoder"]["grounded_copy"]["semantic_read"]["head_gate_position"] = os.environ["SEMANTIC_HEAD_GATE_POSITION"]
 config["decoder"]["grounded_copy"]["semantic_read"]["planner"].update(
     partition_heads=partition == "true", use_coverage=coverage == "true", use_continuity=continuity == "true"
 )

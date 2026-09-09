@@ -40,7 +40,14 @@ def test_pair_generates_fair_protocol_and_selected_graph(
     for split in ("train", "validation", "test"):
         (data / f"{split}.jsonl").write_text('{"id":"1","text":"alpha","summary":"beta"}\n')
     env = dict(os.environ)
-    for key in ("GRADIENT_ACCUMULATION_STEPS", "BATCH_SIZE", "MAX_GRAD_NORM", "ROUGE155_SCRIPT"):
+    for key in (
+        "GRADIENT_ACCUMULATION_STEPS",
+        "BATCH_SIZE",
+        "MAX_GRAD_NORM",
+        "ROUGE155_SCRIPT",
+        "PARTITION_HEADS",
+        "SEMANTIC_HEAD_GATE_POSITION",
+    ):
         env.pop(key, None)
     env.update(
         PYTHON=str(wrapper),
@@ -81,6 +88,8 @@ def test_pair_generates_fair_protocol_and_selected_graph(
     assert semantic["max_relative_rms"] == cap
     assert semantic["num_heads"] == (1 if attention == "shared_copy" else 4)
     assert semantic["rank"] == 512
+    assert semantic["head_gate_position"] == "post_norm"
+    assert semantic["planner"]["partition_heads"] is False
     assert semantic["fusion"] == ("norm_preserving" if attention == "hierarchical_coverage" else "residual")
     assert "Effective batch: 96" in result.stdout
     assert not (tmp_path / "runs/configs/qwen_embedding.yaml").exists()
@@ -91,6 +100,7 @@ def test_pair_generates_fair_protocol_and_selected_graph(
     [
         ({"CROSS_QUERY_GATE": "yes"}, "CROSS_QUERY_GATE must be true or false"),
         ({"SEMANTIC_HEADS": "2"}, "SEMANTIC_HEADS must be 1 or 4"),
+        ({"SEMANTIC_HEAD_GATE_POSITION": "middle"}, "SEMANTIC_HEAD_GATE_POSITION must be pre_norm or post_norm"),
         ({"AFMR_SEMANTIC_VARIANT": "shared_bounded", "SEMANTIC_HEADS": "4"}, "require SEMANTIC_HEADS=1"),
     ],
 )

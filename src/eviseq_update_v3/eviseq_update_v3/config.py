@@ -217,7 +217,17 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("decoder.grounded_copy.semantic_read must be a mapping")
     _check_keys(
         semantic_config,
-        {"enabled", "rank", "gate_init", "attention", "max_relative_rms", "num_heads", "fusion", "planner"},
+        {
+            "enabled",
+            "rank",
+            "gate_init",
+            "attention",
+            "max_relative_rms",
+            "num_heads",
+            "fusion",
+            "head_gate_position",
+            "planner",
+        },
         "decoder.grounded_copy.semantic_read",
     )
     if not isinstance(semantic_config.get("enabled", False), bool):
@@ -245,6 +255,8 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("Semantic fusion must be residual or norm_preserving")
     if fusion == "norm_preserving" and (relative_rms is None or not 0 < float(relative_rms) < 1):
         raise ValueError("Norm-preserving fusion requires 0 < max_relative_rms < 1")
+    if semantic_config.get("head_gate_position", "pre_norm") not in {"pre_norm", "post_norm"}:
+        raise ValueError("Semantic head_gate_position must be pre_norm or post_norm")
     planner = semantic_config.get("planner", {})
     if not isinstance(planner, dict):
         raise ValueError("Semantic planner must be a mapping")

@@ -340,6 +340,18 @@ def evaluate(
     total = min(len(loader.dataset), max_examples) if max_examples > 0 else len(loader.dataset)
     if resumed_count > total:
         raise ValueError("Resume file exceeds requested max_examples")
+    device_obj = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    inference_config = copy.deepcopy(config)
+    if device_obj.type == "cuda":
+        inference_config["model"]["dtype"] = config["model"].get(
+            "compute_dtype", config["model"].get("dtype", "float32")
+        )
+    from .evaluation.provenance import ensure_evaluation_manifest, evaluation_identity
+
+    identity = evaluation_identity(
+        inference_config, checkpoint_path, loader.dataset, loader.collate_fn, split, device_obj.type
+    )
+    ensure_evaluation_manifest(output_file, identity)
     LOGGER.info(
         "resuming evaluation: %d/%d predictions already present; batch_size=%d",
         resumed_count,
@@ -362,12 +374,6 @@ def evaluate(
             result["rougeL"],
         )
         return result
-    device_obj = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-    inference_config = copy.deepcopy(config)
-    if device_obj.type == "cuda":
-        inference_config["model"]["dtype"] = config["model"].get(
-            "compute_dtype", config["model"].get("dtype", "float32")
-        )
     model = EviSeqAFMR(inference_config).to(device_obj)
     load_checkpoint(checkpoint_path, model, config=config, restore_rng=False)
     model.eval()
