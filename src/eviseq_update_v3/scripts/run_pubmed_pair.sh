@@ -17,15 +17,12 @@ export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONUNBUFFERED=1
 export HF_HUB_DISABLE_TELEMETRY=1
 export TOKENIZERS_PARALLELISM=false
-# Each encoder run uses both GPUs through run_afmr.sh -> torchrun/DDP.
-# Default: 48 examples/GPU * 2 GPUs * 1 accumulation step = 96.
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
 export NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
-export BATCH_SIZE="${BATCH_SIZE:-48}"
-DEFAULT_ACCUMULATION=1
-[[ "${NPROC_PER_NODE}" != 1 ]] || DEFAULT_ACCUMULATION=2
-export GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-${DEFAULT_ACCUMULATION}}"
+export BATCH_SIZE="${BATCH_SIZE:-84}"
+export GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
 export MAX_GRAD_NORM="${MAX_GRAD_NORM:-1.0}"
+export ALLOW_CROSS_SPLIT_CONTENT=true
 
 PUBMED_SOURCE_DIR="${PUBMED_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/datasets/pubmed}"
 PROCESSED_DATA_DIR="${PROCESSED_DATA_DIR:-${ROOT}/datasets/pubmed}"
@@ -77,7 +74,7 @@ LOG_DIR="${LOG_DIR:-${ROOT}/logs/eviseq_update_v3}"
 PPLX_ENCODER="${PPLX_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/pplx-embed-v1-0.6b}"
 QWEN_ENCODER="${QWEN_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-Embedding-0.6B}"
 DECODER_MODEL="${DECODER_MODEL:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-0.6B}"
-EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-64}"
+EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-256}"
 OVERWRITE_OUTPUT_DIR="${OVERWRITE_OUTPUT_DIR:-false}"
 read -r -a ENCODER_NAMES <<< "${RUN_ENCODERS:-pplx qwen_embedding}"
 
