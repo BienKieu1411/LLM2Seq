@@ -1,6 +1,8 @@
 # EviSeq update v5.1: copy-mass-preserving semantic mixture
 
-V5.1 là thiết kế sau deep research và phản biện chéo ba `luna_worker`. Folder hiện chỉ chứa plan/spec/research; chưa có implementation, checkpoint hay kết quả ROUGE v5.1.
+V5.1 là implementation cục bộ sau deep research và phản biện chéo ba
+`luna_worker`. Package, configs, runner, checkpoint provenance và acceptance
+tests nằm cùng folder; chưa có checkpoint PubMed hoặc kết quả ROUGE v5.1.
 
 Mục tiêu được tách thành architecture gate và system stretch: dưới common
 recipe, vượt R1/RL của `eviseq_new` và R2 của `update_v2`; sau khi tái lập
@@ -64,6 +66,26 @@ Null slot, entropy/evidence gating và copy-protected residual chỉ thử sau k
 - [EVALUATION_PLAN.md](EVALUATION_PLAN.md): protocol fairness, checkpoint selection và statistical reporting.
 - [ARCHITECTURE_TARGET_AUDIT.md](ARCHITECTURE_TARGET_AUDIT.md): audit tổng hợp, hợp đồng tensor/xác suất/gradient/DDP và câu hỏi tự kiểm tra.
 - [FINAL_VERIFICATION.md](FINAL_VERIFICATION.md): xác minh độc lập điểm mạnh/điểm yếu và trạng thái đã chứng minh/chưa chứng minh.
+- [IMPLEMENTATION_EVIDENCE.md](IMPLEMENTATION_EVIDENCE.md): lệnh chạy, test result và gap analysis C1–C19.
+- [KARPATHY_REVIEW.md](KARPATHY_REVIEW.md): bounded code-quality review and closed findings.
+
+## Chạy cục bộ
+
+Smoke test dùng hai model `__tiny__` được tạo trong Transformers, không tải
+model từ Hugging Face:
+
+    PYTHON=/path/to/python ./run_afmr.sh smoke
+
+Runner PubMed mặc định khóa hai GPU, batch 84 mỗi GPU và accumulation 1. Nó
+chỉ kiểm tra model/dataset local rồi mới train; `DRY_RUN=true` chỉ sinh config
+và in effective batch. Sau train, runner đánh giá checkpoint `best.pt` được
+chọn bằng validation CE (có thể ghi đè bằng biến `CHECKPOINT`):
+
+    PYTHON=/path/to/python DRY_RUN=true ./scripts/run_pubmed_pair.sh
+
+Đổi `NPROC_PER_NODE`, `BATCH_SIZE` hoặc `GRADIENT_ACCUMULATION_STEPS` bằng biến
+môi trường khi đã đăng ký protocol tương ứng. Benchmark vẫn greedy; `temperature`
+và `top_p` chỉ được dùng bởi API sampled candidates.
 
 ## Mốc tham chiếu đã báo
 

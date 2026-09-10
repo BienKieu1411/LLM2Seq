@@ -188,6 +188,8 @@ Training chỉ dùng gold CE trên phân phối cuối:
 Nếu y không copyable, `lc=-inf`; hai vocabulary routes vẫn được tính. Không dùng `pi_base*CE0 + pi_sem*CEs + pi_copy*CEcopy`, vì đó là objective khác.
 
 Tính logits/normalizer/mixture ở FP32. Matmul có thể BF16 theo common recipe.
+Dense và chunked dùng chung `_mixture_nll_from_targets`; chunked chỉ giữ route
+state và target logits lazy, nên không tạo thêm objective hay nhánh routing.
 Trong một logical accumulation window, đặt
 `N_global=all_reduce(sum_r valid_target_tokens_r)` và dùng
 `loss_r=world_size*local_loss_sum_r/N_global`; DDP average đúng một lần. Không

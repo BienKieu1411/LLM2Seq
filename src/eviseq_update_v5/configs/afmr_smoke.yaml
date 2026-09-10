@@ -1,0 +1,58 @@
+_base_: afmr_base.yaml
+
+experiment:
+  name: afmr_smoke
+  output_dir: runs/eviseq_update_v5/smoke
+
+model:
+  encoder_name: __tiny__
+  decoder_name: __tiny__
+  dtype: float32
+  compute_dtype: float32
+  gradient_checkpointing: false
+
+architecture:
+  controller_dim: 16
+  depth_taps: 2
+  depth_rank: 8
+  feature_rank: 8
+  focus_hidden: 16
+  focus_windows: [4, 8, 16]
+
+decoder:
+  grounded_copy:
+    key_dim: 8
+    semantic_read:
+      rank: 8
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 1
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  validation_batch_size: 2
+  num_workers: 0
+  validation_num_workers: 0
+  persistent_workers: false
+  fused_optimizer: false
+  length_bucketing: false
+  save_each_epoch: false
+  save_best: false
+  log_every_steps: 1
+
+data:
+  decoder_prompt: "Summarize:"
+  decoder_chat_template: false
+  decoder_prefix: ""
+  train_file: tests_fixtures/train.jsonl
+  validation_file: tests_fixtures/validation.jsonl
+  test_file: tests_fixtures/test.jsonl
+  max_source_length: 128
+  max_target_length: 32
+
+generation:
+  batch_size: 2
+  max_new_tokens: 16
+  min_new_tokens: 0
+  repetition_penalty: 1.0
+  no_repeat_ngram_size: 0

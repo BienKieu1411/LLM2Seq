@@ -1,0 +1,9 @@
+_base_: afmr_base.yaml
+
+experiment:
+  name: eviseq_update_v51_semantic_only_v2
+  output_dir: runs/eviseq_update_v5/semantic_only_v2
+
+decoder:
+  grounded_copy:
+    enabled: false

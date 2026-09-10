@@ -2,7 +2,12 @@
 
 ## Kết luận kiểm tra
 
-**Kết luận:** v5.1 đã tích hợp đúng các đường mạnh cốt lõi của `eviseq_new` và `update_v2`, đồng thời đặt cơ chế trực tiếp để xử lý hai đánh đổi chính của v2: semantic residual có thể làm mất base vocabulary signal và semantic mass bị nested gate giới hạn khi copy gate lớn. Đây là kết luận ở mức **specification**. Vì v5.1 chưa có implementation, checkpoint hoặc prediction, chưa thể xác nhận tác động lên ROUGE.
+**Kết luận:** v5.1 đã tích hợp các đường mạnh cốt lõi của `eviseq_new` và
+`update_v2`, đồng thời đặt cơ chế trực tiếp để xử lý hai đánh đổi chính của
+v2: semantic residual có thể làm mất base vocabulary signal và semantic mass
+bị nested gate giới hạn khi copy gate lớn. Package đã có implementation và
+CPU/tiny acceptance tests; chưa có CUDA/DDP run, checkpoint PubMed hoặc
+prediction nên chưa thể xác nhận tác động lên ROUGE.
 
 `PLAN_ARCHITECTURE_REVIEW.md` được giữ nguyên như review lịch sử. Các công thức/acceptance đã sửa trong [DESIGN.md](DESIGN.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [EVALUATION_PLAN.md](EVALUATION_PLAN.md) và report này.
 
@@ -44,30 +49,12 @@ Ba ràng buộc `pi_copy=g`, `pi_base>=floor>0` và `pi_sem>0` không thể đ�
 
 ## Trạng thái implementation và blocker
 
-Folder v5.1 hiện chỉ chứa đặc tả Markdown; chưa có module Python, config,
-runner, checkpoint schema hoặc prediction. Vì vậy C1–C19 mới là acceptance
-contracts, chưa phải các bài test đã pass. Những điểm phải sửa trong code nền
-trước khi gọi v5.1 là:
-
-- Scheduler hiện reset theo từng stage tại
-  [`engine.py`](/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_update/eviseq_update/training/engine.py:434),
-  trong khi v5 yêu cầu một cosine schedule theo toàn bộ optimizer updates.
-- Sampler hiện không materialize canonical global batch nên 1 GPU và 2 GPU
-  chưa được đảm bảo replay cùng logical batches tại
-  [`sampling.py`](/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_update/eviseq_update/data/sampling.py:39).
-- Optimizer/checkpoint/runtime/runner còn schema cũ: parameter grouping tại
-  [`optimizer.py`](/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_update/eviseq_update/training/optimizer.py:8),
-  fingerprint tại [`checkpoint.py`](/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_update/eviseq_update/training/checkpoint.py:18),
-  stale prediction-cache path tại [`runtime.py`](/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_update/eviseq_update/runtime.py:369)
-  và runner chọn `last.pt` tại
-  [`run_pubmed_pair.sh`](/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_update/scripts/run_pubmed_pair.sh:248).
-- Code cũ vẫn tạo semantic inner gate dù config tắt gate tại
-  [`grounded_copy.py`](/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_update/eviseq_update/modeling/grounded_copy.py:72).
-
-Cap residual của v5.1 đã được khóa thành công thức `tanh` có `eps=1e-6` trong
-[`DESIGN.md`](DESIGN.md); control `semantic_only_v2` cũng đã ghi graph v2
-đầy đủ. Tuy nhiên dense và chunked loss vẫn phải dùng chung `ReadState`/kernel
-và kiểm tra bằng C18 sau khi có implementation.
+Các blocker code đã được xử lý trong package v5.1: global cosine scheduler,
+canonical manifest, named optimizer groups, strict checkpoint/config
+fingerprints, stale-cache metadata check, `H0` value anchor, tách copy và
+semantic reader, và dense/chunked mixture-NLL kernel. Bằng chứng cụ thể cùng
+những gate chưa thể chạy trên máy CPU được ghi trong
+[`IMPLEMENTATION_EVIDENCE.md`](IMPLEMENTATION_EVIDENCE.md).
 
 ## Công thức và đường gradient phải giữ nguyên khi code
 

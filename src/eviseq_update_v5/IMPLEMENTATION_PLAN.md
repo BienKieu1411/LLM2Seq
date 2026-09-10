@@ -2,7 +2,7 @@
 
 ## 1. Quyết định đã chốt
 
-Đây là bản kế hoạch implementation sau deep research và hai vòng phản biện chéo của `critic_gradient`, `critic_architecture` và `critic_eval_novelty`. Folder hiện vẫn là thiết kế Markdown; chưa có package Python, checkpoint, runner hay kết quả ROUGE v5.1.
+Đây là bản kế hoạch implementation sau deep research và hai vòng phản biện chéo của `critic_gradient`, `critic_architecture` và `critic_eval_novelty`. Package v5.1 đã được dựng trong folder này; checkpoint PubMed và kết quả ROUGE vẫn chưa có.
 
 Mục tiêu ưu tiên là đạt đồng thời:
 
@@ -60,7 +60,7 @@ Loại khỏi main:
 
 ## 3. Ranh giới module và file dự kiến
 
-Tất cả file bên dưới sẽ được tạo trong `src/eviseq_update_v5`; hiện chưa tồn tại.
+Các module bên dưới nằm trong `src/eviseq_update_v5`; acceptance evidence được ghi ở `IMPLEMENTATION_EVIDENCE.md`.
 
 | File | Trách nhiệm | Điều kiện bắt buộc |
 |---|---|---|
@@ -102,10 +102,12 @@ dùng lại copy mask cho semantic. Một hàm readout duy nhất tạo `g`, `al
 mixture và diagnostics để không gọi copy attention hai lần hoặc tạo nhánh
 gradient khác nhau.
 
-Dense logits và chunked-vocabulary loss phải gọi cùng một `ReadState`, cùng
-`logP` và cùng mixture-NLL kernel. `return_logits=False` chỉ bỏ việc materialize
-toàn bộ vocabulary; không được có một công thức loss thứ hai. C18 phải so dense
-CE với chunked CE trên cùng hidden/state ở FP32 trong tolerance đã đăng ký.
+Dense logits và chunked-vocabulary loss phải dùng cùng route state và cùng
+mixture-NLL kernel. Ở `return_logits=False`, branch vocabulary logits là lazy
+và chỉ target logits/normalizers được stream để tránh materialize `[B,T,V]`;
+đây là cùng `ReadState` contract về routes, mask và gauge chứ không phải một
+công thức loss thứ hai. C18 phải so dense CE với chunked CE và nhóm gradient
+trên cùng hidden/state ở FP32 trong tolerance đã đăng ký.
 
 `semantic_state` chứa `H0=bridge.value_memory`, `M=bridge.memory`, native mask,
 source prior và `semantic_prior_scale`. `bridge.value_memory` là bắt buộc:
@@ -150,25 +152,25 @@ Config main:
 
 ## 5. Thứ tự implementation
 
-1. **Đóng băng protocol.** Ghi commit, tokenizer/alignment version, source length policy, split manifest, preprocessing, canonical global-batch manifest, optimizer updates, scheduler, clip, dtype và Perl ROUGE command. Tách dirty files khỏi artifact của run.
+1. **Đóng băng protocol.** Ghi commit, tokenizer/alignment version, source length policy, split manifest, preprocessing, canonical global-batch manifest, optimizer updates, scheduler, clip, dtype và Perl ROUGE command. Tách dirty files khỏi artifact của run. verify: resolved config, manifest hash và command được lưu trước pilot.
 2. **Dựng legacy endpoints.** `base_only` phải tương đương `new`; `semantic_only_v2` phải tương đương v2 flat. Dùng cùng pretrained base state theo từng seed.
    Khởi tạo module mới trong `torch.random.fork_rng` hoặc cơ chế tương đương để
-   không làm lệch RNG của copy/AFMR; C1 phải so cả state và output.
+   không làm lệch RNG của copy/AFMR; C1 phải so cả state và output. verify: state/output parity và optimizer parameter coverage trên cùng seed.
 3. **Tách semantic reader.** Giữ chính xác thứ tự RMS, mask, cap và source prior
    của v2 (`K=RMS(Wk(RMS(H0)))`, `V=Wv(RMS(H0))`); kiểm tra cache native `K/V`.
-   Main không có hierarchy hay planner.
-4. **Dựng dense probability oracle.** Tính `P0`, `Ps`, `Pcopy`, capped simplex và NLL ở FP32; test trước khi chunking.
+   Main không có hierarchy hay planner. verify: shapes, mask, cap và cache K/V trên fixture không nhãn.
+4. **Dựng dense probability oracle.** Tính `P0`, `Ps`, `Pcopy`, capped simplex và NLL ở FP32; test trước khi chunking. verify: tổng mass bằng một, duplicate IDs và target không copy được có oracle đúng.
 5. **Thêm routing main.** Implement `copy_mass_preserving_capped_simplex`
    với `g_route=stop_gradient(g)` cho feature/cap, hard mask semantic/copy
    source-empty; log `alpha`, `g`, `pi_base`, `pi_sem`, `pi_copy` theo token và
-   theo sample.
-6. **Thêm controls.** Implement `independent_capped_simplex`, `constant-alpha`, `hidden-interpolation`, `K=M/V=H0` và `Wo=zero` parity với tên mode riêng. Main candidate luôn là `Wo=tiny` đã calibration deterministic.
+   theo sample. verify: empty-source fallback, simplex mass và Jacobian `dP/dg` qua test oracle.
+6. **Thêm controls.** Implement `independent_capped_simplex`, `constant-alpha`, `hidden-interpolation`, `K=M/V=H0` và `Wo=zero` parity với tên mode riêng. Main candidate luôn là `Wo=tiny` đã calibration deterministic. verify: mỗi control có config fingerprint riêng và không đổi main route.
 7. **Nối engine.** Kiểm tra token-weighted loss, accumulation, DDP
    synchronization, optimizer groups, checkpoint và resume. Prediction resume
-   phải kiểm tra checkpoint/config/split/decoder fingerprint trước khi trả metric.
-8. **Nối cache/generation.** Source state chuẩn bị một lần; prefix-dependent `h/q/u/alpha` tính lại. Temperature/top-p chỉ áp lên `output_logits` cuối cùng trong sampled API.
-9. **Profile.** Đo dense/chunked vocabulary memory, throughput, peak VRAM, BF16 rounding và 1/2 GPU equivalence.
-10. **Smoke rồi pilot.** Chỉ train sau khi acceptance gates đạt; pilot dùng validation, không dùng test để chọn mode/epoch.
+   phải kiểm tra checkpoint/config/split/decoder fingerprint trước khi trả metric. verify: resume test từ checkpoint và từ chối đổi protocol/world size.
+8. **Nối cache/generation.** Source state chuẩn bị một lần; prefix-dependent `h/q/u/alpha` tính lại. Temperature/top-p chỉ áp lên `output_logits` cuối cùng trong sampled API. verify: incremental/reorder/source reset parity và seed sampling tái lập.
+9. **Profile.** Đo dense/chunked vocabulary memory, throughput, peak VRAM, BF16 rounding và 1/2 GPU equivalence. verify: lưu metrics JSONL với dtype, peak memory, manifest và scheduler step.
+10. **Smoke rồi pilot.** Chỉ train sau khi acceptance gates đạt; pilot dùng validation, không dùng test để chọn mode/epoch. verify: tiny CE giảm, test chỉ chạy sau khi checkpoint được khóa.
 
 Checkpoint selection bắt buộc dùng `selection_metric=validation_ce` và
 `save_best=true`, với cùng validation manifest/tie-break cho A/B/E/F. Evaluator
