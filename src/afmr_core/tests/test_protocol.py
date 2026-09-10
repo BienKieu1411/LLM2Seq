@@ -5,10 +5,12 @@ import pytest
 import torch
 
 from afmr_core.config import config_fingerprint, load_config, validate_config
+from afmr_core.data.copy_alignment import pad_copy_alignments
 from afmr_core.data.prepare_dataset import prepare_dataset
 from afmr_core.data.sampling import CanonicalBatchManifest, DistributedBatchSampler, materialize_global_batches
 from afmr_core.evaluation.generate import _sample_token
 from afmr_core.evaluation.provenance import ensure_evaluation_manifest
+from afmr_core.modeling.grounded_copy import GroundedCopyHead
 from afmr_core.modeling.model import AFMRModel
 from afmr_core.training import checkpoint as checkpoint_module
 from afmr_core.training.checkpoint import architecture_spec, load_checkpoint, save_checkpoint
@@ -215,3 +217,36 @@ def test_tiny_model_forward_and_backward_uses_no_network():
     assert torch.isfinite(output.loss_ce)
     output.loss_ce.backward()
     assert any(parameter.grad is not None for parameter in model.parameters())
+
+
+def test_copy_alignment_keeps_candidate_and_edge_widths_separate():
+    rows = [
+        {
+            "copy_token_ids": [10],
+            "copy_encoder_indices": [1, 2, 3],
+            "copy_token_indices": [0, 0, 0],
+            "copy_alignment_weights": [1 / 3, 1 / 3, 1 / 3],
+        },
+        {
+            "copy_token_ids": [11, 12],
+            "copy_encoder_indices": [0, 1],
+            "copy_token_indices": [0, 1],
+            "copy_alignment_weights": [1.0, 1.0],
+        },
+    ]
+    padded = pad_copy_alignments(rows)
+    assert padded["copy_token_ids"].shape == (2, 2)
+    assert padded["copy_token_mask"].shape == (2, 2)
+    assert padded["copy_encoder_indices"].shape == (2, 3)
+    assert padded["copy_token_indices"].shape == (2, 3)
+    assert padded["copy_alignment_weights"].shape == (2, 3)
+
+    head = GroundedCopyHead(hidden_size=6, key_dim=3)
+    state = head.prepare(
+        torch.randn(2, 4, 6),
+        torch.zeros(2, 4),
+        torch.ones(2, 4, dtype=torch.bool),
+        torch.nn.Embedding(128, 6),
+        **padded,
+    )
+    assert state.mask.tolist() == [[True, False], [True, True]]

@@ -98,8 +98,10 @@ class GroundedCopyHead(nn.Module):
             raise ValueError("copy token ids/mask must be [B,W]")
         batch, width = copy_token_ids.shape
         alignment_tensors = (copy_encoder_indices, copy_token_indices, copy_alignment_weights)
-        if any(t.shape != copy_token_ids.shape for t in alignment_tensors):
-            raise ValueError("copy alignment tensors must all be [B,W]")
+        if any(t.ndim != 2 or t.shape[0] != batch for t in alignment_tensors):
+            raise ValueError("copy alignment tensors must be [B,E]")
+        if any(t.shape != copy_encoder_indices.shape for t in alignment_tensors):
+            raise ValueError("copy alignment tensors must share edge shape [B,E]")
         if copy_encoder_indices.numel() and (
             int(copy_encoder_indices.min()) < 0 or int(copy_encoder_indices.max()) >= memory.shape[1]
         ):

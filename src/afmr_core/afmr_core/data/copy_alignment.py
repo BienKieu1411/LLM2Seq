@@ -62,16 +62,34 @@ def align_copy_tokens(source: str, prefix_length: int, encoder_offsets, tokenize
 
 
 def pad_copy_alignments(rows: list[dict[str, list]]) -> dict[str, torch.Tensor]:
-    result = {}
-    for key in ("copy_token_ids", "copy_encoder_indices", "copy_token_indices", "copy_alignment_weights"):
-        width = max(1, max((len(row[key]) for row in rows), default=0))
-        dtype = torch.float32 if key == "copy_alignment_weights" else torch.long
+    """Pad candidate tokens and alignment edges on their own axes.
+
+    A decoder candidate can overlap more than one encoder span. Candidate
+    tensors therefore use width ``W`` while the three edge tensors use width
+    ``E``; forcing both widths to match loses overlap information or makes a
+    valid batch fail in the copy head.
+    """
+
+    alignment_keys = ("copy_encoder_indices", "copy_token_indices", "copy_alignment_weights")
+    for row in rows:
+        edge_lengths = {len(row[key]) for key in alignment_keys}
+        if len(edge_lengths) != 1:
+            raise ValueError("copy alignment edge tensors must have equal lengths per row")
+
+    def padded(key: str, width: int, dtype: torch.dtype) -> torch.Tensor:
         tensor = torch.zeros(len(rows), width, dtype=dtype)
         for i, row in enumerate(rows):
-            tensor[i, : len(row[key])] = torch.tensor(row[key], dtype=dtype)
-        result[key] = tensor
+            values = row[key]
+            tensor[i, : len(values)] = torch.tensor(values, dtype=dtype)
+        return tensor
+
+    candidate_width = max(1, max((len(row["copy_token_ids"]) for row in rows), default=0))
+    edge_width = max(1, max((len(row[alignment_keys[0]]) for row in rows), default=0))
+    result = {"copy_token_ids": padded("copy_token_ids", candidate_width, torch.long)}
+    for key in alignment_keys:
+        dtype = torch.float32 if key == "copy_alignment_weights" else torch.long
+        result[key] = padded(key, edge_width, dtype)
     result["copy_token_mask"] = (
-        torch.arange(result["copy_token_ids"].shape[1])[None, :]
-        < torch.tensor([len(row["copy_token_ids"]) for row in rows])[:, None]
+        torch.arange(candidate_width)[None, :] < torch.tensor([len(row["copy_token_ids"]) for row in rows])[:, None]
     )
     return result

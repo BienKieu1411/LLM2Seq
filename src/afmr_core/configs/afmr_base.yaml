@@ -44,7 +44,7 @@ decoder:
   ce_chunk_size: 1024
   grounded_copy:
     enabled: true
-    key_dim: 128
+    key_dim: 256
     gate_init: 0.05
     readout_mode: copy_mass_preserving_capped_simplex
     alpha_max: 0.20
@@ -59,7 +59,7 @@ decoder:
     null_slot: false
     semantic_read:
       enabled: true
-      rank: 128
+      rank: 256
       num_heads: 1
       key_source: H0
       value_source: H0
