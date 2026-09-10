@@ -163,7 +163,7 @@ Trước training phải đạt:
 - 1 GPU và 2 GPU cho cùng canonical global batch, token denominator và scheduler step cho update gần nhau.
 - Dense/chunked, teacher-forced/incremental cache và compaction cho kết quả tương đương.
 - BF16/FP32 không có NaN; các reduction/gate/logsumexp thực hiện ở FP32.
-- Gauge `log(P)+Z0` giữ endpoint sau repetition penalty; temperature/top-p chỉ áp lên final mixture khi sampled generation.
+- Gauge `log(P)+Z0` giữ endpoint sau repetition penalty; temperature/top-k/top-p chỉ áp lên final mixture khi sampled generation.
 - Checkpoint/resume và config fingerprint không chấp nhận rank, gauge hoặc mode mismatch.
 - Với `g_route` detached, kiểm tra Jacobian `dP/dg=Pcopy-P0` và alpha không tạo
   đường gradient trực tiếp vào `g`; log `dL/dg` thực tế riêng, không yêu cầu nó

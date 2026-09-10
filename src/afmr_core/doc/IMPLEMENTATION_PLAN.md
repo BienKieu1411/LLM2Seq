@@ -56,7 +56,7 @@ Loại khỏi main:
 - partition head, tangent projection và norm restore của v4;
 - 4×128 semantic heads trước khi chứng minh rank128 thiếu capacity;
 - contrastive learning, R-Drop, NEFTune, distillation, RL, candidate mining, reranking và self-improve;
-- temperature/top-p trong benchmark greedy. Hai tham số chỉ có trong API sampled generation/candidate về sau.
+- temperature/top-k/top-p trong benchmark greedy. Ba tham số chỉ có trong API sampled generation/candidate về sau.
 
 ## 3. Ranh giới module và file dự kiến
 
@@ -169,7 +169,7 @@ Config main:
 7. **Nối engine.** Kiểm tra token-weighted loss, accumulation, DDP
    synchronization, optimizer groups, checkpoint và resume. Prediction resume
    phải kiểm tra checkpoint/config/split/decoder fingerprint trước khi trả metric. verify: resume test từ checkpoint và từ chối đổi protocol/world size.
-8. **Nối cache/generation.** Source state chuẩn bị một lần; prefix-dependent `h/q/u/alpha` tính lại. Temperature/top-p chỉ áp lên `output_logits` cuối cùng trong sampled API. verify: incremental/reorder/source reset parity và seed sampling tái lập.
+8. **Nối cache/generation.** Source state chuẩn bị một lần; prefix-dependent `h/q/u/alpha` tính lại. Temperature/top-k/top-p chỉ áp lên `output_logits` cuối cùng trong sampled API. verify: incremental/reorder/source reset parity và seed sampling tái lập.
 9. **Profile.** Đo dense/chunked vocabulary memory, throughput, peak VRAM, BF16 rounding và 1/2 GPU equivalence. verify: lưu metrics JSONL với dtype, peak memory, manifest và scheduler step.
 10. **Smoke rồi pilot.** Chỉ train sau khi acceptance gates đạt; pilot dùng validation, không dùng test để chọn mode/epoch. verify: tiny CE giảm, test chỉ chạy sau khi checkpoint được khóa.
 
@@ -240,7 +240,7 @@ này và làm thay đổi prior copy khi `g` lớn.
 | C11 | Gauge | `log(P)+Z0` giữ endpoint với repetition penalty 1.05 và probe 1.0 |
 | C12 | Cache | Teacher-forced/incremental, compaction/reorder/source reset tương đương |
 | C13 | Checkpoint | Save/load/resume giữ output, optimizer, RNG, scheduler; từ chối mismatch |
-| C14 | Sampling | Temperature/top-p hợp lệ và áp sau final mixture; seed tái lập |
+| C14 | Sampling | Temperature/top-k/top-p hợp lệ và áp sau final mixture; seed tái lập |
 | C15 | Profile/runner | Batch, optimizer steps, scheduler, clip, dtype, source budget, manifest hash và evaluator được in từ resolved config |
 | C16 | Fresh evaluation | Prediction JSONL từ chối nếu checkpoint/config/split/decoder fingerprint không khớp; không trả metric từ file cũ trước khi load checkpoint |
 | C17 | Copy-gradient isolation | Kiểm tra Jacobian `dP/dg=Pcopy-P0` và alpha không tạo đường trực tiếp vào g; log `dL/dg` thực tế riêng, không yêu cầu nó khớp copy-only; shared-trunk drift được log riêng |

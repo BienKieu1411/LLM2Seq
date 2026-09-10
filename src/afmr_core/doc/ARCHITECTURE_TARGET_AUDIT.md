@@ -228,7 +228,7 @@ Z0 = logsumexp(z0)
 output_logits = log(P) + Z0
 ```
 
-Nếu cả source route inactive, trả trực tiếp `z0` để giữ fallback legacy. `log(P)+Z0` là scalar gauge theo timestep; vì repetition penalty phụ thuộc dấu/độ lớn, phải chạy probe penalty 1.0 và setting headline 1.05. Temperature/top-p chỉ được áp lên final mixed scores trong sampled candidate API, không sample từng expert rồi mới mix.
+Nếu cả source route inactive, trả trực tiếp `z0` để giữ fallback legacy. `log(P)+Z0` là scalar gauge theo timestep; vì repetition penalty phụ thuộc dấu/độ lớn, phải chạy probe penalty 1.0 và setting headline 1.05. Temperature/top-k/top-p chỉ được áp lên final mixed scores trong sampled candidate API, không sample từng expert rồi mới mix.
 
 ### 4.6. Gradient contract
 
@@ -320,7 +320,7 @@ Nếu baseline rerun lệch mốc lịch sử, dùng common rerun làm mốc cau
 
 - Cùng processed split manifests; hard fail nếu có cross-split content overlap. `ALLOW_CROSS_SPLIT_CONTENT` không được bật ngầm.
 - Cùng source/reference preprocessing, character-overlap alignment policy và visible source budget; ghi tokenizer-visible characters/tokens và truncation rate.
-- Cùng greedy settings (`max_new_tokens`, `min_new_tokens`, repetition penalty, no-repeat n-gram) cho headline; sampled temperature/top-p là probe/candidate API riêng.
+- Cùng greedy settings (`max_new_tokens`, `min_new_tokens`, repetition penalty, no-repeat n-gram) cho headline; sampled temperature/top-k/top-p là probe/candidate API riêng.
 - Cùng Perl ROUGE-1.5.5 command, XML data/dependencies và normalization; nếu thiếu `XML::Parser`, lưu lỗi môi trường và không trộn Python ROUGE vào headline.
 - Predictions phải có document ID, checkpoint/config/split/decoder fingerprint; stale cache bị từ chối.
 - Tối thiểu seed `42/43/44`; báo từng seed, mean/spread, output length/copy rate/truncation.
@@ -358,7 +358,7 @@ Diễn giải:
 | C11 | Gauge `log(P)+Z0` giữ endpoint với repetition penalty 1.0 và 1.05 |
 | C12 | Teacher-forced/incremental cache, reorder, EOS compaction và source reset tương đương |
 | C13 | Save/load/resume giữ output, optimizer, RNG, scheduler và fingerprint; mismatch bị từ chối |
-| C14 | Temperature/top-p hợp lệ, áp sau final mixture, seed tái lập; greedy headline không bị đổi |
+| C14 | Temperature/top-k/top-p hợp lệ, áp sau final mixture, seed tái lập; greedy headline không bị đổi |
 | C15 | Runner in resolved config, manifest hash, global batch, updates, dtype, clip và evaluator command |
 | C16 | Prediction cache stale bị từ chối trước metric; không return sớm chỉ vì ID/reference prefix khớp |
 | C17 | Với `g_route=stop_gradient(g)`, kiểm tra Jacobian `dP/dg=Pcopy-P0` và alpha không tạo đường trực tiếp vào g; log `dL/dg` thực tế riêng, shared-trunk drift báo riêng |
@@ -420,7 +420,7 @@ Novelty hợp lệ chỉ có thể là decomposition cụ thể trong một summ
 5. Vì sao chỉ đổi config `key_source=M` là chưa đủ để triển khai `K=M,V=H0`?
 6. Công thức `loss_r=world_size*L_r/N_global` triệt tiêu DDP average như thế nào? Tại sao không được chia thêm accumulation?
 7. Vì sao `grad_norm=2.0` vẫn có thể xuất hiện khi `max_grad_norm=1.0`?
-8. Tại sao temperature/top-p phải áp sau final mixture và không được dùng trong greedy headline?
+8. Tại sao temperature/top-k/top-p phải áp sau final mixture và không được dùng trong greedy headline?
 9. Một gain ROUGE duy nhất có đủ để claim giảm hallucination không? Diagnostics nào cần thêm?
 10. Nếu F tăng R1 nhưng giảm R2, vì sao giữ E là quyết định đúng với target hiện tại?
 

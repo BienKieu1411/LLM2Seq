@@ -489,6 +489,7 @@ def validate_config(config: dict[str, Any]) -> None:
             "do_sample",
             "compact_finished",
             "temperature",
+            "top_k",
             "top_p",
         },
         "generation",
@@ -504,10 +505,13 @@ def validate_config(config: dict[str, Any]) -> None:
     _finite_positive(generation.get("repetition_penalty", 1.0), "generation.repetition_penalty")
     if int(generation.get("no_repeat_ngram_size", 0)) < 0:
         raise ValueError("generation.no_repeat_ngram_size must be non-negative")
-    temperature = _finite_positive(generation.get("temperature", 1.0), "generation.temperature")
+    temperature = _finite_positive(generation.get("temperature", 1.0), "generation.temperature", allow_zero=True)
+    top_k = _finite_positive(generation.get("top_k", 0), "generation.top_k", allow_zero=True)
+    if not top_k.is_integer():
+        raise ValueError("generation.top_k must be an integer")
     top_p = _finite_positive(generation.get("top_p", 1.0), "generation.top_p")
-    if top_p > 1.0 or temperature <= 0.0:
-        raise ValueError("generation requires 0 < temperature and 0 < top_p <= 1")
+    if top_p > 1.0 or (bool(generation.get("do_sample", False)) and temperature <= 0.0):
+        raise ValueError("generation requires positive temperature when do_sample=true and 0 < top_p <= 1")
 
 
 def config_fingerprint(config: dict[str, Any]) -> str:

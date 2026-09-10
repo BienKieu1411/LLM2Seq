@@ -22,6 +22,9 @@ def test_smoke_config_is_strict_and_local():
     config = load_config(ROOT / "configs" / "afmr_smoke.yaml")
     assert config["architecture"]["name"] == "afmr_value_anchor"
     assert config["decoder"]["grounded_copy"]["semantic_read"]["rank"] == 8
+    assert config["generation"]["temperature"] == 0.0
+    assert config["generation"]["top_k"] == 0
+    assert config["generation"]["top_p"] == 1.0
     assert config_fingerprint(config) == config["_meta"]["config_fingerprint"]
     assert architecture_spec(config)["graph_version"].startswith("afmr_core")
 
@@ -170,14 +173,17 @@ def test_prediction_manifest_rejects_stale_identity(tmp_path):
         ensure_evaluation_manifest(output, {**identity, "checkpoint_sha256": "b"})
 
 
-def test_sampling_applies_temperature_and_top_p_only_to_final_scores():
+def test_sampling_applies_temperature_top_k_and_top_p_only_to_final_scores():
     scores = torch.tensor([[4.0, 3.0, 0.0]])
     torch.manual_seed(4)
     token = _sample_token(scores, top_p=0.8, temperature=0.5, generator=None)
     assert token.shape == (1,)
     assert token.item() in {0, 1}
+    assert _sample_token(scores, top_p=1.0, temperature=1.0, generator=None, top_k=1).item() == 0
     with pytest.raises(ValueError):
         _sample_token(scores, top_p=0.0, temperature=1.0, generator=None)
+    with pytest.raises(ValueError):
+        _sample_token(scores, top_p=1.0, temperature=1.0, generator=None, top_k=-1)
 
 
 def test_tiny_model_forward_and_backward_uses_no_network():

@@ -209,7 +209,7 @@ số clip.
 
 Cộng scalar `Z0` giúp `P=P0` khôi phục logits legacy trước processor. Offset cũ `(1-beta)Z0+beta Zs` chỉ là diagnostic. Vì repetition penalty phụ thuộc dấu và độ lớn logits, mọi endpoint phải kiểm tra cả trước và sau processors.
 
-Greedy benchmark giữ generation settings hiện hành. Temperature và top-p chỉ áp lên `output_logits` cuối cùng trong sampled generation/candidate API; không sample từng expert rồi mới mix.
+Greedy benchmark giữ generation settings hiện hành. Temperature, top-k và top-p chỉ áp lên `output_logits` cuối cùng trong sampled generation/candidate API; không sample từng expert rồi mới mix.
 
 ## 7. Shapes và chi phí
 

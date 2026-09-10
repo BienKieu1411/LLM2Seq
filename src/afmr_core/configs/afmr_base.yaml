@@ -123,12 +123,13 @@ data:
 
 generation:
   compact_finished: true
-  batch_size: 96
+  batch_size: 256
   max_new_tokens: 512
   min_new_tokens: 16
   repetition_penalty: 1.05
   no_repeat_ngram_size: 3
   num_beams: 1
   do_sample: false
-  temperature: 1.0
+  temperature: 0.0
+  top_k: 0
   top_p: 1.0

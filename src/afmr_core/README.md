@@ -43,7 +43,7 @@ Source rỗng tắt semantic; copy source rỗng tắt copy; cả hai rỗng tr�
     Z0 = logsumexp(z0)
     output_logits = log(P) + Z0
 
-Temperature/top-p chỉ dùng cho sampled generation/candidates, không dùng benchmark greedy và không dùng trong training.
+Temperature/top-k/top-p chỉ dùng cho sampled generation/candidates, không dùng benchmark greedy và không dùng trong training.
 
 ## Các variant phải chạy
 

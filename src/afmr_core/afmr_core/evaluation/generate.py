@@ -1,4 +1,4 @@
-"""Greedy evaluation, optional nucleus sampling and append-only JSONL resume."""
+"""Greedy evaluation, optional filtered sampling and append-only JSONL resume."""
 
 from __future__ import annotations
 
@@ -72,15 +72,32 @@ def generate_greedy(
     )
 
 
-def generate_sampled(model, batch, tokenizer, *, top_p=0.9, temperature=0.7, generator=None, **generation):
+def generate_sampled(model, batch, tokenizer, *, top_k=0, top_p=0.9, temperature=0.7, generator=None, **generation):
     """Optional candidate sampling API; never called by training or benchmark evaluation."""
+    if isinstance(top_k, bool) or int(top_k) != top_k or top_k < 0:
+        raise ValueError("Sampling requires a non-negative integer top_k")
     if not 0 < top_p <= 1 or not 0 < temperature < math.inf:
         raise ValueError("Sampling requires 0 < top_p <= 1 and a finite positive temperature")
-    return _generate(model, batch, tokenizer, **generation, top_p=top_p, temperature=temperature, generator=generator)
+    return _generate(
+        model,
+        batch,
+        tokenizer,
+        **generation,
+        top_k=int(top_k),
+        top_p=top_p,
+        temperature=temperature,
+        generator=generator,
+    )
 
 
-def _sample_token(scores, top_p, temperature, generator):
+def _sample_token(scores, top_p, temperature, generator, top_k=0):
+    if isinstance(top_k, bool) or int(top_k) != top_k or top_k < 0:
+        raise ValueError("Sampling requires a non-negative integer top_k")
+    if not 0 < top_p <= 1 or not 0 < temperature < math.inf:
+        raise ValueError("Sampling requires 0 < top_p <= 1 and a finite positive temperature")
     ordered, indices = (scores / temperature).sort(dim=-1, descending=True)
+    if top_k:
+        ordered[..., int(top_k) :] = -float("inf")
     probabilities = ordered.softmax(-1)
     excluded = probabilities.cumsum(-1) - probabilities >= top_p
     probabilities = probabilities.masked_fill(excluded, 0.0)
@@ -101,6 +118,7 @@ def _generate(
     no_repeat_ngram_size=0,
     compact_finished=True,
     *,
+    top_k=0,
     top_p=None,
     temperature=1.0,
     generator=None,
@@ -172,7 +190,9 @@ def _generate(
                 dtype=token_ids.dtype,
             )
             next_token[active_rows] = (
-                scores.argmax(dim=-1) if top_p is None else _sample_token(scores, top_p, temperature, generator)
+                scores.argmax(dim=-1)
+                if top_p is None
+                else _sample_token(scores, top_p, temperature, generator, top_k=top_k)
             )
             next_token = torch.where(finished, int(getattr(tokenizer, "pad_token_id", 0) or 0), next_token)
             decode_mask = torch.cat((decode_mask, (~finished)[:, None]), dim=1)

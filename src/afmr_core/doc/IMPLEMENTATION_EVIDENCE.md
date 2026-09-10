@@ -42,7 +42,7 @@ diagnostic.
 | C11 | Gauge identity, softmax recovery and a finite repetition-penalty 1.05 probe are covered by the readout test; full headline decoder probe remains pending | Partial |
 | C12 | Tiny generation exercises source cache, prefix decode and prediction resume | Pass on CPU tiny |
 | C13 | Atomic save/load, RNG/state metadata, strict config mismatch and resume world-size/protocol checks; scheduler state is restored | Pass |
-| C14 | Sampled API validates temperature/top-p and applies them after final scores | Pass |
+| C14 | Sampled API validates temperature/top-k/top-p and applies them after final scores | Pass |
 | C15 | Runner dry-run prints resolved config, global batch, dtype, seed and paths | Pass |
 | C16 | Evaluation identity plus checkpoint metadata are verified before complete-cache metrics are returned; stale-manifest rejection is tested | Pass on tiny |
 | C17 | Router features/cap use detached `g`, mixture uses live `g`, and the explicit Jacobian test verifies `dP/dg=Pcopy-P0` | Pass on oracle; shared-trunk drift logging remains a training gate |

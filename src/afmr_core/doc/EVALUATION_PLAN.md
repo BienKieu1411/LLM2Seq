@@ -91,7 +91,7 @@ Benchmark chính giữ greedy và processors hiện hành: `max_new_tokens`, `mi
     Z0 = logsumexp(z0)
     output_logits = log(P) + Z0
 
-Chạy thêm probe repetition penalty 1.0 để tách probability fusion khỏi scalar offset. Temperature/top-p chỉ áp lên final mixed scores trong sampled generation/candidate API; không sample từng expert rồi mới mix và không dùng sampled output làm training target.
+Chạy thêm probe repetition penalty 1.0 để tách probability fusion khỏi scalar offset. Temperature/top-k/top-p chỉ áp lên final mixed scores trong sampled generation/candidate API; không sample từng expert rồi mới mix và không dùng sampled output làm training target.
 
 ## 6. Seeds và bất định
 

@@ -16,6 +16,9 @@ data:
 generation:
   max_new_tokens: 512
   min_new_tokens: 32
+  temperature: 0.0
+  top_k: 0
+  top_p: 1.0
   repetition_penalty: 1.05
   no_repeat_ngram_size: 3
 
