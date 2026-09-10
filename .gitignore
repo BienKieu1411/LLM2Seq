@@ -37,3 +37,6 @@ Thumbs.db
 *.sty
 *.bst
 reports/
+
+.agents/
+.claude/

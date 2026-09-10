@@ -1,0 +1,76 @@
+# EviSeq update v5.1: copy-mass-preserving semantic mixture
+
+V5.1 là thiết kế sau deep research và phản biện chéo ba `luna_worker`. Folder hiện chỉ chứa plan/spec/research; chưa có implementation, checkpoint hay kết quả ROUGE v5.1.
+
+Mục tiêu được tách thành architecture gate và system stretch: dưới common
+recipe, vượt R1/RL của `eviseq_new` và R2 của `update_v2`; sau khi tái lập
+T5Gemma công bằng, stretch là vượt thêm R2 của T5Gemma. Chưa có kết quả nào
+được bảo đảm.
+Main giữ AFMR, cross-attention, grounded copy của `new/v2` và flat semantic
+read rank128 của v2. Reader phải giữ đúng thứ tự `H0n=RMS(H0)`,
+`K=RMS(Wk(H0n))`, `V=Wv(H0n)`. V4 hierarchy/planner/coverage/4×128 bị loại
+khỏi main.
+
+## Công thức main
+
+    P0 = softmax(z0),       z0 = W_lm h
+    Ps = softmax(zs),       zs = W_lm (h + delta)
+    Pcopy = marginalized copy distribution
+
+    alpha_raw = alpha_max * sigmoid(r_sem) * semantic_evidence
+    g_route = stop_gradient(g)
+    alpha = min(alpha_raw, max(0, 1 - g_route - generate_reserve))
+
+    pi_copy = g
+    pi_sem  = alpha
+    pi_base = 1 - g - alpha
+    P = pi_base P0 + pi_sem Ps + pi_copy Pcopy
+
+`g` là copy gate legacy; semantic không còn bị nhân trực tiếp với `(1-g)beta`.
+`g_route` là bản detached chỉ dùng cho router/cap; `pi_copy` vẫn dùng `g` có
+gradient. `generate_reserve=0.05` không phải floor tuyệt đối của `pi_base` khi
+`g` lớn. Vì vậy tên chính xác là copy-mass-preserving capped simplex;
+`independent_capped_simplex` bên dưới là control có trade-off khác. Khi `Wo=0`,
+`delta=0`, `Ps=P0`, nên forward khôi phục phân phối của `new`. Main candidate
+dùng `Wo=tiny_rms_1e-3` calibration deterministic; zero chỉ parity/smoke.
+Main dùng `alpha_max=0.20`, `K=H0,V=H0`, không semantic gate `.05` kép và RMS
+cap `.10`.
+
+Source rỗng tắt semantic; copy source rỗng tắt copy; cả hai rỗng trả `P0`. Output gauge main:
+
+    Z0 = logsumexp(z0)
+    output_logits = log(P) + Z0
+
+Temperature/top-p chỉ dùng cho sampled generation/candidates, không dùng benchmark greedy và không dùng trong training.
+
+## Các variant phải chạy
+
+- `v5.1-zero-parity`: endpoint/smoke của công thức main, `K=H0,V=H0`, `Wo=0`.
+- `v5.1-tiny`: candidate training, `Wo` init correction khoảng `1e-3×RMS(h)` theo calibration batch cố định không dùng label.
+- `v5.1-independent`: capped three-way simplex có base floor/copy feature.
+- `v5.1-KM`: `K=M,V=H0`, source prior giảm/tắt để kiểm tra double-focus.
+- `hidden-interpolation`: cùng reader nhưng fusion trong hidden.
+- `constant-alpha`: kiểm tra learned router có hơn mixture cố định hay không.
+
+Null slot, entropy/evidence gating và copy-protected residual chỉ thử sau khi các variant trên đã cô lập được nguyên nhân.
+
+## Tài liệu
+
+- [DECISION_REPORT.md](DECISION_REPORT.md): deep-research report, phản biện chéo, quyết định và nguồn.
+- [ARCHITECTURE_AUDIT.md](ARCHITECTURE_AUDIT.md): đối chiếu code `new`, `update_v2`, v4.
+- [RESEARCH.md](RESEARCH.md): cơ sở paper/technical report và ranh giới novelty.
+- [DESIGN.md](DESIGN.md): shapes, gradient, loss, gauge, cache và dtype.
+- [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md): thứ tự code, acceptance tests, ablation và điều kiện dừng.
+- [EVALUATION_PLAN.md](EVALUATION_PLAN.md): protocol fairness, checkpoint selection và statistical reporting.
+- [ARCHITECTURE_TARGET_AUDIT.md](ARCHITECTURE_TARGET_AUDIT.md): audit tổng hợp, hợp đồng tensor/xác suất/gradient/DDP và câu hỏi tự kiểm tra.
+- [FINAL_VERIFICATION.md](FINAL_VERIFICATION.md): xác minh độc lập điểm mạnh/điểm yếu và trạng thái đã chứng minh/chưa chứng minh.
+
+## Mốc tham chiếu đã báo
+
+| Model | ROUGE-1 | ROUGE-2 | ROUGE-L |
+|---|---:|---:|---:|
+| `new` | 49.626 | 21.901 | 45.895 |
+| `update_v2` | 49.488 | 21.953 | 45.776 |
+| T5Gemma | 49.580 | 21.990 | 45.463 |
+
+Đây là các điểm đã báo trong dự án, chưa được tái lập từ cùng predictions/resolved config trong folder này. Chỉ gọi v5.1 thắng sau common recipe, Perl ROUGE-1.5.5, validation checkpoint selection và tối thiểu ba seed.
