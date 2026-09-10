@@ -16,7 +16,7 @@ The only end-to-end model test uses Transformers' local `__tiny__` constructors.
 | Ruff formatter | `bienkieu_env/bin/ruff format --check src/afmr_core` — passed |
 | AFMR acceptance tests | `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONPATH=src/afmr_core bienkieu_env/bin/pytest -q src/afmr_core/tests` — **32 passed**, 2 dependency deprecation warnings; no model download path was exercised |
 | Offline smoke | `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHON=bienkieu_env/bin/python src/afmr_core/run_afmr.sh smoke` — passed (`checkpoint_step=4`, `examples=2`, train CE `4.4775705839 -> 4.4749635646`) |
-| PubMed runner dry run | `DRY_RUN=true .../scripts/run_pubmed_pair.sh` — passed; printed `workers=2`, `batch_per_gpu=84`, `accumulation=1`, `effective_examples_per_update=168`; default evaluation checkpoint is validation-selected `best.pt` |
+| PubMed runner dry run | `DRY_RUN=true .../scripts/run_pubmed_pair.sh` — passed; printed `workers=2`, `batch_per_gpu=84`, `accumulation=1`, `effective_examples_per_update=168`; default evaluation checkpoint is `last.pt`, and `best.pt` is disabled |
 | Cross-platform lint gate | Root and package Ruff check/format, `compileall`, shell syntax and all 12 YAML configs — passed |
 | Tiny train/evaluate | two local tiny epochs plus test generation — passed; prediction resume returned identical metrics |
 

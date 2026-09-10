@@ -100,7 +100,7 @@ training:
   seed: 42
   log_every_steps: 1
   save_each_epoch: true
-  save_best: true
+  save_best: false
   resume_checkpoint: ""
   scheduler: cosine
   warmup_steps: 0

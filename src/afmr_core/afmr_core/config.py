@@ -147,7 +147,7 @@ def _setdefault_training(training: dict[str, Any]) -> None:
         "seed": 42,
         "log_every_steps": 10,
         "save_each_epoch": True,
-        "save_best": True,
+        "save_best": False,
         "resume_checkpoint": "",
         "scheduler": "cosine",
         "warmup_steps": 0,

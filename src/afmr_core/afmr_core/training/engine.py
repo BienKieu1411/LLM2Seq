@@ -320,11 +320,6 @@ class AFMRTrainer:
                     if max_grad_norm is not None
                     else 1.0
                 )
-                learning_rates = ",".join(
-                    dict.fromkeys(
-                        f"{group.get('name', i)}:{group['lr']:.2e}" for i, group in enumerate(optimizer.param_groups)
-                    )
-                )
                 optimizer.step()
                 if self.scheduler is not None:
                     self.scheduler.step()
@@ -369,9 +364,6 @@ class AFMRTrainer:
                         "clip_coefficient": round(float(clip_coefficient), 8),
                         "clipped": bool(clip_coefficient < 1.0),
                         "max_grad_norm": max_grad_norm,
-                        "learning_rate": {
-                            group.get("name", str(i)): group["lr"] for i, group in enumerate(optimizer.param_groups)
-                        },
                         "seconds": round(window_elapsed, 4),
                         "window_seconds": round(window_elapsed, 4),
                         "epoch_elapsed_seconds": round(epoch_elapsed, 4),
@@ -388,7 +380,7 @@ class AFMRTrainer:
                     self._write_metric(record)
                     LOGGER.info(
                         "[train] stage=%s | epoch=%d/%d | epoch_progress=%s %5.1f%% | step=%d/%d | "
-                        "total_step=%d/%d | CE=%.5f | grad=%.4f | lr=%s | elapsed=%s | epoch_eta=%s | "
+                        "total_step=%d/%d | CE=%.5f | grad=%.4f | elapsed=%s | epoch_eta=%s | "
                         "total_eta=%s | vram=%s | ex/s=%.2f | tok/s=%.0f",
                         _stage_label(stage),
                         global_epoch,
@@ -401,7 +393,6 @@ class AFMRTrainer:
                         total_training_steps,
                         float(step_loss),
                         float(pre_clip_norm),
-                        learning_rates,
                         _format_duration(total_elapsed),
                         _format_duration(epoch_eta),
                         _format_duration(total_eta),

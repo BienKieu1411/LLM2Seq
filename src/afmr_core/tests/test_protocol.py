@@ -57,9 +57,14 @@ def test_pubmed_runner_fails_fast_without_downloading_models():
     assert "export HF_HUB_OFFLINE=1" in script
     assert "export TRANSFORMERS_OFFLINE=1" in script
     assert "export ALLOW_CROSS_SPLIT_CONTENT=" in script
-    assert 'CHECKPOINT="${CHECKPOINT:-${RUN_ROOT}/best.pt}"' in script
+    assert 'CHECKPOINT="${CHECKPOINT:-${RUN_ROOT}/last.pt}"' in script
     assert "PPLX encoder not found" in script
     assert "Decoder model not found" in script
+
+
+def test_pubmed_config_uses_last_checkpoint_without_best():
+    config = load_config(ROOT / "configs" / "afmr_pubmed.yaml")
+    assert config["training"]["save_best"] is False
 
 
 def test_duplicate_content_flag_is_read_from_environment(tmp_path, monkeypatch):

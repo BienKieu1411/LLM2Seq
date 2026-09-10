@@ -80,8 +80,8 @@ model từ Hugging Face:
 
 Runner PubMed mặc định khóa hai GPU, batch 84 mỗi GPU và accumulation 1. Nó
 chỉ kiểm tra model/dataset local rồi mới train; `DRY_RUN=true` chỉ sinh config
-và in effective batch. Sau train, runner đánh giá checkpoint `best.pt` được
-chọn bằng validation CE (có thể ghi đè bằng biến `CHECKPOINT`):
+và in effective batch. Sau train, runner đánh giá checkpoint cuối `last.pt`
+(có thể ghi đè bằng biến `CHECKPOINT`); runner không lưu `best.pt`:
 
     PYTHON=/path/to/python DRY_RUN=true ./scripts/run_pubmed_pair.sh
 

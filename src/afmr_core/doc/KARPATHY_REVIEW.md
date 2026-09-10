@@ -27,9 +27,9 @@ before the final verification run:
    tests.
 2. `Wo=tiny` is calibrated on a deterministic prompt-only batch before fresh
    training; resume skips calibration and restores the saved weights.
-3. The PubMed runner evaluates `best.pt` selected by validation CE and sets
-   `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` so missing local models fail
-   instead of downloading.
+3. The PubMed runner evaluates the canonical `last.pt`, does not save
+   `best.pt`, and sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` so
+   missing local models fail instead of downloading.
 4. Strict resume checks validate world size, effective batch, scheduler clock,
    training protocol and the checkpoint epoch's canonical manifest hash.
 5. Python ROUGE is declared as `rouge==1.0.0`; the route controls are either
