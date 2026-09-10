@@ -1,0 +1,9 @@
+_base_: afmr_base.yaml
+
+experiment:
+  name: afmr_core_hidden_interpolation
+  output_dir: runs/afmr_core/hidden_interpolation
+
+decoder:
+  grounded_copy:
+    readout_mode: hidden_interpolation

@@ -1,9 +1,0 @@
-_base_: afmr_base.yaml
-
-experiment:
-  name: eviseq_update_v51_hidden_interpolation
-  output_dir: runs/eviseq_update_v5/hidden_interpolation
-
-decoder:
-  grounded_copy:
-    readout_mode: hidden_interpolation
