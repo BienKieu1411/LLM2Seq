@@ -27,10 +27,8 @@ model:
   decoder_name: /absolute/path/to/Qwen3-0.6B
 
 training:
-  interface_warmup_epochs: 1
-  full_finetune_epochs: 4
-  # Common-control recipe: one GPU 48 x accumulation 2; two GPUs can use
-  # local batch 48 x accumulation 1 with the same explicit effective batch.
-  batch_size: 48
-  gradient_accumulation_steps: 2
+  interface_warmup_epochs: 0
+  full_finetune_epochs: 5
+  batch_size: 84
+  gradient_accumulation_steps: 1
   max_grad_norm: 1.0

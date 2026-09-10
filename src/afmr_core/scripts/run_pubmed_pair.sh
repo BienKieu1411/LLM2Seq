@@ -22,7 +22,7 @@ export TRANSFORMERS_OFFLINE=1
 export NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
 export BATCH_SIZE="${BATCH_SIZE:-84}"
 export GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
-export EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-96}"
+export EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-256}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
 # Keep this switch exported so an optional preparation step can preserve
 # repeated examples across splits when the experiment explicitly requests it.
