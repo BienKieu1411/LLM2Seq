@@ -108,6 +108,7 @@ class SemanticReader(nn.Module):
         value_source: str = "H0",
         semantic_prior_scale: float = 1.0,
         max_relative_rms: float = 0.10,
+        cap_mode: str = "smooth_relative_rms",
         inner_gate: bool = False,
         gate_init: float = 0.05,
         output_init: str = "tiny_rms_1e-3",
@@ -119,6 +120,8 @@ class SemanticReader(nn.Module):
             raise ValueError("v5 semantic reader supports key_source H0/M and value_source H0")
         if not 0.0 < float(max_relative_rms) < math.inf:
             raise ValueError("max_relative_rms must be finite and positive")
+        if cap_mode not in {"smooth_relative_rms", "legacy_v2"}:
+            raise ValueError("cap_mode must be smooth_relative_rms or legacy_v2")
         if inner_gate and not 0.0 < float(gate_init) < 1.0:
             raise ValueError("gate_init must lie in (0,1)")
         if output_init not in {"zero", "tiny_rms_1e-3"}:
@@ -129,6 +132,7 @@ class SemanticReader(nn.Module):
         self.value_source = value_source
         self.semantic_prior_scale = float(semantic_prior_scale)
         self.max_relative_rms = float(max_relative_rms)
+        self.cap_mode = str(cap_mode)
         self.inner_gate = bool(inner_gate)
         self.output_init = output_init
         self._tiny_calibrated = False
@@ -151,6 +155,23 @@ class SemanticReader(nn.Module):
     def _source_norm(memory: torch.Tensor) -> torch.Tensor:
         return F.rms_norm(memory.float(), (memory.shape[-1],))
 
+    @staticmethod
+    def _project(layer: nn.Linear, values: torch.Tensor) -> torch.Tensor:
+        """Run a projection after matching the layer dtype, then expose FP32."""
+
+        return layer(values.to(dtype=layer.weight.dtype)).float()
+
+    def _cap_residual(self, delta: torch.Tensor, hidden: torch.Tensor) -> torch.Tensor:
+        if self.cap_mode == "smooth_relative_rms":
+            return smooth_relative_rms_cap(delta, hidden, self.max_relative_rms)
+        cap = (
+            self.max_relative_rms
+            * torch.linalg.vector_norm(hidden.float(), dim=-1, keepdim=True)
+            / math.sqrt(hidden.shape[-1])
+        )
+        denominator = torch.sqrt(cap.square() + delta.float().square().mean(dim=-1, keepdim=True) + 1.0e-12)
+        return delta.float() * cap / denominator
+
     def prepare(
         self,
         *,
@@ -172,8 +193,8 @@ class SemanticReader(nn.Module):
         key_memory = H0 if self.key_source == "H0" else M
         key_norm = self._source_norm(key_memory)
         value_norm = self._source_norm(H0)
-        keys = _rms_norm(self.key(key_norm))
-        values = self.value(value_norm).float()
+        keys = _rms_norm(self._project(self.key, key_norm))
+        values = self._project(self.value, value_norm)
         return SemanticState(
             keys,
             values,
@@ -195,7 +216,7 @@ class SemanticReader(nn.Module):
             raise ValueError("hidden must be [B,T,D]")
         if hidden.shape[0] != state.key_memory.shape[0] or hidden.shape[-1] != self.hidden_size:
             raise ValueError("hidden batch/width does not match semantic state")
-        query = self.query(_rms_norm(hidden)).float()
+        query = self._project(self.query, _rms_norm(hidden))
         scores = torch.matmul(query, state.key_memory.float().transpose(-1, -2)) / math.sqrt(self.rank)
         scores = scores + float(state.prior_scale) * state.source_bias.float()[:, None, :]
         log_attention, attention = _masked_softmax(scores, state.source_mask)
@@ -204,9 +225,9 @@ class SemanticReader(nn.Module):
         if self.gate is None:
             gate = torch.ones_like(normalized_context[..., :1])
         else:
-            gate = torch.sigmoid(self.gate(torch.cat((query, normalized_context), dim=-1))).float()
-        delta_raw = gate * self.output(normalized_context).float()
-        delta = smooth_relative_rms_cap(delta_raw, hidden, self.max_relative_rms)
+            gate = torch.sigmoid(self._project(self.gate, torch.cat((query, normalized_context), dim=-1)))
+        delta_raw = gate * self._project(self.output, normalized_context)
+        delta = self._cap_residual(delta_raw, hidden)
         evidence = state.source_mask.any(dim=-1)[:, None, None].float()
         delta = delta * evidence
         hs = (hidden.float() + delta).to(hidden.dtype)
@@ -233,7 +254,7 @@ class SemanticReader(nn.Module):
 
         if target_ratio <= 0 or not math.isfinite(float(target_ratio)):
             raise ValueError("target_ratio must be finite and positive")
-        raw = self.output(context.float())
+        raw = self._project(self.output, context.float())
         numerator = float(rms(raw).mean())
         denominator = float(rms(hidden).mean())
         if numerator <= 0.0 or denominator <= 0.0:
@@ -241,7 +262,7 @@ class SemanticReader(nn.Module):
         scale = float(target_ratio) * denominator / numerator
         self.output.weight.mul_(scale)
         self._tiny_calibrated = True
-        measured = float(rms(self.output(context.float())).mean() / rms(hidden).mean().clamp_min(1e-12))
+        measured = float(rms(self._project(self.output, context.float())).mean() / rms(hidden).mean().clamp_min(1e-12))
         return measured
 
 

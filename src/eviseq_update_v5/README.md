@@ -49,6 +49,8 @@ Temperature/top-p chỉ dùng cho sampled generation/candidates, không dùng be
 
 - `v5.1-zero-parity`: endpoint/smoke của công thức main, `K=H0,V=H0`, `Wo=0`.
 - `v5.1-tiny`: candidate training, `Wo` init correction khoảng `1e-3×RMS(h)` theo calibration batch cố định không dùng label.
+- `semantic_only_v2`: control legacy dùng `readout_mode=legacy_v2`, cap v2,
+  inner gate `.05` và output projection zero để đối chiếu công bằng với v2.
 - `v5.1-independent`: capped three-way simplex có base floor/copy feature.
 - `v5.1-KM`: `K=M,V=H0`, source prior giảm/tắt để kiểm tra double-focus.
 - `hidden-interpolation`: cùng reader nhưng fusion trong hidden.

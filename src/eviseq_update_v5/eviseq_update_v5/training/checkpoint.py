@@ -78,6 +78,7 @@ def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
                 "value_source": semantic["value_source"],
                 "semantic_prior_scale": float(semantic["semantic_prior_scale"]),
                 "max_relative_rms": float(semantic["max_relative_rms"]),
+                "cap_mode": semantic.get("cap_mode", "smooth_relative_rms"),
                 "inner_gate": bool(semantic["inner_gate"]),
                 "output_init": semantic["output_init"],
             },

@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from eviseq_update_v5.config import config_fingerprint, load_config
+from eviseq_update_v5.config import config_fingerprint, load_config, validate_config
 from eviseq_update_v5.data.sampling import CanonicalBatchManifest, DistributedBatchSampler, materialize_global_batches
 from eviseq_update_v5.evaluation.generate import _sample_token
 from eviseq_update_v5.evaluation.provenance import ensure_evaluation_manifest
@@ -22,6 +22,27 @@ def test_smoke_config_is_strict_and_local():
     assert config["decoder"]["grounded_copy"]["semantic_read"]["rank"] == 8
     assert config_fingerprint(config) == config["_meta"]["config_fingerprint"]
     assert architecture_spec(config)["graph_version"].startswith("eviseq_v51")
+
+
+def test_v2_control_config_is_an_explicit_legacy_endpoint():
+    config = load_config(ROOT / "configs" / "afmr_semantic_only_v2.yaml")
+    copy_config = config["decoder"]["grounded_copy"]
+    semantic = copy_config["semantic_read"]
+    assert copy_config["enabled"] is True
+    assert copy_config["readout_mode"] == "legacy_v2"
+    assert semantic["inner_gate"] is True
+    assert semantic["output_init"] == "zero"
+    assert semantic["cap_mode"] == "legacy_v2"
+    spec = architecture_spec(config)
+    assert spec["grounded_copy"]["readout_mode"] == "legacy_v2"
+    assert spec["grounded_copy"]["semantic"]["cap_mode"] == "legacy_v2"
+
+
+def test_config_rejects_invalid_cross_gate_bounds():
+    config = load_config(ROOT / "configs" / "afmr_smoke.yaml")
+    config["decoder"]["cross_gate_init"] = 1.0
+    with pytest.raises(ValueError, match="cross_gate_init"):
+        validate_config(config)
 
 
 def test_pubmed_runner_fails_fast_without_downloading_models():

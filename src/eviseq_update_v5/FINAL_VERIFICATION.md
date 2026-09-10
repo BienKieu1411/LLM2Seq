@@ -5,8 +5,9 @@
 **Kết luận:** v5.1 đã tích hợp các đường mạnh cốt lõi của `eviseq_new` và
 `update_v2`, đồng thời đặt cơ chế trực tiếp để xử lý hai đánh đổi chính của
 v2: semantic residual có thể làm mất base vocabulary signal và semantic mass
-bị nested gate giới hạn khi copy gate lớn. Package đã có implementation và
-CPU/tiny acceptance tests; chưa có CUDA/DDP run, checkpoint PubMed hoặc
+bị nested gate giới hạn khi copy gate lớn. Package đã có implementation,
+explicit v2 control và CPU/tiny acceptance tests; chưa có CUDA/DDP run,
+checkpoint PubMed hoặc
 prediction nên chưa thể xác nhận tác động lên ROUGE.
 
 `PLAN_ARCHITECTURE_REVIEW.md` được giữ nguyên như review lịch sử. Các công thức/acceptance đã sửa trong [DESIGN.md](DESIGN.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [EVALUATION_PLAN.md](EVALUATION_PLAN.md) và report này.
@@ -21,10 +22,10 @@ prediction nên chưa thể xác nhận tác động lên ROUGE.
 | `new` | Vocabulary read trực tiếp từ `h` | `P0=softmax(W_lm h)` luôn còn trong mixture | Đã khóa; cần C1/C4 |
 | `new` | Copy gate `g` dễ bảo vệ thuật ngữ/số | `pi_copy=g` ở main; semantic không được đưa vào copy keys/values | Đã khóa; shared-trunk drift vẫn phải đo |
 | `update_v2` | Semantic source read độc lập với lexical copy | Flat reader rank 128, native source positions, copy/semantic API tách riêng | Đã khóa; cần C2 |
-| `update_v2` | Thứ tự RMS và source values đã có graph thực tế | `H0n=RMS(H0)`, `K=RMS(Wk(H0n))`, `V=Wv(H0n)`, context RMS | Đã khóa; cần reader test |
-| `update_v2` | Residual được bound theo hidden RMS | Giữ smooth relative RMS cap `rho=.10` | Đã khóa; cần numerical test |
+| `update_v2` | Thứ tự RMS và source values đã có graph thực tế | `H0n=RMS(H0)`, `K=RMS(Wk(H0n))`, `V=Wv(H0n)`, context RMS | Đã khóa; reader test pass |
+| `update_v2` | Residual được bound theo hidden RMS | Main giữ smooth relative RMS cap `rho=.10`; control legacy có cap v2 | Numerical test pass |
 | `update_v2` | Semantic có thể tăng xác suất token không xuất hiện nguyên dạng | `Ps=softmax(W_lm(h+delta))` là branch vocabulary thứ hai | Đã khóa; tác động cần train |
-| `new` + `v2` | Log-domain copy likelihood ổn định | Ba branch dùng `log_softmax/logsumexp`, target không copy được có `lc=-inf` | Đã khóa; cần oracle |
+| `new` + `v2` | Log-domain copy likelihood ổn định | Ba branch dùng `log_softmax/logsumexp`, target không copy được có `lc=-inf` | Oracle test pass |
 
 Các điểm trên phù hợp với tiền lệ pointer-generator về việc tách copy khỏi vocabulary generation ([See et al.](https://aclanthology.org/P17-1099/)) và probability mixture ([Mixture of Softmaxes](https://arxiv.org/html/1711.03953v3)); vì vậy không được gọi từng thành phần riêng lẻ là novelty.
 
@@ -42,8 +43,8 @@ Các điểm trên phù hợp với tiền lệ pointer-generator về việc t�
 | Independent simplex dùng `logit(g)` sai prior | Dùng `log(1-g)` và `log(g)` với residual router zero-init | Khắc phục công thức; đã có numeric smoke |
 | Gradient copy bị diễn giải sai | Kiểm tra `dP/dg=Pcopy-P0`; log `dL/dg` riêng | Khắc phục acceptance |
 | DDP 1/2 GPU có thể khác token weighting | Canonical global-batch manifest và `loss_r=world_size*L_r/N_global` | Khắc phục contract; cần C9/C19 |
-| Scheduler stage-local làm thay đổi budget | Một global cosine schedule trên optimizer updates | Khắc phục plan; cần engine implementation |
-| Đánh giá có thể dùng prediction cũ | Checkpoint/config/split/decoder fingerprint trước cache reuse | Khắc phục plan; cần runtime implementation |
+| Scheduler stage-local làm thay đổi budget | Một global cosine schedule trên optimizer updates | Đã triển khai và có test |
+| Đánh giá có thể dùng prediction cũ | Checkpoint/config/split/decoder fingerprint trước cache reuse | Đã triển khai và có test |
 
 Ba ràng buộc `pi_copy=g`, `pi_base>=floor>0` và `pi_sem>0` không thể đồng thời đúng khi `g` gần một. Main ưu tiên giữ copy mass; independent simplex là control để đo lựa chọn ngược lại. Đây là trade-off được công khai, không phải lỗi chưa giải thích.
 

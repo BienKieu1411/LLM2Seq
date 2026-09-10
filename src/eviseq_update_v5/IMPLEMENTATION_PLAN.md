@@ -128,9 +128,10 @@ Config main:
 | `semantic_read.value_source` | `H0` | Không dùng `M` làm value |
 | `semantic_read.semantic_prior_scale` | `1.0` | `0.0` cho `v5.1-KM` mặc định |
 | `semantic_read.inner_gate` | `false` | `true` + `gate_init=.05` chỉ cho `semantic_only_v2` |
+| `semantic_read.cap_mode` | `smooth_relative_rms` | `legacy_v2` chỉ cho endpoint tái lập v2 |
 | `semantic_read.max_relative_rms` | `0.10` | Giữ cố định trong ablation routing |
 | `semantic_read.output_init` | `tiny_rms_1e-3` | `zero` chỉ parity/smoke |
-| `readout.mode` | `copy_mass_preserving_capped_simplex` | `independent_capped_simplex`, `hidden_interpolation` |
+| `readout.mode` | `copy_mass_preserving_capped_simplex` | `legacy_v2`, `independent_capped_simplex`, `hidden_interpolation` |
 | `readout.alpha_max` | `0.20` | `0.10`, `0.50` validation-only |
 | `readout.generate_reserve` | `0.05` | `0.10`, `0.20`, `0.50` validation-only |
 | `readout.base_floor` | — | `0.05` chỉ cho independent simplex |

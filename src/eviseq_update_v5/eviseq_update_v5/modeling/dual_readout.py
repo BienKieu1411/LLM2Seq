@@ -136,6 +136,7 @@ class DualReadout(nn.Module):
     MODES = {
         "copy_mass_preserving_capped_simplex",
         "independent_capped_simplex",
+        "legacy_v2",
         "hidden_interpolation",
         "constant_alpha",
     }
@@ -190,6 +191,16 @@ class DualReadout(nn.Module):
         g: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         g_route = g.detach()
+        if self.mode == "legacy_v2":
+            # Reproduce v2's two-way mixture: once semantic evidence exists,
+            # its vocabulary branch receives all non-copy mass.  With no
+            # source evidence, preserve the base LM branch and the hard
+            # source-empty fallback used by the v2 copy head.
+            evidence_float = evidence.float().clamp(0.0, 1.0)
+            pi_copy = g
+            pi_sem = (1.0 - g) * evidence_float
+            pi_base = (1.0 - g) * (1.0 - evidence_float)
+            return pi_base, pi_sem, pi_copy, torch.zeros_like(pi_sem)
         if self.mode == "independent_capped_simplex":
             floor = torch.finfo(torch.float32).min
             residual = self.independent_router(features.float())
@@ -401,9 +412,9 @@ class DualReadout(nn.Module):
 
         hs = h.float() + float(self.hidden_lambda) * delta.float()
         zeros = h.new_zeros((*h.shape[:2], self.rank))
-        evidence = torch.zeros((*h.shape[:2], 1), device=h.device, dtype=h.dtype)
-        # This control tests hidden fusion alone; semantic probability mass is
-        # disabled explicitly, so it cannot be confused with the main route.
+        evidence = copy_state.mask.any(dim=-1)[:, None, None].expand(-1, h.shape[1], -1).to(dtype=h.dtype)
+        # This control uses the same copy gate but makes the hidden-fused
+        # vocabulary branch observable whenever a source candidate exists.
         return self.forward(
             h,
             hs.to(h.dtype),

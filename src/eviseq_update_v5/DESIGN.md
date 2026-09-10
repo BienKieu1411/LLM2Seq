@@ -86,7 +86,10 @@ có đạo hàm trơn ở vùng hoạt động; C5/C8 phải kiểm tra bound, f
 độ khớp dense/chunked. Null slot không nằm trong main; nếu cần, dùng value zero và evidence mass:
 
 Control `semantic_only_v2` phải bật lại đúng `semantic_gate_init=0.05` của v2
-để C2 là endpoint thật; `inner_gate=false` chỉ áp dụng cho main v5.1.
+để C2 là endpoint thật; `inner_gate=false` chỉ áp dụng cho main v5.1. Trong
+implementation, control này dùng `readout_mode=legacy_v2`,
+`semantic_read.cap_mode=legacy_v2`, `inner_gate=true` và `output_init=zero`;
+cap legacy giữ đúng công thức v2, còn main dùng cap trơn ở trên.
 
 Endpoint này phải tái tạo đúng graph v2, không chỉ đặt một flag tên tương tự:
 

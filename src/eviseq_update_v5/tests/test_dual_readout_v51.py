@@ -62,6 +62,35 @@ def test_zero_semantic_endpoint_matches_legacy_copy_mixture():
     assert torch.allclose(result.probability.sum(-1), torch.ones(1, 1), atol=1e-6)
 
 
+def test_legacy_v2_mode_uses_semantic_branch_for_non_copy_mass():
+    state, read = _copy_inputs()
+    hidden = torch.randn(1, 1, 6)
+    semantic_hidden = hidden + 0.25 * torch.randn_like(hidden)
+    lm_head = torch.nn.Linear(6, 8, bias=False)
+    readout = DualReadout(6, rank=3, mode="legacy_v2", alpha_max=0.2, alpha_init=0.05)
+    result = readout(
+        hidden,
+        semantic_hidden,
+        {"q": torch.zeros(1, 1, 3), "u": torch.zeros(1, 1, 3), "evidence": torch.ones(1, 1, 1)},
+        read,
+        state,
+        lm_head,
+    )
+    z0 = lm_head(hidden).float()
+    zs = lm_head(semantic_hidden).float()
+    log_p0 = z0 - torch.logsumexp(z0, dim=-1, keepdim=True)
+    log_ps = zs - torch.logsumexp(zs, dim=-1, keepdim=True)
+    log_pcopy = GroundedCopyHead.copy_log_prob(read, state, z0.shape[-1])
+    expected = torch.logaddexp(
+        log_ps + torch.nn.functional.logsigmoid(-read.raw_gate),
+        log_pcopy + torch.nn.functional.logsigmoid(read.raw_gate),
+    )
+    # v2 uses the legacy gate as copy mass and all remaining mass for its
+    # semantic vocabulary branch when source evidence is present.
+    assert torch.allclose(result.log_p, expected, rtol=1e-5, atol=1e-5)
+    assert not torch.allclose(result.log_ps, log_p0)
+
+
 def test_routes_use_simplex_and_empty_source_falls_back_to_base():
     state, read = _copy_inputs(active=False)
     read = CopyRead(
@@ -172,6 +201,16 @@ def test_independent_control_preserves_copy_prior_and_base_floor():
     assert torch.allclose(result.pi_base + result.pi_sem + result.pi_copy, torch.ones_like(result.pi_base), atol=1e-6)
     assert result.pi_copy.item() > result.pi_sem.item()
     assert result.pi_base.item() >= 0.05
+
+
+def test_hidden_interpolation_control_is_observable():
+    state, read = _copy_inputs()
+    hidden = torch.randn(1, 1, 6)
+    lm_head = torch.nn.Linear(6, 8, bias=False)
+    readout = DualReadout(6, rank=3, mode="hidden_interpolation", hidden_lambda=1.0)
+    zero = readout.hidden_interpolation_state(hidden, torch.zeros_like(hidden), read, state, lm_head)
+    shifted = readout.hidden_interpolation_state(hidden, torch.ones_like(hidden), read, state, lm_head)
+    assert not torch.allclose(zero.output_logits, shifted.output_logits)
 
 
 def test_dense_and_shared_loss_kernel_agree():

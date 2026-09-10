@@ -6,4 +6,15 @@ experiment:
 
 decoder:
   grounded_copy:
-    enabled: false
+    enabled: true
+    readout_mode: legacy_v2
+    semantic_read:
+      enabled: true
+      key_source: H0
+      value_source: H0
+      semantic_prior_scale: 1.0
+      max_relative_rms: 0.10
+      cap_mode: legacy_v2
+      inner_gate: true
+      gate_init: 0.05
+      output_init: zero

@@ -273,6 +273,10 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("decoder.initialize_cross_from_self must be true")
     if not isinstance(decoder.get("query_cross_gate", False), bool):
         raise ValueError("decoder.query_cross_gate must be boolean")
+    cross_gate_init = _finite_positive(decoder.get("cross_gate_init", 0.10), "decoder.cross_gate_init")
+    cross_gate_max = _finite_positive(decoder.get("cross_gate_max", 1.0), "decoder.cross_gate_max")
+    if not cross_gate_init < cross_gate_max <= 1.0:
+        raise ValueError("Require 0 < decoder.cross_gate_init < cross_gate_max <= 1")
     _finite_positive(decoder.get("attention_dropout", 0.0), "decoder.attention_dropout", allow_zero=True)
     if float(decoder.get("attention_dropout", 0.0)) >= 1.0:
         raise ValueError("decoder.attention_dropout must be below 1")
@@ -312,6 +316,7 @@ def validate_config(config: dict[str, Any]) -> None:
     modes = {
         "copy_mass_preserving_capped_simplex",
         "independent_capped_simplex",
+        "legacy_v2",
         "hidden_interpolation",
         "constant_alpha",
     }
@@ -350,6 +355,7 @@ def validate_config(config: dict[str, Any]) -> None:
             "value_source",
             "semantic_prior_scale",
             "max_relative_rms",
+            "cap_mode",
             "inner_gate",
             "gate_init",
             "output_init",
@@ -364,6 +370,8 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("semantic_read must use key_source H0/M and value_source H0")
     _finite_positive(semantic.get("semantic_prior_scale", 1.0), "semantic_read.semantic_prior_scale", allow_zero=True)
     _finite_positive(semantic.get("max_relative_rms", 0.10), "semantic_read.max_relative_rms")
+    if semantic.get("cap_mode", "smooth_relative_rms") not in {"smooth_relative_rms", "legacy_v2"}:
+        raise ValueError("semantic_read.cap_mode must be smooth_relative_rms or legacy_v2")
     if not isinstance(semantic.get("inner_gate", False), bool):
         raise ValueError("semantic_read.inner_gate must be boolean")
     _finite_positive(semantic.get("gate_init", 0.05), "semantic_read.gate_init")
@@ -371,6 +379,17 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("semantic_read.gate_init must be below 1")
     if semantic.get("output_init") not in {"zero", "tiny_rms_1e-3"}:
         raise ValueError("semantic_read.output_init must be zero or tiny_rms_1e-3")
+    if copy_cfg.get("readout_mode") == "legacy_v2":
+        if not copy_cfg.get("enabled", False):
+            raise ValueError("legacy_v2 readout requires grounded_copy.enabled=true")
+        if not semantic.get("enabled", False):
+            raise ValueError("legacy_v2 readout requires semantic_read.enabled=true")
+        if not semantic.get("inner_gate", False) or semantic.get("output_init") != "zero":
+            raise ValueError("legacy_v2 readout requires inner_gate=true and output_init=zero")
+        if semantic.get("cap_mode") != "legacy_v2":
+            raise ValueError("legacy_v2 readout requires semantic_read.cap_mode=legacy_v2")
+    if copy_cfg.get("readout_mode") == "hidden_interpolation" and not semantic.get("enabled", False):
+        raise ValueError("hidden_interpolation requires semantic_read.enabled=true")
 
     training = config["training"]
     _setdefault_training(training)

@@ -1,7 +1,9 @@
-# Review và phản biện plan/kiến trúc EviSeq v5.1
+# Review lịch sử và phản biện plan/kiến trúc EviSeq v5.1
 
 Ngày: 2026-09-10.
-Phạm vi: `README.md`, `DESIGN.md`, `IMPLEMENTATION_PLAN.md`, `ARCHITECTURE_AUDIT.md`, `DECISION_REPORT.md`, `EVALUATION_PLAN.md`, `RESEARCH.md`, đối chiếu code `eviseq_new` và `eviseq_update` tại commit được audit (`88486a25`). Không có implementation v5.1, checkpoint hay prediction để đo ROUGE.
+Phạm vi: `README.md`, `DESIGN.md`, `IMPLEMENTATION_PLAN.md`, `ARCHITECTURE_AUDIT.md`, `DECISION_REPORT.md`, `EVALUATION_PLAN.md`, `RESEARCH.md`, đối chiếu code `eviseq_new` và `eviseq_update` tại commit được audit (`88486a25`). Tại thời điểm review chưa có implementation v5.1, checkpoint hay prediction để đo ROUGE; package hiện tại và bằng chứng triển khai nằm trong `IMPLEMENTATION_EVIDENCE.md` và `FINAL_VERIFICATION.md`.
+
+Các verdict “chưa sẵn sàng code” bên dưới là trạng thái trước implementation và được giữ như lịch sử phản biện, không phải trạng thái hiện tại của package.
 
 Review này không lặp lại quyết định đã chốt. Nó phản biện chỗ spec mâu thuẫn với code đang chạy, chỗ công thức không làm được điều nó tuyên bố, và chỗ protocol có thể biến một ablation thành claim giả.
 

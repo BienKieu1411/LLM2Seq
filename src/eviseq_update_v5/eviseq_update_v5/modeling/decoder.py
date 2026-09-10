@@ -303,6 +303,7 @@ class QwenCrossDecoder(nn.Module):
                     value_source=str(semantic_config.get("value_source", "H0")),
                     semantic_prior_scale=float(semantic_config.get("semantic_prior_scale", 1.0)),
                     max_relative_rms=float(semantic_config.get("max_relative_rms", 0.10)),
+                    cap_mode=str(semantic_config.get("cap_mode", "smooth_relative_rms")),
                     inner_gate=bool(semantic_config.get("inner_gate", False)),
                     gate_init=float(semantic_config.get("gate_init", 0.05)),
                     output_init=str(semantic_config.get("output_init", "tiny_rms_1e-3")),

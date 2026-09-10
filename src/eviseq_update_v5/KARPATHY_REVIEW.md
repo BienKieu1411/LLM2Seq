@@ -38,7 +38,8 @@ before the final verification run:
    rejected (`copy_entropy_feature`).
 
 The final local gate is the evidence in
-[`IMPLEMENTATION_EVIDENCE.md`](IMPLEMENTATION_EVIDENCE.md): 26 offline tests,
-the tiny train/evaluate/resume smoke, Ruff lint/format and runner dry-run all
-pass. CUDA/NCCL, PubMed ROUGE-1.5.5 and T5Gemma comparison remain registered
+[`IMPLEMENTATION_EVIDENCE.md`](IMPLEMENTATION_EVIDENCE.md): 31 offline tests,
+including BF16 projection, legacy-v2 and hidden-interpolation regressions, the
+tiny train/evaluate/resume smoke, Ruff lint/format and runner dry-run all pass.
+CUDA/NCCL, PubMed ROUGE-1.5.5 and T5Gemma comparison remain registered
 research gates rather than claims made by this local review.

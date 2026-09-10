@@ -51,6 +51,23 @@ def test_key_source_variant_changes_keys_but_values_stay_h0():
     assert not torch.allclose(state_h0.key_memory, state_m.key_memory)
 
 
+def test_bfloat16_reader_matches_projection_dtypes():
+    reader, h0, memory, mask, bias = _state()
+    reader = reader.to(dtype=torch.bfloat16)
+    state = reader.prepare(
+        H0=h0.to(dtype=torch.bfloat16),
+        M=memory.to(dtype=torch.bfloat16),
+        source_mask=mask,
+        source_bias=bias,
+    )
+    hidden = torch.randn(2, 3, 6, dtype=torch.bfloat16, requires_grad=True)
+    fused, diagnostics = reader.read(hidden, state)
+    assert fused.dtype == torch.bfloat16
+    assert torch.isfinite(fused.float()).all()
+    fused.float().sum().backward()
+    assert hidden.grad is not None and torch.isfinite(hidden.grad.float()).all()
+
+
 def test_semantic_state_reorder_is_exact():
     reader, h0, memory, mask, bias = _state()
     state = reader.prepare(H0=h0, M=memory, source_mask=mask, source_bias=bias)

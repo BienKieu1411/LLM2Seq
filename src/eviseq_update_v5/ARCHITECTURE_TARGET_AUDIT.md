@@ -5,7 +5,7 @@ Bảng xác minh ngắn gọn sau vòng review độc lập nằm tại
 
 Ngày audit: 2026-09-10
 Phạm vi: thiết kế v5.1, code nền `eviseq_new`/`eviseq_update`, giao thức train/eval PubMed và các giả thuyết dùng cho claim ROUGE.
-Trạng thái: **đặc tả đã được khóa ở mức thiết kế; chưa có implementation/checkpoint v5.1 và chưa có điểm ROUGE v5.1**.
+Trạng thái: **đây là snapshot thiết kế trước implementation; package v5.1 hiện đã có trên `main`, nhưng chưa có checkpoint hay điểm ROUGE v5.1**.
 
 ## 1. Trạng thái trích xuất và nguồn bằng chứng
 
@@ -18,10 +18,10 @@ Trạng thái: **đặc tả đã được khóa ở mức thiết kế; chưa c
 - Nguồn gốc về probability mixture, pointer-generator, residual initialization, summarization dynamics, T5Gemma 2 và các kiến trúc foundation model hiện đại.
 - Các nguyên tắc về likelihood, numerical stability, optimizer, regularization, sequence modeling và phương pháp thực nghiệm trong [Deep Learning](https://www.deeplearningbook.org/).
 
-Snapshot hiện tại là commit `88486a2`; working tree còn `Paper/README.md` và
-`Paper/main.pdf` đã sửa từ trước. Những thay đổi trong audit chỉ nằm ở
-`src/eviseq_update_v5`; vì folder này chưa được track nên `git diff --check`
-không tự quét các file mới, do đó đã chạy kiểm tra whitespace riêng.
+Snapshot code nền của audit là commit `88486a2`; `Paper/README.md` và
+`Paper/main.pdf` đã sửa từ trước. Package v5.1 hiện đã được track trên `main`;
+những thay đổi triển khai nằm trong `src/eviseq_update_v5` và được kiểm tra
+riêng bằng acceptance suite hiện hành.
 
 Các mục sau là phân loại bằng chứng:
 
@@ -426,4 +426,4 @@ Novelty hợp lệ chỉ có thể là decomposition cụ thể trong một summ
 
 ## 12. Giới hạn và điều kiện bác bỏ
 
-Audit này không tạo ra bằng chứng rằng v5.1 sẽ thắng. Hiện không có implementation/checkpoint/predictions v5.1, lịch sử baseline chưa có đủ resolved config, và local test v2 chưa collection được do môi trường thiếu `PyYAML`. Nếu C1/C2/C3 hoặc fixed-small-set fail, dừng train PubMed và sửa implementation. Nếu E không vượt common A/B sau ba seed, không thêm complexity để cứu claim; báo negative result và chuyển sang chẩn đoán source visibility, length, copy calibration hoặc objective ở vòng riêng.
+Audit này không tạo ra bằng chứng rằng v5.1 sẽ thắng. Snapshot ban đầu không có implementation/checkpoint/predictions; package hiện đã được dựng và có acceptance evidence trong `IMPLEMENTATION_EVIDENCE.md`, còn baseline lịch sử vẫn thiếu resolved config/predictions đầy đủ. Nếu C1/C2/C3 hoặc fixed-small-set fail, dừng train PubMed và sửa implementation. Nếu E không vượt common A/B sau ba seed, không thêm complexity để cứu claim; báo negative result và chuyển sang chẩn đoán source visibility, length, copy calibration hoặc objective ở vòng riêng.

@@ -65,6 +65,7 @@ decoder:
       value_source: H0
       semantic_prior_scale: 1.0
       max_relative_rms: 0.10
+      cap_mode: smooth_relative_rms
       inner_gate: false
       gate_init: 0.05
       output_init: tiny_rms_1e-3
