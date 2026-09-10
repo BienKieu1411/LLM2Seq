@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 import torch
+
 from eviseq_update_v5.config import load_config
 from eviseq_update_v5.modeling.model import EviSeqAFMR
 from eviseq_update_v5.runtime import _write_resolved_config, build_loaders, evaluate

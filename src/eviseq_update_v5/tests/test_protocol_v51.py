@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 import torch
+
 from eviseq_update_v5.config import config_fingerprint, load_config
 from eviseq_update_v5.data.sampling import CanonicalBatchManifest, DistributedBatchSampler, materialize_global_batches
 from eviseq_update_v5.evaluation.generate import _sample_token
