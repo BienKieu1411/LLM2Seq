@@ -1,9 +1,0 @@
-_base_: afmr_base.yaml
-
-experiment:
-  name: afmr_core_independent
-  output_dir: runs/afmr_core/independent
-
-decoder:
-  grounded_copy:
-    readout_mode: independent_capped_simplex

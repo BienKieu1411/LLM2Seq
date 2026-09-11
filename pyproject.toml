@@ -32,7 +32,7 @@ fixable = ["ALL"]
 unfixable = []
 
 [tool.ruff.lint.isort]
-known-first-party = ["afmr_core"]
+known-first-party = ["grounded_summary"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/*/tests/**/*.py" = ["I001"]

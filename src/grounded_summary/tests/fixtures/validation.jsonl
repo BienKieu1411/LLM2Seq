@@ -1,0 +1,2 @@
+{"id":"validation-0","text":["The river flooded the road.","Officials opened a shelter."],"summary":["The river flooded the road."],"label":[0],"preparation":"grounded_summary_unicode_greedy"}
+{"id":"validation-1","text":["The experiment used three groups.","Results favored the new method."],"summary":["Results favored the new method."],"label":[1],"preparation":"grounded_summary_unicode_greedy"}
