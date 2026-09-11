@@ -1,4 +1,22 @@
-from grounded_summary.data.sampling import DistributedBatchSampler, DistributedEvalSampler
+import pickle
+
+from grounded_summary.data.sampling import DistributedBatchSampler, DistributedCollator, DistributedEvalSampler
+
+
+class _PickleCollator:
+    include_targets = True
+
+    def __call__(self, rows):
+        return rows
+
+
+def test_distributed_collator_survives_spawn_pickle_roundtrip():
+    collator = DistributedCollator(_PickleCollator())
+    restored = pickle.loads(pickle.dumps(collator))
+
+    assert restored.include_targets is True
+    restored.include_targets = False
+    assert restored.collator.include_targets is False
 
 
 def test_distributed_batches_cover_each_example_once_with_last_placeholder():

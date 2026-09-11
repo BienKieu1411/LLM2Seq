@@ -109,13 +109,21 @@ class DistributedCollator:
 
     def __getattr__(self, name):
         # Runtime toggles include_targets after construction during evaluation.
-        return getattr(self.collator, name)
+        # During multiprocessing ``spawn`` unpickling, ``collator`` may not
+        # have been restored yet.  Fetch it through ``object`` so a missing
+        # attribute raises normally instead of recursively calling this
+        # method until the worker hits the recursion limit.
+        try:
+            collator = object.__getattribute__(self, "collator")
+        except AttributeError:
+            raise AttributeError(name) from None
+        return getattr(collator, name)
 
     def __setattr__(self, name, value):
-        if name == "collator":
+        if name == "collator" or "collator" not in self.__dict__:
             object.__setattr__(self, name, value)
         else:
-            setattr(self.collator, name, value)
+            setattr(object.__getattribute__(self, "collator"), name, value)
 
     def __call__(self, rows):
         batch = self.collator([record for record, _ in rows])
