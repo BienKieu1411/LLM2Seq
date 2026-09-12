@@ -1,0 +1,342 @@
+% Method and experiment design grounded in src/eviseq_new.
+
+\section{Method}
+\label{sec:method}
+
+\subsection{Problem setting and design goal}
+\label{sec:setting}
+
+Let $x=(x_1,\ldots,x_S)$ be a source document and
+$y=(y_1,\ldots,y_T)$ its reference summary.  The proposed system composes a
+pretrained source encoder with a pretrained causal decoder whose tokenizers,
+hidden widths, and pretraining objectives may differ.  The encoder produces a
+final hidden sequence $H^{(L)}\in\mathbb{R}^{S\times d_e}$ and a small set of
+intermediate sequences.  The decoder predicts $y_t$ from the causal prefix
+$y_{<t}$ and a source memory in its own width $d_d$.
+
+The interface has two requirements.  It must keep every source position that
+survives the configured tokenizer and length limit available to cross-attention,
+because hard source selection can remove an entity or a number needed later.
+It must also provide a controllable retrieval signal without rewriting the
+content representation so aggressively that a pretrained vocabulary head or a
+copy route loses its lexical anchor.  \EviSeq addresses these requirements with
+the \AFMR{} bridge.  The bridge returns one full source tensor for retrieval,
+one aligned final-state tensor for values, and one additive source prior.  The
+value tensor shares source positions with the retrieval tensor; there is no
+pruned or separately selected source bank and no target-derived evidence
+representation.
+
+\subsection{\AFMR interface}
+\label{sec:afmr-method}
+
+\paragraph{Controller.}
+The bridge summarizes the visible source and the fixed decoder instruction
+separately.  With $C\in\{0,1\}^S$ the source-content mask and
+$M_p\in\{0,1\}^{S_p}$ the prompt mask, we compute
+\begin{equation}
+  \begin{aligned}
+    \bar h&=\MaskedMean(H^{(L)},C),\\
+    \bar p&=\MaskedMean(P,M_p).
+  \end{aligned}
+\end{equation}
+where $P$ is obtained by looking up the decoder prompt tokens.  The two means
+are independently RMS-normalized, projected to a controller vector
+$c\in\mathbb{R}^{d_c}$, and combined with three features available at
+inference: the number $N=\sum_i C_i$ of visible content tokens, the requested
+output budget $K$, and their ratio.  Let $K_+=\max(K,0)$.  In the base profile
+$d_c=256$.  Define the inference-only budget vector
+\begin{equation*}
+  \phi(N,K)=\left[\begin{array}{c}
+    \log(1+N)\\[-1pt]
+    \log(1+K_+)\\[-1pt]
+    K_+/\max(N,1)
+  \end{array}\right].
+\end{equation*}
+Then
+\begin{equation}
+  \begin{aligned}
+    c&=\RMSNorm\!\big(W_h\RMSNorm(\bar h)\\[-2pt]
+      &\quad +W_p\RMSNorm(\bar p)\\[-2pt]
+      &\quad +\operatorname{MLP}(\phi(N,K))\big).
+  \end{aligned}
+  \label{eq:controller}
+\end{equation}
+The reference summary and its length are never used to construct $c$.
+
+\paragraph{Token-wise depth adaptation.}
+The default bridge exposes the final four encoder states.  For source position
+$i$ and tap $j$, let $\widetilde H_{i,j}$ be the independently RMS-normalized
+state.  A shared token scorer and a controller preference produce
+\begin{equation}
+  \begin{aligned}
+    \pi_{i,j}&=\Softmax_j\!\left(u_d^{\top}\widetilde H_{i,j}+(W_dc)_j\right),\\
+    D_i&=\sum_{j=1}^{4}\pi_{i,j}\widetilde H_{i,j}.
+  \end{aligned}
+  \label{eq:depth}
+\end{equation}
+The softmax is over depth for each source token, rather than over source
+positions.  A low-rank correction is applied around the final-state anchor:
+\begin{equation}
+  H_i^*=H_i^{(L)}+g_d(c)\,B_d\,\operatorname{SiLU}\!\left(A_d
+  [D_i-\widetilde H_{i,4}]\right),
+  \label{eq:depth-residual}
+\end{equation}
+where $A_d$ has the base-profile rank 128, $B_d$ is zero-initialized, and
+$g_d(c)=0.15\,\sigma(\cdot)$ is initialized at 0.02.  The zero output factor
+makes the initial memory equal to the final-state path while allowing gradients
+to reach the residual and, after an update, the depth scorer and router.
+
+\paragraph{Cross-space feature adaptation and value anchor.}
+The base map $\Pi$ is identity when $d_e=d_d$ and an orthogonally initialized
+trainable projection otherwise.  The retrieval memory is
+\begin{equation}
+  \begin{aligned}
+    Z_i&=\Pi(H_i^*)+G_f(c)\odot B_f\,\operatorname{SiLU}\\[-2pt]
+       &\quad\left(A_f\RMSNorm(H_i^*)\right),
+  \end{aligned}
+  \label{eq:feature}
+\end{equation}
+where $A_f,B_f$ form the base-profile rank-256 correction and the feature-wise gate
+$G_f(c)=0.20\,\sigma(\cdot)$ is initialized at 0.02.  Its output factor is also
+zero-initialized.  Independently, the value anchor is
+\begin{equation}
+  V_i^0=\Pi(H_i^{(L)}).
+  \label{eq:value-anchor}
+\end{equation}
+Thus $Z$ can learn a retrieval-friendly representation while $V^0$ retains the
+final encoder content.  This is a local graph constraint, not a claim that the
+values are immutable during full fine-tuning: shared encoder and projection
+parameters still receive gradients from both paths.
+
+\paragraph{Soft multi-scale source prior.}
+\AFMR retains all valid positions and constructs a relative prior from overlapping
+content-token windows with base-profile widths $\mathcal W=\{32,128,512\}$ and
+50\% overlap.  A task recipe may register a different capacity profile, but
+the resolved architecture and its dimensions are part of that run's manifest.
+For each window, a masked mean of $Z$ is scored using the controller and a
+scale embedding.  Scores are centered within a document and scale, lifted to
+tokens by overlap-add, and mixed across available scales.  The focus strength
+and temperature are bounded by
+\begin{equation}
+  \begin{aligned}
+    \lambda(c)&=1.0\,\sigma(w_\lambda^\top c+a_\lambda),\\
+    \tau(c)&=0.5+1.5\,\sigma(w_\tau^\top c+a_\tau).
+  \end{aligned}
+  \label{eq:focus-gates}
+\end{equation}
+The resulting score is $r_i=\lambda(c)\tanh(s_i/\tau(c))$.  On content
+positions $\mathcal C$, the source bias is centered by its log-mean-exp:
+\begin{equation}
+  \begin{aligned}
+    b_i&=r_i-\log\left(\frac{1}{|\mathcal C|}
+      \sum_{k\in\mathcal C}\exp r_k\right),\quad i\in\mathcal C,\\
+    b_i&=0\quad i\notin\mathcal C.
+  \end{aligned}
+  \label{eq:source-bias}
+\end{equation}
+Padding is masked separately by cross-attention.  This prior changes relative
+source preference but does not prune the memory or determine the final
+attention mass by itself.  All reductions in the focus path use FP32 before the
+bias is cast to the attention dtype.
+
+\subsection{Decoder source access and grounded copying}
+\label{sec:decoder-method}
+
+\paragraph{Copied cross-attention.}
+Every causal decoder layer keeps its pretrained self-attention and then applies
+a copied cross-attention block.  Query, key, value, output, and normalization
+projections are initialized from the corresponding self-attention modules.
+For layer $\ell$ and target position $t$,
+\begin{equation}
+  \begin{aligned}
+    h'_{\ell,t}&=h_{\ell,t}+g_\ell\,\mathcal A_{\ell,t},\\
+    g_\ell&=\sigma(\theta_\ell),
+  \end{aligned}
+  \label{eq:cross-attn}
+\end{equation}
+where $\mathcal A_{\ell,t}$ is multi-head attention with query
+$\RMSNorm(h_{\ell,t})$, keys from $Z$, values from $V^0$, additive bias $b$,
+and mask $M$.  The gate $g_\ell$ is initialized at 0.10 and bounded by 1.0.
+In expanded form, the attention logits contain
+$QK(Z)^\top/\sqrt{d_h}+b$ and the padding mask.
+The same source prior is supplied to every layer, but each layer has its own
+query and output.  During greedy generation, source keys and values are
+prepared once per layer and reused through the cache.
+
+\paragraph{Grounded copy and mixture likelihood.}
+The copy head uses fast-tokenizer character offsets to align visible source
+spans with decoder vocabulary tokens.  It pools contextual source keys,
+combines them with lexical decoder embeddings, and computes a decoder-query
+attention distribution over eligible aligned source-token rows
+$j\in\mathcal J$.  The source prior is pooled with the same offset weights into
+$\widetilde b_j$, so
+\begin{equation}
+  A^{\mathrm{copy}}_{t,j}=\Softmax_{j\in\mathcal J}\!\left(
+  \frac{q_t^{\top}k_j}{\sqrt{d_k}}+\widetilde b_j\right).
+  \label{eq:copy-attn}
+\end{equation}
+Repeated source occurrences are marginalized:
+\begin{equation}
+  P_{\mathrm{copy}}(v\mid t)=\sum_{j\in\mathcal J:\,\operatorname{tok}_j=v}
+  A^{\mathrm{copy}}_{t,j}.
+  \label{eq:copy}
+\end{equation}
+The learned gate $\rho_t$ mixes this distribution with the vocabulary head
+applied to the decoder hidden state:
+\begin{equation}
+  \begin{aligned}
+    P(y_t=v\mid y_{<t},x)&=\rho_tP_{\mathrm{copy}}(v\mid t)\\
+      &\quad +(1-\rho_t)P_{\mathrm{LM}}(v\mid h_t).
+  \end{aligned}
+  \label{eq:mixture}
+\end{equation}
+The copy gate is initialized at 0.05.  If no eligible source token is aligned,
+the LM logits are used exactly.  The alignment reads only the source and
+tokenizers; it does not read the reference summary or evidence labels.
+
+\subsection{Training, gradient flow, and inference parity}
+\label{sec:training-method}
+
+The main objective is the token-level negative log likelihood of the mixture:
+\begin{equation}
+  \mathcal L_{\mathrm{CE}}=-\sum_{t=1}^{T}
+  \log P(y_t\mid y_{<t},x).
+  \label{eq:objective}
+\end{equation}
+There is no contrastive, ranking, distillation, pseudo-reference, or
+self-improvement objective in the proposed graph.  During interface warm-up,
+the pretrained backbones are frozen while the bridge, copied cross-attention,
+and grounded copy parameters learn from the same loss.  Full fine-tuning then
+updates the encoder and decoder jointly.  Parameters, gradients, and AdamW
+states are stored in FP32; CUDA BF16 autocast is used for heavy operations.
+The implementation clips the global norm at the configured training threshold
+and computes cross-entropy in chunks to avoid retaining a full vocabulary-logit
+tensor.
+
+The live gradient route is
+\[
+\begin{aligned}
+\mathcal L_{\mathrm{CE}}&\rightarrow\{P_{\mathrm{LM}},P_{\mathrm{copy}}\}
+\rightarrow\{h_t,Z,V^0,b\}\\
+&\rightarrow\{\text{decoder},\text{AFMR},\text{encoder}\}.
+\end{aligned}
+\]
+No detach is placed on $Z$, $V^0$, $b$, the depth mixture, or the controller.
+The value-anchor separation therefore constrains the direct route from the
+retrieval residual to values, but it does not block encoder gradients.
+
+Teacher forcing and inference share the encoder, prompt embeddings, requested
+budget, \AFMR bridge, source memory, source prior, and copy alignment.  Official
+evaluation uses one beam, no sampling, and autoregressive argmax with
+\texttt{temperature=0}, \texttt{top\_k=0}, and \texttt{top\_p=1}; these fields remain available for a
+separate candidate-generation path but never alter training.  The encoder and
+bridge run once per example, and cached cross-attention states advance with the
+generated prefix.
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Research questions and comparisons}
+\label{sec:rqs}
+
+The evaluation follows one chain across \PubMed, \ArXiv, \BookSum, and
+\GovReport.  RQ1 compares \EviSeq with fine-tuned decoder-only controls on
+source support.  RQ2 compares the same systems and \TfiveGemma on overlap and
+semantic quality.  RQ3 uses train-from-pretrained ablations with a fixed
+decoder: (i) no encoder, implemented as a decoder-only source-prefix control;
+(ii) no \AFMR bridge, using the direct final-state projection with zero source
+prior; and (iii) no grounded copy, using the complete \AFMR and decoder path but
+the vocabulary head alone.  RQ4 holds the decoder and interface fixed while
+replacing the anchor encoder \PPLXEmbed with \QwenCausal, \QwenEmbed, and
+\NemotronEmbed.  Every RQ includes all four datasets; missing manifests or
+failed runs remain explicitly missing rather than being replaced by a score
+from another split.
+
+The decoder-only comparison suite comprises \QwenZeroSix, \QwenFour,
+\QwenEight, \LlamaThreeTwoThree, \LlamaThreeEight, \NemotronThree, and
+\NemotronEight.  Each model is fine-tuned locally on the same source--target
+records.  \TfiveGemma is also fine-tuned on each dataset and is treated as an
+encoder--decoder reference, not as a prompt-only system.  For an ablation or
+encoder-transfer row, all non-target components and optimization budgets are
+held fixed; the full baseline suite is reserved for the main RQ1/RQ2 tables.
+
+\subsection{Datasets and preprocessing}
+\label{sec:datasets}
+
+\PubMed contains biomedical articles paired with abstracts; \ArXiv contains
+scientific papers paired with abstracts; \BookSum contains long narrative
+documents with human-written summaries at multiple granularities
+\citep{kryscinski2022booksum}; and \GovReport contains long U.S. government
+reports with expert-written summaries \citep{huang2021efficient}.  The official split and task variant for each dataset will be
+recorded in a manifest.  The current repository has canonical JSONL preparation
+for \PubMed and \ArXiv; the \BookSum and \GovReport manifests and field mapping
+are pending and therefore cannot support a completed score in this draft.
+
+Each record is normalized to \texttt{id}, \texttt{text}, and \texttt{summary}.  The encoder receives
+a fixed task prefix followed by the source and a tokenizer-specific special
+sequence.  The content mask excludes the prefix, special tokens, and padding
+from depth and focus calculations.  The decoder instruction is fixed per task,
+is tokenized once, and is excluded from supervised labels.  Source and target
+length limits are selected per dataset and shared by every model in that
+dataset; truncation counts are reported.  No reference text is passed to the
+model at inference.
+
+\subsection{Metrics and statistical analysis}
+\label{sec:metrics}
+
+Primary quality is ROUGE-1, ROUGE-2, and ROUGE-L F1 using one Perl
+ROUGE-1.5.5 wrapper and the same preprocessing for all systems
+\citep{lin2004rouge}.  Python ROUGE-1.0.0 is retained only for debugging and is
+never combined with the primary values.  BERTScore-F1 is the secondary
+headline semantic-similarity measure, with precision and recall as diagnostics
+\citep{zhang2020bertscore}; the evaluator loads its backbone from a local path
+and fails rather than downloading an alternative.
+
+RQ1 uses the native consistency output of the local AlignScore \texttt{nli\_sp}
+procedure.  For example $i$, source chunks are paired with each generated
+claim sentence, the strongest support is retained for each claim, and the
+claim scores are averaged to obtain $C_i=\AlignScore_{\texttt{nli\_sp}}(x_i,y_i)$
+\citep{zha-etal-2023-alignscore}.  The dataset estimate is the mean of $C_i$;
+higher native consistency is preferred.  For readability we may also display
+$H_i=1-C_i$ and its dataset mean as a lower-is-better, direction-transformed
+hallucination-oriented value.  This transform is not a probability or a
+calibrated percentage of hallucinated content.  AlignScore and BERTScore are
+reported with their model/checkpoint identifiers, maximum pair length,
+chunking, and sentence splitter.
+
+For every paired comparison, we will compute a 95\% paired bootstrap interval
+over identical test IDs and report the number of examples.  A dataset-level
+estimate is the mean over its examples; the secondary four-dataset macro
+estimate is the unweighted mean of the four dataset-level effects, with a
+dataset-aware interval.  Dataset rows are reported first and a macro value is
+left pending whenever a dataset is missing.  One primary endpoint is
+pre-registered per research question; remaining metrics and model contrasts are
+exploratory unless a multiplicity adjustment is specified.  We will also
+record generated and reference lengths, length ratio, empty and truncated
+outputs, repeated-trigram rate, unique-output rate, source-copy rate, and (when
+available) a manually audited factual-error subset.  These diagnostics prevent
+an apparent factuality gain from being explained solely by shorter or empty
+outputs.
+
+\subsection{Fairness, implementation, and reporting}
+\label{sec:fairness}
+
+All main models use the same split IDs, source and target budgets, preprocessing,
+seed policy, optimizer family, number of effective training examples, and
+greedy decoding constraints within a dataset.  Each model's native source and
+decoder input serialization is recorded explicitly; a shared task instruction
+does not imply identical tokenization or chat-template behavior.  The AFMR
+recipe uses an interface warm-up followed by full fine-tuning; the number of
+optimizer updates is matched to the corresponding baseline rather than inferred
+from wall-clock time.  The reported checkpoint is \texttt{last.pt}; no test
+score selects a best checkpoint.  Batch size and accumulation are recorded per
+model and dataset so that the effective batch is explicit.
+
+The experiment manifest will include local model paths or immutable revisions,
+tokenizer special IDs, prompts, source/target limits, seeds, parameter counts
+(total and trainable), precision, software versions, GPU type, peak VRAM,
+training time, generation time, failed runs, and output file checksums.  A score
+cell is valid only when its prediction manifest and metric JSON agree on the
+dataset split, example IDs, checkpoint, tokenizer, scorer, and decoding
+settings.  The four-dataset tables in Section~\ref{sec:results} intentionally
+remain blank until these checks pass.

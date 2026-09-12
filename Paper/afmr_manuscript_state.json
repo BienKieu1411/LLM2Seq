@@ -1,0 +1,475 @@
+{
+  "schema_version": "1.1",
+  "project": {
+    "id": "afmr_question_paper",
+    "title": "Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?",
+    "archetype": "empirical",
+    "study_designs": [
+      "AI and LLM study",
+      "computational experiment",
+      "ablation study"
+    ],
+    "lifecycle_stage": "exploratory_draft",
+    "review_maturity": "developmental",
+    "target_venue": "ACL-style NLP venue (not selected)",
+    "active_release": "working"
+  },
+  "artifacts": [
+    {
+      "id": "main",
+      "path": "Paper/afmr_question.tex",
+      "role": "main_manuscript",
+      "status": "ACTIVE",
+      "required_for_release": true
+    },
+    {
+      "id": "story",
+      "path": "Paper/afmr_story_spec.md",
+      "role": "argument_and_evidence_contract",
+      "status": "ACTIVE",
+      "required_for_release": true
+    },
+    {
+      "id": "bib",
+      "path": "Paper/afmr_question.bib",
+      "role": "bibliography",
+      "status": "REFERENCE",
+      "required_for_release": true
+    },
+    {
+      "id": "reviews",
+      "path": "Paper/reviews",
+      "role": "review_memos",
+      "status": "PLANNED",
+      "required_for_release": false
+    }
+  ],
+  "authority_sources": [
+    {
+      "id": "eviseq_new_code",
+      "kind": "verified_primary_evidence",
+      "path_or_reference": "src/eviseq_new",
+      "scope": [
+        "architecture",
+        "tensor contracts",
+        "training",
+        "inference"
+      ],
+      "status": "VERIFIED",
+      "last_verified": "2026-09-12"
+    },
+    {
+      "id": "afmr_plan",
+      "kind": "verified_primary_evidence",
+      "path_or_reference": "Technical_Report/AFMR_IMPLEMENTATION_PLAN.md",
+      "scope": [
+        "design rationale",
+        "equations",
+        "evaluation contract",
+        "nonclaims"
+      ],
+      "status": "VERIFIED",
+      "last_verified": "2026-09-12"
+    },
+    {
+      "id": "factuality_report",
+      "kind": "verified_primary_evidence",
+      "path_or_reference": "Technical_Report/FACTUALITY_EVALUATION.md",
+      "scope": [
+        "AlignScore",
+        "BERTScore",
+        "metric limits"
+      ],
+      "status": "VERIFIED",
+      "last_verified": "2026-09-12"
+    },
+    {
+      "id": "evaluation_report",
+      "kind": "verified_primary_evidence",
+      "path_or_reference": "Technical_Report/FACTUALITY_EVALUATION.md",
+      "scope": [
+        "metric protocol and limits"
+      ],
+      "status": "VERIFIED",
+      "last_verified": "2026-09-12"
+    }
+  ],
+  "contract": {
+    "gap": "A width-matching adapter does not specify how an independently pretrained encoder and causal decoder should allocate source information while preserving lexical evidence.",
+    "task": "Design and evaluate a full-memory source-grounded interface for long-document summarization.",
+    "outcomes": [
+      "ROUGE-1/2/L F1",
+      "AlignScore nli_sp consistency",
+      "H=1-C direction transform",
+      "BERTScore-F1",
+      "length/repetition/copy diagnostics",
+      "latency and memory"
+    ],
+    "questions": [
+      {
+        "id": "RQ1",
+        "text": "Does EviSeq reduce a source-unsupported-content signal relative to fine-tuned decoder-only LLMs on four datasets, operationalized by AlignScore consistency and H=1-C? A typed entity/number/relation error claim requires a separate adjudicated audit.",
+        "lock": "SEMANTIC"
+      },
+      {
+        "id": "RQ2",
+        "text": "How does EviSeq affect ROUGE-1/2/L F1 and BERTScore-F1 relative to fine-tuned decoder-only controls and T5Gemma2 under matched records, budgets, preprocessing, and decoding, with native input serialization documented, on PubMed, ArXiv, BookSum, and GovReport?",
+        "lock": "SEMANTIC"
+      },
+      {
+        "id": "RQ3",
+        "text": "Which of the encoder, AFMR bridge, and grounded-copy route contributes to the observed behavior under the registered decoder and training protocol?",
+        "lock": "SEMANTIC"
+      },
+      {
+        "id": "RQ4",
+        "text": "Does the interface transfer across the registered causal and embedding encoders, and what quality/factuality differences are observed under their directionality and capacity confounds?",
+        "lock": "SEMANTIC"
+      }
+    ],
+    "contribution": "A constrained full-memory interface and a reproducible four-question evaluation contract for composing pretrained encoder and decoder checkpoints; empirical gains remain pending.",
+    "nonclaims": [
+      "No measured ROUGE or factuality improvement is claimed before the locked runs.",
+      "AFMR is not a factuality guarantee or calibrated hallucination probability.",
+      "The paper does not claim novelty for copied cross-attention, pointer generation, or generic pretrained model composition."
+    ]
+  },
+  "semantic_locks": [
+    {
+      "id": "title_question",
+      "kind": "EXACT",
+      "canonical": "Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?",
+      "required_roles": [
+        "main_manuscript"
+      ],
+      "forbidden_variants": []
+    },
+    {
+      "id": "architecture_name",
+      "kind": "SEMANTIC",
+      "canonical": "Adaptive Full-Memory Residual (AFMR) interface",
+      "required_roles": [
+        "method",
+        "abstract",
+        "conclusion"
+      ],
+      "forbidden_variants": [
+        "EviSeq v3",
+        "EviSeq update"
+      ]
+    },
+    {
+      "id": "base_code",
+      "kind": "SEMANTIC",
+      "canonical": "src/eviseq_new is the proposed architecture authority",
+      "required_roles": [
+        "method",
+        "experiments"
+      ],
+      "forbidden_variants": [
+        "src/eviseq_update_v2 as the proposed method"
+      ]
+    }
+  ],
+  "terminology": [
+    {
+      "id": "architecture",
+      "preferred": "AFMR",
+      "prohibited": [
+        "AFMR v3",
+        "update_v2"
+      ]
+    },
+    {
+      "id": "system",
+      "preferred": "EviSeq",
+      "prohibited": [
+        "EviSeq v3"
+      ]
+    },
+    {
+      "id": "factuality_metric",
+      "preferred": "AlignScore consistency",
+      "prohibited": [
+        "BERTScore hallucination score"
+      ]
+    },
+    {
+      "id": "quality_metric",
+      "preferred": "ROUGE-1/2/L F1",
+      "prohibited": [
+        "ROUGE score"
+      ]
+    }
+  ],
+  "style_profile": {
+    "language_variant": "English (US spelling)",
+    "protected_terms": [
+      "AFMR",
+      "EviSeq",
+      "AlignScore",
+      "BERTScore",
+      "ROUGE-1.5.5",
+      "T5Gemma2"
+    ],
+    "discouraged_phrases": [
+      "state of the art",
+      "genuinely",
+      "it is worth noting",
+      "we leverage",
+      "this is not about"
+    ],
+    "preferred_open_compounds": [],
+    "allowed_repetitions": [
+      "EviSeq",
+      "AFMR",
+      "AlignScore",
+      "ROUGE"
+    ],
+    "sentence_opening_words": 4,
+    "phrase_words": 5,
+    "phrase_min_occurrences": 3
+  },
+  "facts": [
+    {
+      "id": "base_encoder",
+      "value": "PPLX-Embed v1 0.6B (local checkpoint in the active eviseq_new recipe)",
+      "source_id": "eviseq_new_code",
+      "expected_strings": [
+        "PPLX"
+      ],
+      "forbidden_strings": [],
+      "scope_roles": [
+        "method",
+        "experiments"
+      ]
+    },
+    {
+      "id": "base_decoder",
+      "value": "Qwen3-0.6B causal decoder (local checkpoint in the PubMed recipe)",
+      "source_id": "eviseq_new_code",
+      "expected_strings": [
+        "Qwen3",
+        "0.6B"
+      ],
+      "forbidden_strings": [],
+      "scope_roles": [
+        "method",
+        "experiments"
+      ]
+    },
+    {
+      "id": "objective",
+      "value": "gold-token mixture cross-entropy only",
+      "source_id": "afmr_plan",
+      "expected_strings": [
+        "cross-entropy"
+      ],
+      "forbidden_strings": [
+        "contrastive loss",
+        "R-Drop",
+        "NEFTune"
+      ],
+      "scope_roles": [
+        "method",
+        "experiments"
+      ]
+    },
+    {
+      "id": "scores_pending",
+      "value": "Four-dataset quality and factuality scores are unavailable at draft time",
+      "source_id": "evaluation_report",
+      "expected_strings": [
+        "pending",
+        "not yet"
+      ],
+      "forbidden_strings": [
+        "outperforms",
+        "reduces hallucination"
+      ],
+      "scope_roles": [
+        "abstract",
+        "results",
+        "conclusion"
+      ]
+    }
+  ],
+  "alignment": [
+    {
+      "question_id": "RQ1",
+      "method": "AlignScore nli_sp consistency on source--summary pairs; H=1-C is a direction transform, and a typed-error audit is required for direct entity/number/relation claims",
+      "evidence": "Held-out predictions for EviSeq and fine-tuned decoder-only controls on PubMed, ArXiv, BookSum, GovReport",
+      "result": "PENDING",
+      "interpretation": "PENDING; report as a proxy signal rather than a calibrated hallucination rate",
+      "limitation": "AlignScore is a proxy and 1-AlignScore is not a calibrated probability",
+      "contribution": "PENDING",
+      "status": "PLANNED"
+    },
+    {
+      "question_id": "RQ2",
+      "method": "ROUGE-1/2/L F1 and BERTScore-F1 under matched records, budgets, preprocessing, decoding, and explicit native input serialization",
+      "evidence": "Scorer-locked predictions and paired bootstrap intervals",
+      "result": "PENDING",
+      "interpretation": "PENDING",
+      "limitation": "Overlap and embedding metrics do not establish factual correctness",
+      "contribution": "PENDING",
+      "status": "PLANNED"
+    },
+    {
+      "question_id": "RQ3",
+      "method": "No-encoder, no-bridge, and no-grounded-copy component-contribution ablations with the same decoder and budget",
+      "evidence": "Four-dataset ablation predictions and component diagnostics",
+      "result": "PENDING",
+      "interpretation": "PENDING",
+      "limitation": "Ablations can reveal necessity under the selected interface but not universal causality",
+      "contribution": "PENDING",
+      "status": "PLANNED"
+    },
+    {
+      "question_id": "RQ4",
+      "method": "Encoder-transfer matrix with PPLX, Qwen causal, Qwen embedding, and Nemotron embedding encoders",
+      "evidence": "Matched training/evaluation runs and hidden-width/parameter reports",
+      "result": "PENDING",
+      "interpretation": "PENDING",
+      "limitation": "Encoder pretraining and directionality remain partly confounded",
+      "contribution": "PENDING",
+      "status": "PLANNED"
+    }
+  ],
+  "dimensions": [
+    {
+      "id": "rq_dataset_coverage",
+      "values": [
+        "RQ1",
+        "RQ2",
+        "RQ3",
+        "RQ4"
+      ],
+      "required_fields": [
+        "PubMed",
+        "ArXiv",
+        "BookSum",
+        "GovReport"
+      ],
+      "coverage": []
+    },
+    {
+      "id": "outcome_coverage",
+      "values": [
+        "main comparison"
+      ],
+      "required_fields": [
+        "ROUGE-1/2/L",
+        "AlignScore",
+        "BERTScore",
+        "paired uncertainty",
+        "diagnostics"
+      ],
+      "coverage": []
+    }
+  ],
+  "decisions": [
+    {
+      "date": "2026-09-12",
+      "decision": "Use src/eviseq_new as the proposed method authority; do not merge update_v2 into the method narrative.",
+      "authority": "user instruction and current architecture clarification"
+    },
+    {
+      "date": "2026-09-12",
+      "decision": "Leave all quality score cells blank until runs finish.",
+      "authority": "user instruction"
+    },
+    {
+      "date": "2026-09-12",
+      "decision": "Run writing first, then independent paper-review passes, then integrate only evidence-safe corrections.",
+      "authority": "user instruction and academic-writing workflow"
+    },
+    {
+      "date": "2026-09-12",
+      "decision": "Use the afmr_value_anchor graph in src/eviseq_new as the sole proposed method. Base hyperparameters are the canonical exposition; any task-specific capacity or resource override must be captured in the resolved run manifest.",
+      "authority": "integrated scientific and evaluation reviews"
+    },
+    {
+      "date": "2026-09-13",
+      "decision": "Adopt the agent-reviewed question title using source support as the operational RQ1 construct; update the abstract to the evidence-bounded Candidate A while retaining all scores as pending.",
+      "authority": "user request for agent-written title and abstract; title/abstract agent review"
+    }
+  ],
+  "issues": [
+    {
+      "id": "I1",
+      "severity": "S4",
+      "scope": "validity",
+      "evidence_status": "CONFIRMED",
+      "status": "OPEN",
+      "description": "Four-dataset predictions and scores are not yet available",
+      "authority_needed": "completed training/evaluation runs",
+      "affected_artifacts": [
+        "main",
+        "bib"
+      ]
+    },
+    {
+      "id": "I2",
+      "severity": "S3",
+      "scope": "reproducibility",
+      "evidence_status": "CONFIRMED",
+      "status": "OPEN",
+      "description": "BookSum and GovReport loaders/snapshots are not present in the current source tree",
+      "authority_needed": "dataset manifests and preparation commands",
+      "affected_artifacts": [
+        "main",
+        "story"
+      ]
+    },
+    {
+      "id": "I3",
+      "severity": "S2",
+      "scope": "delivery",
+      "evidence_status": "UNVERIFIED",
+      "status": "OPEN",
+      "description": "LaTeX compiles and representative pages were visually checked with Tectonic; venue-specific metadata and final submission format are not selected",
+      "authority_needed": "venue choice and final style requirements",
+      "affected_artifacts": [
+        "main"
+      ]
+    }
+  ],
+  "release": {
+    "status": "WORKING",
+    "candidate_artifact_ids": [
+      "main",
+      "story",
+      "bib"
+    ],
+    "required_checks": [
+      "argument_structure",
+      "evidence_scope",
+      "scholarly_writing",
+      "delivery_integrity",
+      "functional_completeness",
+      "paper_reviews"
+    ],
+    "completed_checks": [
+      "argument_structure",
+      "evidence_scope",
+      "scholarly_writing",
+      "delivery_integrity",
+      "functional_completeness",
+      "paper_reviews"
+    ],
+    "checked_hashes": {
+      "main": "7bb05e6fc5c8b0775eafc7b7ab52b193d33b6d07e1980fe985e8d0e8ce26215d",
+      "story": "ef090c2fe0ef424e7c59be2536d7d9ac6b6826ae46cd94a870efcec5bd12b8df",
+      "bib": "8d51ac68793428b82f4ad492444ea005621eb4900240d0f66e95bd315cd3ba6b"
+    },
+    "visual_check": "PASSED",
+    "last_candidate_audit": {
+      "label": "title_abstract",
+      "source": "Paper/afmr_question.tex title and abstract",
+      "sha256": "80a7494d8625bea295f06d72dbbccdf7a8c6971218d011f7e47dac688eb0a334",
+      "checked": "2026-09-13",
+      "status": "PASS"
+    }
+  }
+}

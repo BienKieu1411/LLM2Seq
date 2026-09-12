@@ -1,0 +1,121 @@
+\documentclass[11pt]{article}
+
+\usepackage[preprint]{acl}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{times}
+  \usepackage{inconsolata}
+\else
+  \usepackage{fontspec}
+  \setmainfont{Times New Roman}
+  \setmonofont{Courier New}
+\fi
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{url}
+\usepackage{xurl}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{array}
+\usepackage{xspace}
+
+% Protected names: keep these commands stable when scores are filled in.
+\newcommand{\EviSeq}{EviSeq\xspace}
+\newcommand{\AFMR}{AFMR\xspace}
+\newcommand{\AFMRFull}{Adaptive Full-Memory Residual\xspace}
+\newcommand{\PPLXEmbed}{PPLX-Embed v1 0.6B\xspace}
+\newcommand{\QwenEmbed}{Qwen3-Embedding-0.6B\xspace}
+\newcommand{\QwenCausal}{Qwen3 causal encoder\xspace}
+\newcommand{\NemotronEmbed}{Nemotron-3-Embed-1B\xspace}
+\newcommand{\QwenZeroSix}{Qwen3-0.6B\xspace}
+\newcommand{\QwenFour}{Qwen3-4B\xspace}
+\newcommand{\QwenEight}{Qwen3-8B\xspace}
+\newcommand{\LlamaThreeTwoThree}{Llama 3.2 3B Instruct\xspace}
+\newcommand{\LlamaThreeEight}{Llama 3 8B Instruct\xspace}
+\newcommand{\NemotronThree}{Nemotron 3B\xspace}
+\newcommand{\NemotronEight}{Nemotron 8B\xspace}
+\newcommand{\TfiveGemma}{T5Gemma2\xspace}
+\newcommand{\PubMed}{PubMed\xspace}
+\newcommand{\ArXiv}{arXiv\xspace}
+\newcommand{\BookSum}{BookSum\xspace}
+\newcommand{\GovReport}{GovReport\xspace}
+\newcommand{\Rouge}{ROUGE\xspace}
+\newcommand{\AlignScore}{AlignScore\xspace}
+\newcommand{\BERTScore}{BERTScore\xspace}
+\newcommand{\tbd}[1]{\textit{[TBD: #1]}}
+\newcommand{\method}{\EviSeq}
+\newcommand{\interface}{\AFMR}
+\newcommand{\vect}[1]{\boldsymbol{#1}}
+\newcommand{\RMSNorm}{\operatorname{RMSNorm}}
+\newcommand{\MaskedMean}{\operatorname{MaskedMean}}
+\newcommand{\Softmax}{\operatorname{softmax}}
+
+\title{Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?}
+
+\author{
+  Giang-Bien Kieu \quad Xuan-Dung Doan \\
+  Viettel Artificial Intelligence Center, Viettel Group, Vietnam \\
+  \texttt{bienkg@viettel.com.vn} \quad \texttt{dungdx4@viettel.com.vn}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Pretrained encoders and causal decoders are reusable building blocks, yet a width-matching projection alone does not decide which source evidence should reach the decoder. We present \EviSeq, a source-grounded encoder--decoder system with the \AFMRFull{} (\AFMR) interface. \AFMR preserves every visible source position in a retrieval tensor and pairs it with an aligned final-state value tensor. A controller applies bounded adjustments across encoder depth, feature channels, and overlapping multi-scale windows; the value anchor maintains a direct content path while refined keys guide retrieval. Copied cross-attention in every decoder layer and an offset-aligned copy head retain access to source words and numbers. The graph is trained end to end with gold-token mixture cross-entropy, and the primary comparison uses deterministic decoding. We register four datasets---\PubMed, \ArXiv, \BookSum, and \GovReport---and compare with fine-tuned decoder-only LLMs and \TfiveGemma. We separate source support (\AlignScore consistency and $H=1-C$), reference overlap (\Rouge-1/2/L), semantic similarity (\BERTScore-F1), component contribution, and encoder portability. Implementation tests pass on controlled fixtures, but held-out predictions and quality scores are pending; no improvement or hallucination-reduction claim is made.
+\end{abstract}
+
+\input{drafts/introduction_related_work}
+\input{drafts/method_experiments}
+\input{drafts/results_discussion}
+
+\section{Reproducibility and Scope}
+\label{sec:repro}
+The active implementation and proposed graph are the \texttt{src/eviseq\_new} package with \texttt{architecture.name} set to \texttt{afmr\_value\_anchor}. The manuscript's method name, model names, dataset names, and metric names are protected by the \verb|\newcommand| definitions in the preamble so that later score insertion cannot silently change the comparison entities. The repository currently contains prepared pipelines for \PubMed and \ArXiv; the \BookSum and \GovReport manifests, task recipes, and split-specific truncation statistics remain to be supplied before the four-dataset claims can be evaluated. The base YAML records the canonical \AFMR defaults; any task-specific capacity or resource override must be retained in a resolved configuration and attached to its run. We will release the exact local model identifiers or immutable revisions, tokenizer identifiers, prompts, preprocessing reports, train and validation manifests, checkpoint names, generation settings, package versions, seeds, and failed-run records with the completed experiments.
+
+All primary \Rouge values will use one Perl \Rouge~1.5.5 wrapper and one preprocessing path; the headline statistics are \Rouge-1/2/L F1 on the wrapper's declared 0--100 scale. Python \Rouge~1.0.0 is retained only as a diagnostic and will not be mixed with the primary values. \BERTScore-F1 is the headline semantic-similarity statistic, with precision and recall as secondary diagnostics. \AlignScore is the automatic factual-consistency proxy: its native consistency is high-is-better, while the direction-transformed $H=1-C$ value, with $C=\AlignScore_{\texttt{nli\_sp}}$, is low-is-better and is not a calibrated hallucination probability. We will report paired bootstrap intervals over identical test IDs, dataset rows before a secondary macro statistic defined as the unweighted mean of the four dataset-level effects, and length, truncation, empty-output, repetition, copy, latency, and peak-memory diagnostics. Primary endpoints and exploratory contrasts will be labeled in the completed analysis.
+
+\section{Ethics and Data Use}
+\label{sec:ethics}
+The study uses publicly released summarization corpora and local pretrained checkpoints. Dataset licenses, access restrictions, and the provenance of each local checkpoint must be recorded in the experiment manifest before release. Summaries are model outputs and may contain unsupported biomedical, narrative, or policy statements; automatic factuality scores are screening signals rather than medical, legal, or policy advice. We do not claim that the interface guarantees factual correctness.
+
+\clearpage
+\bibliography{afmr_question}
+
+\appendix
+\section{Locked Configuration Summary}
+\label{app:config}
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+Component & Locked default \\
+\midrule
+Encoder & \PPLXEmbed \\
+Decoder & \QwenZeroSix \\
+\AFMR controller & 256 dimensions \\
+Depth readout & Four final taps, rank 128 residual \\
+Feature readout & Rank 256 residual, feature-wise gate \\
+Source prior & Windows 32/128/512, 50\% overlap \\
+Cross-attention & Copied block in every decoder layer \\
+Copy route & Offset-aligned source-token mixture \\
+Objective & Gold-token mixture cross-entropy only \\
+Precision & FP32 state with CUDA BF16 autocast \\
+Decoding & One beam, greedy, sampling disabled \\
+\bottomrule
+\end{tabular}
+\caption{The \EviSeq configuration authority is the \texttt{src/eviseq\_new} \texttt{afmr\_value\_anchor} graph. The table lists the base-profile defaults; each task recipe's resolved architecture, model paths, data paths, lengths, and resource settings will be archived with its run. Score fields are intentionally absent until the registered runs finish.}
+\label{tab:config}
+\end{table}
+
+\section{Score-Filling Checklist}
+\label{app:checklist}
+Before replacing any \tbd{} cell, verify that the prediction manifest records the same dataset split, example IDs, tokenizer, checkpoint rule (\texttt{last.pt}), preprocessing, generation parameters, and scorer version for every row in that table. A completed cell must be accompanied by a prediction file, metric JSON, and paired uncertainty estimate. If a run fails or uses a different protocol, retain \tbd{} and report the omission rather than substituting a convenient score.
+
+\end{document}
