@@ -8,25 +8,24 @@
 \label{sec:results}
 
 \paragraph{Evidence status.}
-The current evidence supports implementation properties of \EviSeq, not
-generation quality.  The local \texttt{src/eviseq\_new} suite exercises the
-value-anchored \AFMR and grounded-copy graph on model-free fixtures.  Its checks
-include source masking and alignment, cross-attention and cache behavior,
-cross-entropy gradient reachability, dense and chunked loss parity,
-checkpoint round trips, warm-up and full-training paths, and greedy generation
-with prediction resumption.  The source documentation specifies a smoke path
-that trains, saves, reloads, and evaluates the graph with tiny randomly
-initialized backbones.
-These checks are useful evidence that specified tensor contracts and runtime
-paths execute on controlled inputs.  They do not provide a held-out
-comparison, a ROUGE-1/2/L value, a factuality estimate, a \BERTScore value, or a
-hardware throughput benchmark.
+At this stage, the evidence covers implementation behavior rather than
+generation quality.  The local \texttt{src/eviseq\_new} suite runs the
+value-anchored \AFMR and grounded-copy graph on model-free fixtures.  It checks
+source masking and alignment, cross-attention and cache behavior, cross-entropy
+gradient reachability, dense and chunked loss parity, checkpoint round trips,
+warm-up and full-training paths, and greedy generation with prediction
+resumption.  The source documentation also defines a smoke path that trains,
+saves, reloads, and evaluates the graph with tiny randomly initialized
+backbones.  These checks show that the specified tensor contracts and runtime
+paths execute on controlled inputs.  They do not yield a held-out comparison,
+a ROUGE-1/2/L value, a factuality estimate, a \BERTScore value, or a hardware
+throughput benchmark.
 
-The four-dataset fine-tuning runs, prediction files, fixed Perl
-\Rouge-1.5.5 scoring, \AlignScore evaluation, and \BERTScore evaluation are not
-available at this drafting stage.  The dashes in Table~\ref{tab:results_plan}
-mean ``not yet computed''; they are not zeros, failed runs, or missing-value
-imputations.  No quality conclusion is therefore drawn here.
+The four-dataset fine-tuning runs and prediction files are not yet available.
+The fixed Perl \Rouge-1.5.5 scorer, \AlignScore evaluator, and \BERTScore
+evaluator therefore have no results to report.  Dashes in
+Table~\ref{tab:results_plan} mean ``not yet computed''; they do not mean zero,
+failure, or imputation.  This draft makes no quality claim.
 
 \begin{table*}[t]
 \centering
@@ -47,96 +46,96 @@ RQ4: encoder-transfer matrix and quality/factuality diagnostics & -- & -- & -- &
 \end{table*}
 
 \paragraph{Evaluation contract.}
-The primary comparison will use fine-tuned decoder-only controls, namely
+The primary comparison uses fine-tuned decoder-only controls:
 \QwenZeroSix, \QwenFour, \QwenEight, \LlamaThreeTwoThree,
-\LlamaThreeEight, \NemotronThree, and \NemotronEight, together with the
-fine-tuned encoder--decoder reference \TfiveGemma.  Within each of
-\PubMed, \ArXiv, \BookSum, and \GovReport, the runs will share example IDs,
-fixed train/validation/test splits, source and target budgets, preprocessing,
-training-stage budgets, and the registered decoding procedure; native model
-input serialization and prompt/chat-template behavior will be reported rather
-than assumed identical.  Primary
-\Rouge-1/2/L F1 values will come from one fixed Perl \Rouge-1.5.5 wrapper;
-Python \Rouge remains a diagnostic backend and will not be combined with the
-paper scores.  Per-example paired bootstrap intervals are planned for each
-comparison, with a macro-average across the four datasets as a secondary
-summary.  Prediction length, reference length, truncation, empty outputs,
-repetition, source-copy rate, latency, peak memory, checkpoint identity, and
-failed or omitted runs will be recorded with the prediction manifest.
+\LlamaThreeEight, \NemotronThree, and \NemotronEight.  It also includes the
+fine-tuned encoder--decoder reference \TfiveGemma.  On each of \PubMed,
+\ArXiv, \BookSum, and \GovReport, the runs share example IDs, fixed
+train/validation/test splits, source and target budgets, preprocessing,
+training-stage budgets, and the registered decoding procedure.  We report
+native model serialization and prompt/chat-template behavior instead of
+assuming that they match.  One fixed Perl \Rouge-1.5.5 wrapper supplies the
+primary \Rouge-1/2/L F1 values; Python \Rouge remains a diagnostic backend and
+is never combined with the paper scores.  Each comparison will include a
+per-example paired bootstrap interval.  A macro-average across the four
+datasets is a secondary summary.  The prediction manifest will record output
+and reference lengths, truncation, empty outputs, repetition, source-copy rate,
+latency, peak memory, checkpoint identity, and failed or omitted runs.
 
 \paragraph{RQ1: factual-support signal.}
-RQ1 asks whether \EviSeq changes an automatic source-support signal relative to the fine-tuned
-decoder-only controls on \PubMed, \ArXiv, \BookSum, and \GovReport.  The
-primary quantity is native \AlignScore consistency, for which higher values
-indicate greater source--summary consistency under the metric.  If a
-hallucination-oriented view is useful, $H=1-C$ for
-$C=\AlignScore_{\texttt{nli\_sp}}$ will be shown only as a direction-transformed
-quantity, with lower values preferred; it is not a calibrated probability.  A
-typed entity, number, or relation error claim requires a separately specified
-adjudicated audit.
+RQ1 asks whether \EviSeq changes an automatic source-support signal relative to
+the fine-tuned decoder-only controls on \PubMed, \ArXiv, \BookSum, and
+\GovReport.  Its primary quantity is native \AlignScore consistency, where a
+higher value means greater source--summary consistency under the metric.  We
+may also show $H=1-C$ for $C=\AlignScore_{\texttt{nli\_sp}}$ as a
+direction-transformed, lower-is-better quantity for a hallucination-oriented
+view.  This transform is not a calibrated probability.  Claims about typed
+entity, number, or relation errors require a separately specified adjudicated
+audit.
 
 \emph{Fill-in template after the locked runs:} ``Across \PubMed, \ArXiv,
 \BookSum, and \GovReport, \EviSeq obtained \AlignScore consistency of
-\tbd{dataset-specific values} versus \tbd{named matched decoder-only
-control(s)}, for paired differences of \tbd{differences} and 95\% bootstrap
-intervals of \tbd{intervals}.  The corresponding $H=1-C$ values were
-\tbd{values}.  This pattern \tbd{supports/does not support} a
-change in the automatic source-support signal under this benchmark; it does not by itself
-establish a reduction in factual errors.''
+\tbd{dataset-specific values}, compared with \tbd{named matched decoder-only
+control(s)}.  The paired differences were \tbd{differences}, with 95\%
+bootstrap intervals of \tbd{intervals}.  The corresponding $H=1-C$ values
+were \tbd{values}.  This pattern \tbd{supports/does not support} a change in
+the automatic source-support signal under this benchmark; it does not by
+itself establish a reduction in factual errors.''
 
 \paragraph{RQ2: summary quality.}
-RQ2 tests whether any source-support change is accompanied by acceptable
-summary coverage and semantic similarity.  It compares \EviSeq with the
-same decoder-only controls and \TfiveGemma on \PubMed, \ArXiv, \BookSum,
-and \GovReport.  The scorer-locked outcomes are \Rouge-1/2/L F1 and
-\BERTScore-F1, interpreted together with length, truncation, empty-output, and
-repetition diagnostics.
+RQ2 tests whether a change in source support is accompanied by acceptable
+summary coverage and semantic similarity.  It compares \EviSeq with the same
+decoder-only controls and \TfiveGemma on \PubMed, \ArXiv, \BookSum, and
+\GovReport.  The scorer-locked outcomes are \Rouge-1/2/L F1 and
+\BERTScore-F1, read alongside length, truncation, empty-output, and repetition
+diagnostics.
 
-\emph{Fill-in template after the locked runs:} ``Relative to each matched
-decoder-only control and to \TfiveGemma, \EviSeq changed \Rouge-1,
-\Rouge-2, and \Rouge-L F1 on \PubMed, \ArXiv, \BookSum, and \GovReport by
-\tbd{dataset-by-baseline deltas}, with paired 95\% bootstrap intervals of
-\tbd{intervals}; the corresponding \BERTScore differences were
-\tbd{differences}.  The output diagnostics were \tbd{length, truncation,
+\emph{Fill-in template after the locked runs:} ``Against each matched
+decoder-only control and \TfiveGemma, \EviSeq changed \Rouge-1, \Rouge-2, and
+\Rouge-L F1 on \PubMed, \ArXiv, \BookSum, and \GovReport by
+\tbd{dataset-by-baseline deltas}.  The paired 95\% bootstrap intervals were
+\tbd{intervals}, and the corresponding \BERTScore differences were
+\tbd{differences}.  Output diagnostics showed \tbd{length, truncation,
 empty-output, repetition, and copy findings}.  These results \tbd{support/do
-not support} a quality change under the registered protocol.''  \BERTScore is
-a semantic similarity measure here, not a hallucination detector.
+not support} a quality change under the registered protocol.''  Here
+\BERTScore measures semantic similarity; it is not a hallucination detector.
 
 \paragraph{RQ3: component contribution.}
-RQ3 uses a fixed decoder and matched training budget to compare the full
-\EviSeq graph with separately trained no-encoder, no-\AFMR-bridge, and
-no-grounded-copy controls on \PubMed, \ArXiv, \BookSum, and \GovReport.
-Disabling a component in a finished checkpoint is only a diagnostic; the
-primary ablation comparison requires a train-from-pretrained run for each
-row.  The interpretation is local to the registered graph and protocol:
-ablation differences can identify which components contribute to the observed
-benchmark behavior, but they cannot establish universal causal necessity.
+RQ3 compares the full \EviSeq graph with separately trained no-encoder,
+no-\AFMR-bridge, and no-grounded-copy controls.  The decoder and training
+budget stay fixed across these runs on \PubMed, \ArXiv, \BookSum, and
+\GovReport.  Disabling a component in a finished checkpoint is only a
+diagnostic; the primary ablation comparison trains every row from the
+pretrained initialization.  The interpretation remains local to the
+registered graph and protocol.  Ablation differences can show which
+components contribute to the observed benchmark behavior, but they cannot
+establish universal causal necessity.
 
 \emph{Fill-in template after the locked runs:} ``On \PubMed, \ArXiv,
 \BookSum, and \GovReport, removing the encoder, \AFMR bridge, and grounded
 copy route changed the pre-registered \tbd{primary outcome(s)} relative to
-full \EviSeq by \tbd{component-specific deltas}, with paired intervals
-\tbd{intervals}; the associated \Rouge, \AlignScore, and \BERTScore
-diagnostics were \tbd{values}.  The pattern \tbd{does/does not} indicate
-that \tbd{component(s)} contributes to the measured behavior under this
-registered setup.''
+full \EviSeq by \tbd{component-specific deltas}.  The paired intervals were
+\tbd{intervals}, and the associated \Rouge, \AlignScore, and \BERTScore
+diagnostics were \tbd{values}.  The pattern \tbd{does/does not} indicate that
+\tbd{component(s)} contributes to the measured behavior under this registered
+setup.''
 
 \paragraph{RQ4: encoder portability.}
 RQ4 evaluates the same interface with \PPLXEmbed as the anchor and with
 \QwenCausal, \QwenEmbed, and \NemotronEmbed encoder variants on \PubMed,
-\ArXiv, \BookSum, and \GovReport.  The transfer comparison will report the
-encoder and decoder identifiers, hidden widths, trainable-parameter counts,
-and the same quality, factuality, and prediction diagnostics for every
-variant.  Directionality and capacity are properties of the encoder choice,
-so a transfer difference will be interpreted with those factors kept
-explicit rather than attributed to a single cause.
+\ArXiv, \BookSum, and \GovReport.  For every variant, the transfer comparison
+will report encoder and decoder identifiers, hidden widths, trainable-parameter
+counts, and the same quality, factuality, and prediction diagnostics.
+Directionality and capacity belong to the encoder choice, so we will keep them
+explicit when interpreting transfer differences rather than attributing those
+differences to a single cause.
 
 \emph{Fill-in template after the locked runs:} ``With the decoder and
 protocol fixed, the \PPLXEmbed, \QwenCausal, \QwenEmbed, and \NemotronEmbed
 variants obtained \tbd{\Rouge-1/2/L values}, \tbd{\AlignScore values}, and
 \tbd{\BERTScore values} on \PubMed, \ArXiv, \BookSum, and \GovReport.  Their
 paired differences from the \PPLXEmbed anchor were \tbd{differences with
-intervals}; latency, peak memory, length, repetition, and source-copy
+intervals}.  Latency, peak memory, length, repetition, and source-copy
 diagnostics were \tbd{diagnostics}.  These results \tbd{support/do not
 support} portability across the tested encoder choices, conditional on the
 observed directionality and capacity differences.''

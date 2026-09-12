@@ -19,3 +19,20 @@ The active manuscript is `Paper/afmr_question.tex` and the proposed system is th
 The state audit intentionally remains blocked until the four datasets have fixed manifests and held-out predictions, all registered baselines and ablations have scorer outputs, metric-level paired uncertainty is available, and final model/tokenizer/scorer provenance is archived. BookSum and GovReport preparation records are not present in the current source tree. These are evidence gates, not assumptions to be filled with historical or substitute scores.
 
 The paper compiles with Tectonic and representative pages were visually checked. The local model-free test suite passes; this verifies execution contracts only and does not answer the empirical research questions.
+
+## Plain-English and academic-writing pass (2026-09-13)
+
+The prose in `Paper/drafts/introduction_related_work.tex`,
+`Paper/drafts/method_experiments.tex`, and
+`Paper/drafts/results_discussion.tex` was rewritten for direct subjects, shorter
+sentences, clearer transitions, and less nominal or passive phrasing. The
+rewrite preserves the equations, labels, citations, protected terminology,
+architecture dimensions, metric definitions, score placeholders, and the
+pre-results evidence boundary. The title and abstract were left unchanged
+because their exact-candidate audit had already passed.
+
+`git diff --check`, the exact label/citation/number comparison, the academic
+writing regression suite, the full Tectonic build, and the local model-free
+tests were rerun after the pass. The prose-pattern audit still reports a few
+technical-hyphen and template-repetition diagnostics; these are retained where
+they name load-bearing terms or repeated result templates.
