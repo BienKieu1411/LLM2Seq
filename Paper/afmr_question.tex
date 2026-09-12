@@ -55,7 +55,7 @@
 \newcommand{\MaskedMean}{\operatorname{MaskedMean}}
 \newcommand{\Softmax}{\operatorname{softmax}}
 
-\title{Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?}
+\title{EviSeq: Source-Grounded Summarization with Composed Pretrained Encoders and Causal Decoders}
 
 \author{
   Giang-Bien Kieu \quad Xuan-Dung Doan \\
@@ -67,7 +67,7 @@
 \maketitle
 
 \begin{abstract}
-Pretrained encoders and causal decoders are reusable building blocks, yet a width-matching projection alone does not decide which source evidence should reach the decoder. We present \EviSeq, a source-grounded encoder--decoder system with the \AFMRFull{} (\AFMR) interface. \AFMR preserves every visible source position in a retrieval tensor and pairs it with an aligned final-state value tensor. A controller applies bounded adjustments across encoder depth, feature channels, and overlapping multi-scale windows; the value anchor maintains a direct content path while refined keys guide retrieval. Copied cross-attention in every decoder layer and an offset-aligned copy head retain access to source words and numbers. The graph is trained end to end with gold-token mixture cross-entropy, and the primary comparison uses deterministic decoding. We register four datasets---\PubMed, \ArXiv, \BookSum, and \GovReport---and compare with fine-tuned decoder-only LLMs and \TfiveGemma. We separate source support (\AlignScore consistency and $H=1-C$), reference overlap (\Rouge-1/2/L), semantic similarity (\BERTScore-F1), component contribution, and encoder portability. Implementation tests pass on controlled fixtures, but held-out predictions and quality scores are pending; no improvement or hallucination-reduction claim is made.
+Long-document summarization asks a model to shorten a source without losing the evidence that makes it useful. This becomes difficult when the source encoder and causal decoder come from separate pretrained checkpoints: matching their widths makes the tensors compatible but does not determine how source information should reach the generator. We present \EviSeq, a source-grounded summarization system built around an \AFMRFull{} interface. \AFMR retains every visible source position, separates adaptable retrieval keys from aligned final-state values, and learns bounded source-priority adjustments. Copied cross-attention lets each decoder layer read this memory, while an offset-based copy route provides access to source wording and numbers. The model is trained with a single gold-token likelihood objective and evaluated with deterministic decoding. We compare it with fine-tuned decoder-only models and an encoder--decoder reference across long-document domains, examining source consistency, summary quality, component contributions, and encoder effects. Implementation tests support the executable design; held-out predictions and empirical comparisons remain pending.
 \end{abstract}
 
 \input{drafts/introduction_related_work}

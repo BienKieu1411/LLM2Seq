@@ -1,5 +1,10 @@
 # Title and abstract alternatives: Agent B
 
+> **Candidate record only.** The coordinator later selected a shorter
+> parenthesis-free abstract and the descriptive title recorded in
+> `Paper/reviews/active_title_abstract.txt`; the alternatives below are kept
+> for auditability.
+
 ## Scope and editorial position
 
 This review revisits the title and abstract for the active manuscript. It uses

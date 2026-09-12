@@ -12,13 +12,24 @@ The active manuscript is `Paper/afmr_question.tex` and the proposed system is th
 - The four-dataset macro statistic is the unweighted mean of the four dataset-level effects and is secondary to dataset rows.
 - The abstract and conclusion say that the evaluation specification is described; they do not imply that quality results already exist.
 - The LaTeX preamble protects system, architecture, model, dataset, and metric names with `\\newcommand`; textual macros use `\\xspace` so compiled prose retains word boundaries.
-- The agent-reviewed question title now uses ``source support`` as the RQ1 construct, and Abstract A was integrated with evidence-bounded wording. The state lock, story specification, review headers, and main manuscript are synchronized; all scores remain pending.
+- The earlier agent-reviewed question title used ``source support`` as the RQ1 construct, and Abstract A was integrated with evidence-bounded wording. That round is retained in the candidate records; the later title/abstract pass below supersedes it while keeping all scores pending.
 
 ## Evidence still required
 
 The state audit intentionally remains blocked until the four datasets have fixed manifests and held-out predictions, all registered baselines and ablations have scorer outputs, metric-level paired uncertainty is available, and final model/tokenizer/scorer provenance is archived. BookSum and GovReport preparation records are not present in the current source tree. These are evidence gates, not assumptions to be filled with historical or substitute scores.
 
 The paper compiles with Tectonic and representative pages were visually checked. The local model-free test suite passes; this verifies execution contracts only and does not answer the empirical research questions.
+
+## Title and abstract revision (2026-09-13)
+
+At the author's request, the question-form title and metric-heavy abstract were
+replaced with the descriptive title *EviSeq: Source-Grounded Summarization with
+Composed Pretrained Encoders and Causal Decoders* and a 156-word abstract. The
+new abstract omits formulas, score values, and parenthetical asides. It retains
+the composition gap, full-memory key/value separation, grounded-copy path,
+single gold-token objective, planned comparisons, and the pending-evidence
+boundary. The exact candidate is stored in
+`Paper/reviews/active_title_abstract.txt`.
 
 ## Plain-English and academic-writing pass (2026-09-13)
 

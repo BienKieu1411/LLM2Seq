@@ -2,7 +2,7 @@
 
 REVIEW PROFILE: General scientific review with the AI/LLM computational and display/notation/provenance overlays
 
-PAPER: *Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?*
+PAPER: *EviSeq: Source-Grounded Summarization with Composed Pretrained Encoders and Causal Decoders*
 
 MODE: Review only; no manuscript or evaluator changes authorized
 
@@ -13,6 +13,14 @@ MODULES: `paper-review` with the `academic-writing-skills` integrity base; the A
 SOURCE BASIS: `Paper/afmr_question.tex`, `Paper/afmr_story_spec.md`, `Technical_Report/FACTUALITY_EVALUATION.md`, and the evaluator/tests under `src/rouge155`. No prior review round, response letter, venue rule, or completed EviSeq run was supplied. The existing `src/rouge155/results` files are old LRSum/WikiLingua ROUGE artifacts and are not evidence for the four-dataset EviSeq contract.
 
 READINESS: Not ready for a quality claim, an RQ1--RQ4 answer, or submission. The primary bottlenecks are the absent matched runs and BookSum/GovReport artifacts, the RQ1 construct gap, and an uncertainty/provenance protocol that currently covers only a subset of the promised metrics.
+
+## Superseding title and abstract pass
+
+The title and abstract were revised on 2026-09-13 after this review. The
+current title is descriptive, and the current abstract removes formulas,
+score values, and parenthetical metric definitions while retaining the
+pre-results evidence boundary. Findings below that refer to the former
+question-form title are historical.
 
 The draft has several sound safeguards. It keeps all quality values pending, states that AlignScore is a proxy rather than a calibrated hallucination probability, distinguishes native AlignScore consistency from `1-C`, and labels BERTScore as semantic similarity. The local-only model loading and JSON output metadata are useful foundations. Those safeguards do not yet establish that the planned comparisons are fair or reproducible.
 
@@ -130,7 +138,7 @@ Make all scorers use one loader that requires a stable, unique, non-null example
 
 ## Section-linked comments and presentation flags
 
-The manuscript's conditional framing is appropriate: `afmr_question.tex:69` and the story specification's claim/evidence map correctly keep quality claims unverified. That wording should remain in the abstract, Results placeholders, and conclusion until the complete evidence matrix is available. The title is a question and can remain conditional, but a filled Results sentence should name the measured signal and comparison set rather than use “factuality” as an unqualified synonym for AlignScore.
+The manuscript's conditional framing is appropriate: `afmr_question.tex:69` and the story specification's claim/evidence map correctly keep quality claims unverified. That wording should remain in the abstract, Results placeholders, and conclusion until the complete evidence matrix is available. The descriptive title now avoids an outcome claim; a filled Results sentence should still name the measured signal and comparison set rather than use “factuality” as an unqualified synonym for AlignScore.
 
 The display contract should make the direction visible wherever a value appears: ROUGE and BERTScore F1 higher-is-better; native AlignScore consistency higher-is-better; `H=1-C` lower-is-better and not a probability. Captions should name the scorer checkpoint/version, reference policy, aggregation, uncertainty type, and whether the value is per-dataset or macro. The display/notation pass cannot verify table/figure consistency because the substantive sections are `\input` files outside this review scope and no completed quality displays exist.
 

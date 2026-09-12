@@ -1,5 +1,10 @@
 # Title candidates
 
+> **Superseded round (2026-09-13).** This file records the earlier question-form
+> title review. The active title is now *EviSeq: Source-Grounded Summarization
+> with Composed Pretrained Encoders and Causal Decoders*, as recorded in the
+> manuscript state and story specification.
+
 ## Scope and evidence boundary
 
 These candidates are for the active manuscript only. They describe the proposed
@@ -63,18 +68,18 @@ measured improvement before the registered runs.
 
 ## Selection recommendation
 
-Use candidate **1** if the title is being rebuilt before results are filled:
+The earlier review recommended candidate **1** before results were filled:
 
 > **Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?**
 
-This title gives the reader the task-level problem, the interface-level
+That title gave the reader the task-level problem, the interface-level
 contribution, and the two headline outcome families. “Source support” matches
 the locked RQ1 construct and avoids claiming a calibrated hallucination
 measure. The modal question (“Can”) keeps the result conditional. “Pretrained
 Encoder--Decoder Compositions” identifies the setting directly without naming a
 model family that may change in the registered comparison.
 
-The prior locked title,
+The prior locked title in that review,
 “Can a Source-Grounded Full-Memory Interface Improve Factuality and ROUGE When
 Pretrained Models Are Composed?” was also defensible as a working title. It
 was replaced by candidate 1 after coordinator review; the active abstract and

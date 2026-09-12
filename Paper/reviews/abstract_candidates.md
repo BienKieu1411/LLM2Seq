@@ -1,11 +1,15 @@
 # Abstract and title candidates
 
+> **Superseded round (2026-09-13).** Candidate A below was the previous active
+> abstract. The current abstract is the shorter, parenthesis-free text in
+> `Paper/reviews/active_title_abstract.txt` and `Paper/afmr_question.tex`.
+
 ## Scope and authority
 
 These candidates are written for the active manuscript only. The proposed method
 is the `src/eviseq_new` graph whose configured architecture is
 `afmr_value_anchor`; no other implementation is used to motivate or describe the
-method. The manuscript state now locks the selected question-form title below, and the evidence
+method. At the time of this candidate round, the manuscript state locked the selected question-form title below, and the evidence
 contract says that the four-dataset predictions and all
 quality/factuality scores are still pending. Consequently, every candidate
 uses prospective or evidence-bounded language and makes no performance claim.
@@ -13,9 +17,9 @@ uses prospective or evidence-bounded language and makes no performance claim.
 ## Title candidates
 
 1. **Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?**
-   **Recommendation:** adopted for the active manuscript. It is the exact locked title in
-   `Paper/afmr_manuscript_state.json`, states the paper's central empirical
-   question, and does not presuppose a positive result.
+   **Recommendation in the earlier round:** adopted for the active manuscript
+   at that time. It stated the paper's central empirical question and did not
+   presuppose a positive result.
 
 2. **EviSeq: Learning a Source-Grounded Full-Memory Interface for Pretrained Encoder--Decoder Composition**
    A concise descriptive alternative if the question-form title is later
@@ -26,8 +30,8 @@ uses prospective or evidence-bounded language and makes no performance claim.
    A shorter method-oriented alternative. It is less explicit about the
    factuality and ROUGE evaluation questions than the selected title.
 
-The alternatives are recorded for discussion only; the first title is the active
-lock after coordinator review.
+The alternatives were recorded for discussion only; the first title was the
+active lock after the earlier coordinator review and has since been superseded.
 
 ## Candidate A — adopted
 
@@ -108,7 +112,8 @@ paths and is suitable when the method section is the paper's main contribution.
 
 ## Selection and exact-candidate checks
 
-Candidate A is adopted as the abstract for the active manuscript. It is approximately 180
+Candidate A was adopted as the abstract for the active manuscript in the
+earlier review round. It is approximately 180
 words under a whitespace count (excluding its heading), within the requested
 150--200-word range. Candidates B and C are retained as alternatives for a
 later editorial choice; their word counts should be rechecked if edited.

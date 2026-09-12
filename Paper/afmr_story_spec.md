@@ -10,7 +10,10 @@
 
 ## Locked title and names
 
-**Locked title (question):** *Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?*
+**Locked title:** *EviSeq: Source-Grounded Summarization with Composed Pretrained Encoders and Causal Decoders*
+
+The title is descriptive and makes no performance claim. The empirical
+comparison remains pending until the registered runs are complete.
 
 The architecture is **Adaptive Full-Memory Residual (AFMR)**. The complete proposed system is called **EviSeq**. Version labels are excluded from the paper's method name.
 

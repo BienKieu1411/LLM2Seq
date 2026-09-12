@@ -1,5 +1,10 @@
 # Title and abstract alternatives
 
+> **Candidate record only.** The coordinator later selected a shorter
+> parenthesis-free abstract and the descriptive title recorded in
+> `Paper/reviews/active_title_abstract.txt`; the alternatives below are kept
+> for auditability.
+
 ## Scope and writing contract
 
 These alternatives revise the paper's public framing only. The active method is

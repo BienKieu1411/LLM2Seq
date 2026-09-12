@@ -2,7 +2,7 @@
   "schema_version": "1.1",
   "project": {
     "id": "afmr_question_paper",
-    "title": "Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?",
+    "title": "EviSeq: Source-Grounded Summarization with Composed Pretrained Encoders and Causal Decoders",
     "archetype": "empirical",
     "study_designs": [
       "AI and LLM study",
@@ -136,9 +136,9 @@
   },
   "semantic_locks": [
     {
-      "id": "title_question",
+      "id": "title_exact",
       "kind": "EXACT",
-      "canonical": "Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?",
+      "canonical": "EviSeq: Source-Grounded Summarization with Composed Pretrained Encoders and Causal Decoders",
       "required_roles": [
         "main_manuscript"
       ],
@@ -393,6 +393,11 @@
       "date": "2026-09-13",
       "decision": "Adopt the agent-reviewed question title using source support as the operational RQ1 construct; update the abstract to the evidence-bounded Candidate A while retaining all scores as pending.",
       "authority": "user request for agent-written title and abstract; title/abstract agent review"
+    },
+    {
+      "date": "2026-09-13",
+      "decision": "Replace the question-form title and dense metric-heavy abstract with the descriptive EviSeq title and a concise abstract that omits formulas, score values, and parenthetical asides while preserving the pre-results evidence boundary.",
+      "authority": "user request; AgentHub title/abstract alternatives; writing-skill and academic-writing review"
     }
   ],
   "issues": [
@@ -459,15 +464,15 @@
       "paper_reviews"
     ],
     "checked_hashes": {
-      "main": "7bb05e6fc5c8b0775eafc7b7ab52b193d33b6d07e1980fe985e8d0e8ce26215d",
-      "story": "ef090c2fe0ef424e7c59be2536d7d9ac6b6826ae46cd94a870efcec5bd12b8df",
+      "main": "9b6d4306f967a8b0aef772e4e6c953099217b5ecfbfb34c1de29353f18126450",
+      "story": "4fe5668952024a6e82596386d8766bbbbb8097caecba5d8297993e50eb561bc4",
       "bib": "8d51ac68793428b82f4ad492444ea005621eb4900240d0f66e95bd315cd3ba6b"
     },
     "visual_check": "PASSED",
     "last_candidate_audit": {
       "label": "title_abstract",
-      "source": "Paper/afmr_question.tex title and abstract",
-      "sha256": "80a7494d8625bea295f06d72dbbccdf7a8c6971218d011f7e47dac688eb0a334",
+      "source": "Paper/reviews/active_title_abstract.txt (exact title and abstract)",
+      "sha256": "86822578162e491615f12c6af4290ac8d88574eb03fa3748839c50fcf4ca67e6",
       "checked": "2026-09-13",
       "status": "PASS"
     }

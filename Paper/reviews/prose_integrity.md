@@ -1,13 +1,21 @@
 # Prose and notation integrity review
 
 REVIEW PROFILE: Academic-writing integrity and reviewer-facing prose pass.
-PAPER: *Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?*
+PAPER: *EviSeq: Source-Grounded Summarization with Composed Pretrained Encoders and Causal Decoders*
 SCOPE: The active manuscript rooted at `Paper/afmr_question.tex` and its included drafts, with the proposed implementation restricted to `src/eviseq_new`.
 STATUS: Review-only memo; no empirical result or submission-readiness claim is authorized.
 
+## Superseding title and abstract pass
+
+The title and abstract were revised on 2026-09-13 at the author's request.
+The current title is descriptive, and the current abstract removes formulas,
+score values, and parenthetical metric definitions. The checks and repair notes
+below remain useful as a historical integrity record; the active candidate is
+`Paper/reviews/active_title_abstract.txt`.
+
 ## Strengths
 
-- The title is a question and the abstract, Results, Discussion, Limitations, and Conclusion consistently keep quality values pending.
+- The title is descriptive and the abstract, Results, Discussion, Limitations, and Conclusion consistently keep quality values pending.
 - The four research questions form a readable chain from factual-support signal to quality, component contribution, and encoder transfer.
 - The draft distinguishes ROUGE overlap, BERTScore semantic similarity, and AlignScore source-consistency; this prevents a metric from being presented as a factuality guarantee.
 - Equations and prose generally use the same names for the AFMR controller, full-source path, copied cross-attention, value anchor, and grounded-copy mixture.

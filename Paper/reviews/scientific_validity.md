@@ -1,7 +1,7 @@
 # Scientific validity review
 
 REVIEW PROFILE: General scientific review with the AI/LLM and computational-model overlay.
-PAPER: *Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?*
+PAPER: *EviSeq: Source-Grounded Summarization with Composed Pretrained Encoders and Causal Decoders*
 MODE: Review only; no manuscript edits authorized.
 STAGE OR ROUND: Developmental/substantive review of an exploratory internal draft; empirical completion is pending.
 MODULES: `academic-writing-skills` manuscript-integrity base; `paper-review` AI/LLM computational overlay; display, notation, and provenance checks. The AI/LLM overlay is needed for the pretrained-model composition, train/inference parity, synthetic-free source alignment, and metric-scope claims. The notation module is needed for the AFMR equations, masks, derived source prior, and key/value separation.

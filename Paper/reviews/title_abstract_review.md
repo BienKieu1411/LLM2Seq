@@ -1,7 +1,7 @@
 # Title and abstract integration review
 
 REVIEW PROFILE: general scientific review with AI/LLM-computational and display/notation checks
-PAPER: *Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?*
+PAPER: *EviSeq: Source-Grounded Summarization with Composed Pretrained Encoders and Causal Decoders*
 MODE: authorized revision and integration
 STAGE OR ROUND: integration
 MODULES: academic-writing abstract/evidence gates; paper-review AI/LLM-computational checks; display/notation/provenance checks
@@ -10,10 +10,10 @@ READINESS: title and abstract are integrated; empirical release remains blocked 
 
 ## Priority-ranked action items
 
-1. **Title scope — resolved, S2, verified.** The title is a question and names the
-   operational source-support construct alongside ROUGE. It does not state a
-   measured gain or treat AlignScore as a hallucination probability. The exact
-   title is synchronized in the manuscript, story specification, and state lock.
+1. **Title scope — resolved, S2, verified.** The descriptive title names the
+   system, task, and composed-model setting without stating a measured gain or
+   treating AlignScore as a hallucination probability. The exact title is
+   synchronized in the manuscript, story specification, and state lock.
 
 2. **Abstract evidence boundary — resolved, S2, verified.** The abstract follows
    problem, gap, method, evaluation, and evidence status. It states that held-out
@@ -42,17 +42,20 @@ READINESS: title and abstract are integrated; empirical release remains blocked 
 - `\newcommand` macros are used for repeated system, architecture, model,
   dataset, and metric names; `\xspace` preserves word boundaries in compiled
   prose.
-- Candidate A is approximately 180 words before LaTeX macro expansion and fits the current
-  abstract budget. Its final source is the exact abstract in
+- The active abstract is about 156 words before LaTeX macro expansion. It uses
+  no parenthetical asides, formulas, or score values; its exact candidate is
+  recorded in `Paper/reviews/active_title_abstract.txt` and its source is
   `Paper/afmr_question.tex`.
-- The title's “source support” wording narrows RQ1 to its registered automatic
-  construct. Any later title change is a Class A change and must propagate to
-  the state lock, story specification, abstract, review headers, and conclusion.
+- The descriptive title identifies the method and task without turning a
+  pending evaluation into a result claim. Any later title change is a Class A
+  change and must propagate to the state lock, story specification, abstract,
+  review headers, and conclusion.
 
 ## Checks performed
 
 - AgentHub produced independent title and abstract candidates; the coordinator
-  selected the source-support title and Candidate A.
+  selected the descriptive EviSeq title and the concise abstract recorded in
+  the active candidate file.
 - Candidate text and terminology checks were rerun after integration.
 - LaTeX source structure, bibliography references, and the full manuscript were
   compiled with Tectonic; representative pages were visually inspected.
@@ -62,7 +65,7 @@ READINESS: title and abstract are integrated; empirical release remains blocked 
 
 The requested lifecycle stage (title/abstract drafting and review) and companion
 artifacts were covered. The active authority is only `src/eviseq_new`; locked
-meaning and score placeholders were preserved. The title change was propagated
-through the manuscript, story, state, and review headers. No quality evidence was
-invented. The remaining state-audit blockers are empirical and reproducibility
-gates, not unresolved title or abstract defects.
+meaning and score placeholders were preserved. The title and abstract revision
+was propagated through the manuscript, story, state, and review record. No
+quality evidence was invented. The remaining state-audit blockers are empirical
+and reproducibility gates, not unresolved title or abstract defects.

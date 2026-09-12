@@ -2,9 +2,9 @@
 
 REVIEW PROFILE: General scientific review with the academic-writing, writing-skill, AI/LLM computational, and display/notation/provenance overlays
 
-PAPER: *Can a Source-Grounded Full-Memory Interface Improve Source Support and ROUGE in Pretrained Encoder--Decoder Compositions?*
+PAPER: *EviSeq: Source-Grounded Summarization with Composed Pretrained Encoders and Causal Decoders*
 
-MODE: Review only; no manuscript or story-spec edits authorized
+MODE: Historical review; a later title/abstract revision was authorized
 
 STAGE OR ROUND: Developmental/integration review of the exploratory internal draft; no prior review round supplied
 
@@ -12,7 +12,19 @@ MODULES: `paper-review` with the `academic-writing-skills` integrity base; `writ
 
 SOURCE BASIS: `Paper/afmr_question.tex`, its three `\input` sections under `Paper/drafts/`, and `Paper/afmr_story_spec.md`. `Paper/afmr_question.bib` was read only to reconcile citation keys. The included draft files are treated as part of the active manuscript because `afmr_question.tex` loads them. No completed quality runs or venue-specific language rules were supplied.
 
-READINESS: The narrative is conditionally suitable for another internal prose pass, but it is not ready for submission or empirical RQ1–RQ4 answers. The main blockers are the RQ1 construct/evidence boundary, causal-sounding RQ3/RQ4 bridge language, incomplete equation definitions, and the remaining macro/layout cleanup.
+READINESS: The narrative is not ready for submission or empirical RQ1–RQ4
+answers. The title and abstract have since been revised in a separate pass;
+the findings below record the earlier integration review and its remaining
+scientific and notation gates.
+
+## Superseding title and abstract pass
+
+On 2026-09-13, the title and abstract were reopened at the author's request.
+The active title is descriptive rather than question-form, and the active
+abstract is a concise, evidence-bounded version without parenthetical metric
+definitions, formulas, or score values. The detailed findings below remain a
+historical record of the earlier review and should not be read as the current
+title/abstract text.
 
 The four questions appear in the same order in the Introduction, Experiments, Results templates, Discussion, and story specification. The manuscript also keeps quality cells pending and explicitly distinguishes implementation checks from generation evidence. Those are strong structural choices. The issues below preserve those choices while tightening scope and reader-facing terminology.
 
