@@ -186,7 +186,7 @@ Status: needs evidence; deliberately omitted from the abstract.
 ## Integration note
 
 Candidate A is the recommended replacement for the current question-form
-title. If adopted, propagate it to `Paper/afmr_question.tex`,
+title. If adopted, propagate it to `Paper/main.tex`,
 `Paper/afmr_story_spec.md`, the exact title lock in
 `Paper/afmr_manuscript_state.json`, and review headers before running the exact
 candidate audits. The recommended abstract can replace the active abstract

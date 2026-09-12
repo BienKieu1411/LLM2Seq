@@ -99,7 +99,7 @@ not turn the title into evidence for a hallucination-reduction claim.
 - **Reader function:** the title should identify the problem setting and the
   contribution before the reader reaches the method section.
 - **Cross-artifact stability:** the selected title is synchronized in
-  `afmr_question.tex`, `afmr_story_spec.md`, and the exact title lock in
+  `main.tex`, `afmr_story_spec.md`, and the exact title lock in
   `afmr_manuscript_state.json`.
 
 ## Functional-completeness note

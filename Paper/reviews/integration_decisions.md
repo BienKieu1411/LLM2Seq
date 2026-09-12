@@ -1,6 +1,6 @@
 # Review integration record
 
-The active manuscript is `Paper/afmr_question.tex` and the proposed system is the `afmr_value_anchor` graph in `src/eviseq_new`. The integration keeps all quality values pending.
+The active manuscript is `Paper/main.tex` and the proposed system is the `afmr_value_anchor` graph in `src/eviseq_new`. The integration keeps all quality values pending.
 
 ## Decisions applied
 

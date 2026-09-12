@@ -10,7 +10,7 @@ STAGE OR ROUND: Integration review of an exploratory/complete internal draft pen
 
 MODULES: `paper-review` with the `academic-writing-skills` integrity base; the AI/LLM computational module for model, prompt, sampling, provenance, and evaluation claims; the display/notation/provenance module for metric definitions and derived scores; and the red-team/release checks for negative space and dimension completeness.
 
-SOURCE BASIS: `Paper/afmr_question.tex`, `Paper/afmr_story_spec.md`, `Technical_Report/FACTUALITY_EVALUATION.md`, and the evaluator/tests under `src/rouge155`. No prior review round, response letter, venue rule, or completed EviSeq run was supplied. The existing `src/rouge155/results` files are old LRSum/WikiLingua ROUGE artifacts and are not evidence for the four-dataset EviSeq contract.
+SOURCE BASIS: `Paper/main.tex`, `Paper/afmr_story_spec.md`, `Technical_Report/FACTUALITY_EVALUATION.md`, and the evaluator/tests under `src/rouge155`. No prior review round, response letter, venue rule, or completed EviSeq run was supplied. The existing `src/rouge155/results` files are old LRSum/WikiLingua ROUGE artifacts and are not evidence for the four-dataset EviSeq contract.
 
 READINESS: Not ready for a quality claim, an RQ1--RQ4 answer, or submission. The primary bottlenecks are the absent matched runs and BookSum/GovReport artifacts, the RQ1 construct gap, and an uncertainty/provenance protocol that currently covers only a subset of the promised metrics.
 
@@ -28,7 +28,7 @@ The draft has several sound safeguards. It keeps all quality values pending, sta
 
 ### EVAL-01 — The locked four-dataset evidence set is absent
 
-Location: `Paper/afmr_question.tex:69,77,115-117`; `Paper/afmr_story_spec.md:8-9,53-61,65-73`; `src/rouge155/results/`.
+Location: `Paper/main.tex:69,77,115-117`; `Paper/afmr_story_spec.md:8-9,53-61,65-73`; `src/rouge155/results/`.
 
 Classification: scope = validity/project; severity = **S4**; evidence = **CONFIRMED**; status = **OPEN**; authority needed = the completed experiment manifests, predictions, checkpoints, and scorer artifacts; affected gates = Results, cross-artifact integration, and release.
 
@@ -48,7 +48,7 @@ Choose one bounded contract. Either narrow RQ1 and its claims to a change in `Al
 
 ### EVAL-03 — Paired uncertainty is promised for all quality comparisons but implemented only for ROUGE
 
-Location: `Paper/afmr_question.tex:79,117`; `Paper/afmr_story_spec.md:34,59-61`; `Technical_Report/FACTUALITY_EVALUATION.md:64-75`; `src/rouge155/paired_bootstrap.py:151-231`.
+Location: `Paper/main.tex:79,117`; `Paper/afmr_story_spec.md:34,59-61`; `Technical_Report/FACTUALITY_EVALUATION.md:64-75`; `src/rouge155/paired_bootstrap.py:151-231`.
 
 Classification: scope = method/reproducibility; severity = **S3**; evidence = **CONFIRMED**; status = **OPEN**; authority needed = the analysis plan and metric-level uncertainty artifacts; affected gates = RQ1, RQ2, statistical Results, and release.
 
@@ -68,7 +68,7 @@ Add byte- or score-level parity tests against the released `nli_sp` path at the 
 
 ### EVAL-05 — Decoder-only and T5Gemma2 comparisons are under-specified for fairness
 
-Location: `Paper/afmr_question.tex:69,77,98-111`; `Paper/afmr_story_spec.md:34,50-60,77-82`.
+Location: `Paper/main.tex:69,77,98-111`; `Paper/afmr_story_spec.md:34,50-60,77-82`.
 
 Classification: scope = design/cross-model validity; severity = **S3**; evidence = **CONFIRMED**; status = **OPEN**; authority needed = per-system training and generation manifests; affected gates = RQ2, baseline Methods, and Results.
 
@@ -78,7 +78,7 @@ Provide a per-system table or machine-readable manifest containing immutable mod
 
 ### EVAL-06 — RQ3 “necessity” is not identified by the proposed ablations
 
-Location: `Paper/afmr_story_spec.md:35,38,48-50,72`; `Paper/afmr_question.tex:69,98-106`.
+Location: `Paper/afmr_story_spec.md:35,38,48-50,72`; `Paper/main.tex:69,98-106`.
 
 Classification: scope = design/causal interpretation; severity = **S3**; evidence = **CONFIRMED**; status = **OPEN**; authority needed = an ablation estimand and implementation specification; affected gates = RQ3, Results, and Discussion.
 
@@ -88,7 +88,7 @@ Define each ablation tensor path and what source information remains. Retrain ev
 
 ### EVAL-07 — RQ4 conflates portability with directionality, capacity, and encoder-specific factors
 
-Location: `Paper/afmr_story_spec.md:36,38,42-47,73`; `Paper/afmr_question.tex:98-104`.
+Location: `Paper/afmr_story_spec.md:36,38,42-47,73`; `Paper/main.tex:98-104`.
 
 Classification: scope = design/claim scope; severity = **S3**; evidence = **CONFIRMED**; status = **OPEN**; authority needed = a portability estimand or a factor-separated encoder design; affected gates = RQ4, Results, and Discussion.
 
@@ -98,7 +98,7 @@ Either narrow RQ4 to descriptive transfer across the four named encoders under f
 
 ### EVAL-08 — Checkpoint, model, prompt, seed, and runtime provenance is promised but not immutable
 
-Location: `Paper/afmr_question.tex:77,83,111-117`; `Paper/afmr_story_spec.md:40-61`; `src/rouge155/evaluate_bertscore.py:63-90,144-160`; `src/rouge155/evaluate_alignscore.py:167-208,326-349`; `src/rouge155/evaluate_rouge.py:213-226`.
+Location: `Paper/main.tex:77,83,111-117`; `Paper/afmr_story_spec.md:40-61`; `src/rouge155/evaluate_bertscore.py:63-90,144-160`; `src/rouge155/evaluate_alignscore.py:167-208,326-349`; `src/rouge155/evaluate_rouge.py:213-226`.
 
 Classification: scope = reproducibility/submission integrity; severity = **S3**; evidence = **CONFIRMED**; status = **OPEN**; authority needed = an experiment/scorer manifest committed with the release; affected gates = Methods, supplements, Results, and release.
 
@@ -108,7 +108,7 @@ Create one manifest per model/dataset/run with SHA-256 digests for predictions, 
 
 ### EVAL-09 — Metric names, primary statistics, and derived-score notation need one ledger
 
-Location: `Paper/afmr_question.tex:46-48,79`; `Paper/afmr_story_spec.md:33-34,57,61`; `Technical_Report/FACTUALITY_EVALUATION.md:15-40`; `src/rouge155/evaluate_rouge.py:21-22,211-227`; `src/rouge155/evaluate_bertscore.py:138-160`.
+Location: `Paper/main.tex:46-48,79`; `Paper/afmr_story_spec.md:33-34,57,61`; `Technical_Report/FACTUALITY_EVALUATION.md:15-40`; `src/rouge155/evaluate_rouge.py:21-22,211-227`; `src/rouge155/evaluate_bertscore.py:138-160`.
 
 Classification: scope = notation/display/interpretation; severity = **S2**; evidence = **CONFIRMED**; status = **OPEN**; authority needed = the metric reporting contract; affected gates = metric Methods, tables/captions, and Results.
 
@@ -118,7 +118,7 @@ Add a notation/provenance ledger: `x` = source, `y` = generated summary, `C_i = 
 
 ### EVAL-10 — Macro-averaging and multiplicity are not defined
 
-Location: `Paper/afmr_question.tex:79`; `Paper/afmr_story_spec.md:55,59,70-73`.
+Location: `Paper/main.tex:79`; `Paper/afmr_story_spec.md:55,59,70-73`.
 
 Classification: scope = statistical/reporting; severity = **S3**; evidence = **CONFIRMED**; status = **OPEN**; authority needed = a prespecified analysis plan; affected gates = all RQs, summary Results, and release.
 
@@ -138,7 +138,7 @@ Make all scorers use one loader that requires a stable, unique, non-null example
 
 ## Section-linked comments and presentation flags
 
-The manuscript's conditional framing is appropriate: `afmr_question.tex:69` and the story specification's claim/evidence map correctly keep quality claims unverified. That wording should remain in the abstract, Results placeholders, and conclusion until the complete evidence matrix is available. The descriptive title now avoids an outcome claim; a filled Results sentence should still name the measured signal and comparison set rather than use “factuality” as an unqualified synonym for AlignScore.
+The manuscript's conditional framing is appropriate: `main.tex:69` and the story specification's claim/evidence map correctly keep quality claims unverified. That wording should remain in the abstract, Results placeholders, and conclusion until the complete evidence matrix is available. The descriptive title now avoids an outcome claim; a filled Results sentence should still name the measured signal and comparison set rather than use “factuality” as an unqualified synonym for AlignScore.
 
 The display contract should make the direction visible wherever a value appears: ROUGE and BERTScore F1 higher-is-better; native AlignScore consistency higher-is-better; `H=1-C` lower-is-better and not a probability. Captions should name the scorer checkpoint/version, reference policy, aggregation, uncertainty type, and whether the value is per-dataset or macro. The display/notation pass cannot verify table/figure consistency because the substantive sections are `\input` files outside this review scope and no completed quality displays exist.
 
@@ -148,7 +148,7 @@ Before the next review, complete the BookSum and GovReport manifests/recipes and
 
 ## Functional-completeness retrospective
 
-Scope covered: integration-stage evaluation review across `afmr_question.tex`, `afmr_story_spec.md`, `FACTUALITY_EVALUATION.md`, and the evaluator/tests in `src/rouge155`; RQ1--RQ4, metric definitions, fairness, uncertainty, provenance, truncation, and missing-dataset evidence were all checked.
+Scope covered: integration-stage evaluation review across `main.tex`, `afmr_story_spec.md`, `FACTUALITY_EVALUATION.md`, and the evaluator/tests in `src/rouge155`; RQ1--RQ4, metric definitions, fairness, uncertainty, provenance, truncation, and missing-dataset evidence were all checked.
 
 Authority and locks: passed for the locked conditional story and the stated AlignScore/BERTScore directions; limited because no completed experiment manifest, active release record, prior-round material, or venue requirements were supplied.
 

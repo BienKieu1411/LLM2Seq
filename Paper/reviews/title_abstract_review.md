@@ -45,7 +45,7 @@ READINESS: title and abstract are integrated; empirical release remains blocked 
 - The active abstract is about 156 words before LaTeX macro expansion. It uses
   no parenthetical asides, formulas, or score values; its exact candidate is
   recorded in `Paper/reviews/active_title_abstract.txt` and its source is
-  `Paper/afmr_question.tex`.
+  `Paper/main.tex`.
 - The descriptive title identifies the method and task without turning a
   pending evaluation into a result claim. Any later title change is a Class A
   change and must propagate to the state lock, story specification, abstract,

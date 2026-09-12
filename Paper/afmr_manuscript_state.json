@@ -17,7 +17,7 @@
   "artifacts": [
     {
       "id": "main",
-      "path": "Paper/afmr_question.tex",
+      "path": "Paper/main.tex",
       "role": "main_manuscript",
       "status": "ACTIVE",
       "required_for_release": true

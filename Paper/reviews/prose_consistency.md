@@ -10,7 +10,7 @@ STAGE OR ROUND: Developmental/integration review of the exploratory internal dra
 
 MODULES: `paper-review` with the `academic-writing-skills` integrity base; `writing-skill` for reverse outlining and claim–evidence prose; the AI/LLM computational module for proxy, transfer, and ablation wording; and the display/notation/provenance module for equations and derived scores.
 
-SOURCE BASIS: `Paper/afmr_question.tex`, its three `\input` sections under `Paper/drafts/`, and `Paper/afmr_story_spec.md`. `Paper/afmr_question.bib` was read only to reconcile citation keys. The included draft files are treated as part of the active manuscript because `afmr_question.tex` loads them. No completed quality runs or venue-specific language rules were supplied.
+SOURCE BASIS: `Paper/main.tex`, its three `\input` sections under `Paper/drafts/`, and `Paper/afmr_story_spec.md`. `Paper/afmr_question.bib` was read only to reconcile citation keys. The included draft files are treated as part of the active manuscript because `main.tex` loads them. No completed quality runs or venue-specific language rules were supplied.
 
 READINESS: The narrative is not ready for submission or empirical RQ1–RQ4
 answers. The title and abstract have since been revised in a separate pass;
@@ -32,7 +32,7 @@ The four questions appear in the same order in the Introduction, Experiments, Re
 
 ### PC-01 — “Factuality” and typed-error wording exceed the direct RQ1 evidence
 
-Location: `Paper/afmr_question.tex:57,69`; `Paper/drafts/introduction_related_work.tex:28,35`; `Paper/drafts/results_discussion.tex:65-81`; `Paper/afmr_story_spec.md:13,33,61,65-71`.
+Location: `Paper/main.tex:57,69`; `Paper/drafts/introduction_related_work.tex:28,35`; `Paper/drafts/results_discussion.tex:65-81`; `Paper/afmr_story_spec.md:13,33,61,65-71`.
 
 Classification: scope = research-question/epistemic; severity = **S4**; evidence = **CONFIRMED**; status = **OPEN**; authority needed = the locked RQ1 estimand plus either a completed typed factual-error audit or an explicit proxy-only decision; affected artifacts = manuscript, story specification, Results templates, Discussion, and Conclusion; blocking stage = empirical RQ answers and submission.
 
@@ -52,7 +52,7 @@ Use a content-bearing bridge such as: `RQ1 tests source-support consistency; RQ2
 
 ### PC-03 — The protected macro contract is not applied consistently
 
-Location: macro definitions at `Paper/afmr_question.tex:26-55`; raw or mixed uses at `Paper/afmr_question.tex:57,69,77,79,100,111`, `Paper/drafts/method_experiments.tex:27,92,180,187,245-258,277`, and `Paper/drafts/results_discussion.tex:70,78,156,217`.
+Location: macro definitions at `Paper/main.tex:26-55`; raw or mixed uses at `Paper/main.tex:57,69,77,79,100,111`, `Paper/drafts/method_experiments.tex:27,92,180,187,245-258,277`, and `Paper/drafts/results_discussion.tex:70,78,156,217`.
 
 Classification: scope = cross-file consistency/notation; severity = **S3**; evidence = **CONFIRMED**; status = **OPEN**; authority needed = the macro rules in the story specification; affected artifacts = manuscript and story specification; blocking stage = exact-candidate release check.
 
@@ -72,7 +72,7 @@ Define each quantity immediately before first use: the per-window score and its 
 
 ### PC-05 — The abstract turns a copy route into an unmeasured preservation claim
 
-Location: `Paper/afmr_question.tex:69`; compare the safer wording in `Paper/drafts/introduction_related_work.tex:19`, `Paper/drafts/results_discussion.tex:145-148`, and `Paper/afmr_story_spec.md:67-69`.
+Location: `Paper/main.tex:69`; compare the safer wording in `Paper/drafts/introduction_related_work.tex:19`, `Paper/drafts/results_discussion.tex:145-148`, and `Paper/afmr_story_spec.md:67-69`.
 
 Classification: scope = claim/evidence; severity = **S3**; evidence = **CONFIRMED**; status = **OPEN**; authority needed = held-out copy/number evidence or the implementation-only claim contract; affected artifacts = Abstract, Introduction, Results, and Conclusion; blocking stage = summary-claim release.
 
@@ -80,7 +80,7 @@ Classification: scope = claim/evidence; severity = **S3**; evidence = **CONFIRME
 
 ### PC-06 — Pending-score notation is clear to a reader but inconsistent as a filling workflow
 
-Location: `Paper/afmr_question.tex:69,111,117`; `Paper/drafts/results_discussion.tex:25-47,74-139`; `Paper/afmr_story_spec.md:8,29,70-73,81`.
+Location: `Paper/main.tex:69,111,117`; `Paper/drafts/results_discussion.tex:25-47,74-139`; `Paper/afmr_story_spec.md:8,29,70-73,81`.
 
 Classification: scope = delivery/provenance; severity = **S2**; evidence = **CONFIRMED**; status = **OPEN**; authority needed = the score-filling convention; affected artifacts = Results, appendix, abstract, and story specification; blocking stage = score insertion/release audit.
 
@@ -106,7 +106,7 @@ The Introduction architecture paragraph (`introduction_related_work.tex:19`) car
 
 The prose audit found no exact duplicated sentence. It flagged repeated fill-in-template openings and dense lexical hyphenation; those are mostly intentional template and technical terms (`decoder-only`, `cross-attention`, `controller-conditioned`, and `source-token`). Keep necessary technical compounds, but avoid rotating `factuality`, `source support`, `source consistency`, and `AlignScore consistency` without defining their relationship. “Observed behavior,” “that mechanism,” and “a different question” should identify the metric, component, or benchmark condition locally.
 
-Tectonic compiles the current active manuscript and runs BibTeX successfully, with no fatal TeX error or unresolved citation/reference reported. The build still emits many underfull boxes and overfull boxes in the long equations at `method_experiments.tex:37,47,58,78,102,110,129,153,181` and in the long appendix caption at `afmr_question.tex:111`. Use `aligned` rows or concise surrounding prose where the overflow is visible, then perform a visual PDF check; the warnings alone do not establish whether the rendered page is acceptable. No visual check was performed in this review.
+Tectonic compiles the current active manuscript and runs BibTeX successfully, with no fatal TeX error or unresolved citation/reference reported. The build still emits many underfull boxes and overfull boxes in the long equations at `method_experiments.tex:37,47,58,78,102,110,129,153,181` and in the long appendix caption at `main.tex:111`. Use `aligned` rows or concise surrounding prose where the overflow is visible, then perform a visual PDF check; the warnings alone do not establish whether the rendered page is acceptable. No visual check was performed in this review.
 
 ## Next-step instruction
 
@@ -114,7 +114,7 @@ First settle the locked RQ1 construct and the RQ3/RQ4 transition wording, then p
 
 ## Functional-completeness retrospective
 
-Scope covered: review-only prose, argument flow, RQ1–RQ4 transitions, terminology/macros, equation notation, citation keys, LaTeX structure, and pending-score wording across `afmr_question.tex`, its included manuscript sections, and `afmr_story_spec.md`.
+Scope covered: review-only prose, argument flow, RQ1–RQ4 transitions, terminology/macros, equation notation, citation keys, LaTeX structure, and pending-score wording across `main.tex`, its included manuscript sections, and `afmr_story_spec.md`.
 
 Authority and locks: the story specification’s title, names, evidence boundary, question chain, and score policy were consulted; no locked wording was changed. The RQ1 proxy decision and any title change remain author decisions.
 

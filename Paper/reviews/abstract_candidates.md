@@ -2,7 +2,7 @@
 
 > **Superseded round (2026-09-13).** Candidate A below was the previous active
 > abstract. The current abstract is the shorter, parenthesis-free text in
-> `Paper/reviews/active_title_abstract.txt` and `Paper/afmr_question.tex`.
+> `Paper/reviews/active_title_abstract.txt` and `Paper/main.tex`.
 
 ## Scope and authority
 

@@ -2,7 +2,7 @@
 
 ## Active artifact and evidence state
 
-- **Active manuscript:** `Paper/afmr_question.tex`.
+- **Active manuscript:** `Paper/main.tex`.
 - **Architecture authority:** `src/eviseq_new` and `Technical_Report/AFMR_IMPLEMENTATION_PLAN.md` sections 1--10, 27--28.
 - **Other artifacts:** Existing drafts and experiments are outside the scope of this manuscript. They must not define the proposed method and are not discussed in the paper.
 - **Evidence state:** implementation and unit-test evidence are available; the four-dataset fine-tuning, prediction files, ROUGE-1.5.5, AlignScore, and BERTScore results are not available in this workspace. Every quality score in the manuscript is therefore a placeholder.

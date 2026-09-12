@@ -2,7 +2,7 @@
 
 REVIEW PROFILE: Academic-writing integrity and reviewer-facing prose pass.
 PAPER: *EviSeq: Source-Grounded Summarization with Composed Pretrained Encoders and Causal Decoders*
-SCOPE: The active manuscript rooted at `Paper/afmr_question.tex` and its included drafts, with the proposed implementation restricted to `src/eviseq_new`.
+SCOPE: The active manuscript rooted at `Paper/main.tex` and its included drafts, with the proposed implementation restricted to `src/eviseq_new`.
 STATUS: Review-only memo; no empirical result or submission-readiness claim is authorized.
 
 ## Superseding title and abstract pass
