@@ -55,7 +55,14 @@ def _resolve_model(model_name: str, spec: dict[str, Any]) -> str:
     local_dir = str(spec.get("local_dir", "")).strip()
     if model_root and local_dir:
         return str((Path(model_root).expanduser() / local_dir).resolve())
-    return str(spec.get("model_id", "")).strip()
+    if local_dir:
+        # Keep the fallback local as well.  The run preflight below will give
+        # a clear error if this directory is not present; never pass a Hub
+        # repository ID to Transformers.
+        return str(Path(local_dir).expanduser().resolve())
+    raise ValueError(
+        f"No local path configured for {model_name}; set {env_name or 'MODEL_ROOT'} or provide a model.local_dir"
+    )
 
 
 def build_run_config(
@@ -140,6 +147,17 @@ def _data_preflight(config: dict[str, Any]) -> None:
         raise FileNotFoundError("Missing prepared dataset files: " + ", ".join(missing))
 
 
+def _model_preflight(config: dict[str, Any]) -> None:
+    model_path = Path(config["model"]["name_or_path"]).expanduser()
+    if not model_path.is_dir():
+        model_id = config["model"].get("model_id", "unknown")
+        raise FileNotFoundError(
+            "Local model directory does not exist: "
+            f"{model_path}. Set the corresponding *_PATH variable (model_id={model_id}); "
+            "Hugging Face loading/downloads are disabled."
+        )
+
+
 def run_suite(args: argparse.Namespace) -> int:
     suite_path = Path(args.config).expanduser().resolve()
     with suite_path.open("r", encoding="utf-8") as handle:
@@ -181,6 +199,7 @@ def run_suite(args: argparse.Namespace) -> int:
         )
         _write_config(config, config_path)
         if not args.dry_run:
+            _model_preflight(config)
             _data_preflight(config)
         run_dir = Path(config["run"]["output_dir"])
         print(f"[{index}/{len(entries)}] {model_name} on {dataset_name} -> {run_dir}")

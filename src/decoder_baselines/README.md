@@ -25,14 +25,17 @@ QWEN3_0_6B_PATH=/models/Qwen3-0.6B \
 QWEN3_8B_PATH=/models/Qwen3-8B \
 QWEN3_4B_PATH=/models/Qwen3-4B \
 LLAMA3_8B_PATH=/models/Llama-3.1-8B \
-LLAMA3_3B_PATH=/models/Llama-3.2-3B \
+LLAMA3_3B_PATH=/models/Llama-3.2-3B-Instruct \
 NEMOTRON_DIFFUSION_8B_PATH=/models/Nemotron-Labs-Diffusion-8B-Base \
 NEMOTRON_DIFFUSION_3B_PATH=/models/Nemotron-Labs-Diffusion-3B-Base \
 bash scripts/run_suite.sh --models qwen3_0_6b,qwen3_8b,qwen3_4b,llama3_8b,llama3_3b,nemotron_diffusion_8b,nemotron_diffusion_3b --datasets pubmed,arxiv
 ```
 
-The model paths are local-only.  The runner sets `HF_HUB_OFFLINE=1` and never
-downloads a checkpoint.  Add `cnndm`, `wikilingua` or `lrsum` to `--datasets`
+The model paths are mandatory local directories.  The runner sets
+`HF_HUB_OFFLINE=1` and never downloads or resolves a Hugging Face repository
+ID.  Set each `*_PATH` variable (or set `MODEL_ROOT` once when its child
+directory names match `local_dir`) before starting.  Add `cnndm`, `wikilingua`
+or `lrsum` to `--datasets`
 after their three prepared files exist under `src/eviseq_new/datasets/`, or
 override `data_root` in a copied suite YAML.  Use `--dry-run` to materialize
 and inspect all commands without loading a model.  Use `--continue-on-error`
@@ -54,7 +57,7 @@ with its resolved config and `final_model/` path; the same decode controls are
 used unless the copied config explicitly enables sampling.
 
 The seven model IDs in the bundled matrix are `Qwen/Qwen3-0.6B`, `Qwen/Qwen3-8B`,
-`Qwen/Qwen3-4B`, `meta-llama/Llama-3.1-8B`, `meta-llama/Llama-3.2-3B`,
+`Qwen/Qwen3-4B`, `meta-llama/Llama-3.1-8B`, `meta-llama/Llama-3.2-3B-Instruct`,
 `nvidia/Nemotron-Labs-Diffusion-8B-Base` and
 `nvidia/Nemotron-Labs-Diffusion-3B-Base`.  If a local directory uses another
 name, set the corresponding `*_PATH` variable; the suite records both the

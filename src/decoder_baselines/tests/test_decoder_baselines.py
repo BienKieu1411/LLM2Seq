@@ -116,6 +116,25 @@ def test_training_and_eval_batch_sizes_are_independent() -> None:
         assert config["generation"]["batch_size"] == eval_batch
 
 
+def test_llama3_3b_uses_instruct_checkpoint() -> None:
+    suite_path = Path(__file__).parents[1] / "configs" / "suite.yaml"
+    suite = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
+    config, _ = build_run_config(suite, suite_path, "llama3_3b", "pubmed")
+    validate_config(config)
+    assert config["model"]["model_id"] == "meta-llama/Llama-3.2-3B-Instruct"
+    assert config["model"]["name_or_path"].endswith("Llama-3.2-3B-Instruct")
+
+
+def test_model_resolution_never_falls_back_to_hub_id(monkeypatch: Any) -> None:
+    monkeypatch.delenv("QWEN3_0_6B_PATH", raising=False)
+    monkeypatch.delenv("MODEL_ROOT", raising=False)
+    suite_path = Path(__file__).parents[1] / "configs" / "suite.yaml"
+    suite = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
+    config, _ = build_run_config(suite, suite_path, "qwen3_0_6b", "pubmed")
+    assert config["model"]["name_or_path"] != config["model"]["model_id"]
+    assert Path(config["model"]["name_or_path"]).is_absolute()
+
+
 def test_all_models_share_t5gemma_decode_controls() -> None:
     suite_path = Path(__file__).parents[1] / "configs" / "suite.yaml"
     suite = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
