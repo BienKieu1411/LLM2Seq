@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from eviseq_afmr.config import load_config, resolve_path
+from eviseq_afmr.config import load_config, resolve_path, validate_config
 
 
 def test_smoke_config_is_valid():
@@ -24,6 +24,17 @@ def test_pubmed_recipe_matches_t5gemma_prompt_and_decode_contract():
     assert config["generation"]["min_new_tokens"] == 32
     assert config["generation"]["repetition_penalty"] == 1.05
     assert config["generation"]["no_repeat_ngram_size"] == 3
+    assert config["generation"]["do_sample"] is False
+    assert config["generation"]["temperature"] == 0.0
+    assert config["generation"]["top_k"] == 0
+    assert config["generation"]["top_p"] == 1.0
+
+
+def test_sampling_config_requires_positive_temperature():
+    config = load_config(Path(__file__).parents[1] / "configs" / "afmr_smoke.yaml")
+    config["generation"].update(do_sample=True, temperature=0.0)
+    with pytest.raises(ValueError, match="temperature must be positive"):
+        validate_config(config)
 
 
 @pytest.mark.parametrize(

@@ -98,3 +98,6 @@ generation:
   no_repeat_ngram_size: 3
   num_beams: 1
   do_sample: false
+  temperature: 0.0
+  top_k: 0
+  top_p: 1.0

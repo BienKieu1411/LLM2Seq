@@ -37,6 +37,10 @@ def main(argv: list[str] | None = None) -> None:
     evaluate.add_argument("--device", default=None)
     evaluate.add_argument("--batch-size", type=int, default=None)
     evaluate.add_argument("--max-examples", type=int, default=0)
+    evaluate.add_argument("--do-sample", action="store_true")
+    evaluate.add_argument("--temperature", type=float, default=None)
+    evaluate.add_argument("--top-k", type=int, default=None)
+    evaluate.add_argument("--top-p", type=float, default=None)
     validate = subparsers.add_parser("validate-config")
     validate.add_argument("config")
     prepare = subparsers.add_parser("prepare")
@@ -82,6 +86,10 @@ def main(argv: list[str] | None = None) -> None:
             batch_size=args.batch_size,
             device=args.device,
             max_examples=args.max_examples,
+            do_sample=True if args.do_sample else None,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
         )
         print(__import__("json").dumps(result, ensure_ascii=False, indent=2))
         return

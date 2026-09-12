@@ -1,8 +1,8 @@
 _base_: afmr_base.yaml
 
 experiment:
-  name: afmr_pubmed
-  output_dir: runs/afmr/pubmed_value_anchor_copy
+  name: afmr_pubmed_wide
+  output_dir: runs/afmr/pubmed_value_anchor_wide
 
 data:
   train_file: datasets/pubmed/train.jsonl
@@ -12,6 +12,25 @@ data:
   decoder_prompt: "Summarize the encoded biomedical article as a concise, factual abstract. Cover the objective, methods, key results, and conclusion when supported. Preserve numbers and the direction of findings. Output only the abstract."
   decoder_prefix: "Abstract:\n"
   detokenize: true
+
+architecture:
+  name: afmr_value_anchor
+  controller_dim: 384
+  depth_taps: 4
+  depth_rank: 256
+  depth_gate_init: 0.04
+  depth_gate_max: 0.15
+  feature_rank: 512
+  feature_gate_init: 0.04
+  feature_gate_max: 0.20
+  focus_hidden: 384
+  focus_windows: [32, 128, 512, 1024]
+  focus_overlap: 0.5
+  focus_strength_init: 0.10
+  focus_strength_max: 0.50
+  temperature_init: 1.0
+  temperature_min: 0.75
+  temperature_max: 1.5
 
 generation:
   max_new_tokens: 512
@@ -26,3 +45,8 @@ model:
 training:
   interface_warmup_epochs: 1
   full_finetune_epochs: 3
+  batch_size: 48
+  gradient_accumulation_steps: 2
+  validation_batch_size: 4
+  max_grad_norm: 1.0
+  save_best: false

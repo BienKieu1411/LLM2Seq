@@ -1,3 +1,5 @@
+import pytest
+
 from eviseq_afmr.evaluation.generate import append_jsonl, existing_ids
 from eviseq_afmr.evaluation.metrics import summarization_metrics
 
@@ -15,6 +17,23 @@ def test_diagnostic_metrics_are_bounded():
     assert 0 <= metrics["rouge1"] <= 100
     assert 0 <= metrics["rouge2"] <= 100
     assert 0 <= metrics["rougeL"] <= 100
+
+
+def test_sampling_filters_temperature_top_k_and_top_p():
+    import torch
+
+    from eviseq_afmr.evaluation.generate import _sample_token
+
+    scores = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
+    generator = torch.Generator().manual_seed(7)
+    sampled = _sample_token(scores, temperature=0.7, top_k=1, top_p=0.9, generator=generator)
+    assert sampled.tolist() == [3]
+    with pytest.raises(ValueError, match="temperature must be positive"):
+        _sample_token(scores, temperature=0.0)
+    with pytest.raises(ValueError, match="top_k must be non-negative"):
+        _sample_token(scores, top_k=-1)
+    with pytest.raises(ValueError, match="top_p must lie"):
+        _sample_token(scores, top_p=0.0)
 
 
 def test_chat_prompt_is_not_penalized_as_generated_text(monkeypatch):

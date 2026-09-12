@@ -1,4 +1,4 @@
-"""Greedy generation helper with append-only JSONL resume."""
+"""Greedy and candidate generation helpers with append-only JSONL resume."""
 
 from __future__ import annotations
 
@@ -49,6 +49,51 @@ def _no_repeat_ngram_tokens(token_ids: torch.Tensor, ngram_size: int) -> list[li
     return banned
 
 
+def _sample_token(
+    scores: torch.Tensor,
+    *,
+    temperature: float = 1.0,
+    top_k: int = 0,
+    top_p: float = 1.0,
+    generator: torch.Generator | None = None,
+) -> torch.Tensor:
+    """Sample one token using temperature, top-k, then nucleus top-p filtering."""
+    if temperature <= 0:
+        raise ValueError("temperature must be positive when sampling")
+    if top_k < 0:
+        raise ValueError("top_k must be non-negative")
+    if not 0 < top_p <= 1:
+        raise ValueError("top_p must lie in (0, 1]")
+
+    logits = scores.float() / float(temperature)
+    fallback = logits.clone()
+    vocabulary = logits.shape[-1]
+    if top_k:
+        keep = min(int(top_k), vocabulary)
+        threshold = logits.topk(keep, dim=-1).values[..., -1, None]
+        logits = logits.masked_fill(logits < threshold, -float("inf"))
+    if top_p < 1.0:
+        ordered, indices = logits.sort(dim=-1, descending=True)
+        probabilities = torch.softmax(ordered, dim=-1)
+        cumulative = probabilities.cumsum(dim=-1)
+        remove = cumulative - probabilities >= float(top_p)
+        remove[..., 0] = False
+        ordered = ordered.masked_fill(remove, -float("inf"))
+        logits = torch.full_like(logits, -float("inf")).scatter(-1, indices, ordered)
+
+    # Repetition/no-repeat constraints can mask every vocabulary item for tiny
+    # test tokenizers. Keep sampling defined by falling back to the logits
+    # before top-k/top-p, and finally to a uniform row if everything is masked.
+    invalid = ~torch.isfinite(logits).any(dim=-1)
+    if invalid.any():
+        logits[invalid] = fallback[invalid]
+    invalid = ~torch.isfinite(logits).any(dim=-1)
+    if invalid.any():
+        logits[invalid] = 0.0
+    probabilities = torch.softmax(logits, dim=-1)
+    return torch.multinomial(probabilities, 1, generator=generator).squeeze(-1)
+
+
 @torch.inference_mode()
 def generate_greedy(
     model: Any,
@@ -59,11 +104,24 @@ def generate_greedy(
     repetition_penalty: float = 1.0,
     no_repeat_ngram_size: int = 0,
     compact_finished: bool = True,
+    *,
+    do_sample: bool = False,
+    temperature: float = 1.0,
+    top_k: int = 0,
+    top_p: float = 1.0,
+    generator: torch.Generator | None = None,
 ) -> tuple[list[str], torch.Tensor]:
     if repetition_penalty <= 0:
         raise ValueError("repetition_penalty must be positive")
     if no_repeat_ngram_size < 0:
         raise ValueError("no_repeat_ngram_size must be non-negative")
+    if do_sample:
+        if temperature <= 0:
+            raise ValueError("temperature must be positive when sampling")
+        if top_k < 0:
+            raise ValueError("top_k must be non-negative")
+        if not 0 < top_p <= 1:
+            raise ValueError("top_p must lie in (0, 1]")
     model.eval()
     bridge = model.encode_source(
         batch["input_ids"],
@@ -124,7 +182,17 @@ def generate_greedy(
                 device=token_ids.device,
                 dtype=token_ids.dtype,
             )
-            next_token[active_rows] = scores.argmax(dim=-1)
+            next_token[active_rows] = (
+                _sample_token(
+                    scores,
+                    temperature=float(temperature),
+                    top_k=int(top_k),
+                    top_p=float(top_p),
+                    generator=generator,
+                )
+                if do_sample
+                else scores.argmax(dim=-1)
+            )
             next_token = torch.where(finished, int(getattr(tokenizer, "pad_token_id", 0) or 0), next_token)
             decode_mask = torch.cat((decode_mask, (~finished)[:, None]), dim=1)
             if eos is not None:
@@ -154,6 +222,40 @@ def generate_greedy(
         model.decoder.clear_cross_cache()
     texts = tokenizer.batch_decode(token_ids[:, batch["decoder_prompt_ids"].shape[1] :], skip_special_tokens=True)
     return list(texts), token_ids
+
+
+@torch.inference_mode()
+def generate_sampled(
+    model: Any,
+    batch: dict[str, Any],
+    tokenizer: Any,
+    max_new_tokens: int,
+    min_new_tokens: int = 0,
+    repetition_penalty: float = 1.0,
+    no_repeat_ngram_size: int = 0,
+    compact_finished: bool = True,
+    *,
+    temperature: float = 1.0,
+    top_k: int = 0,
+    top_p: float = 1.0,
+    generator: torch.Generator | None = None,
+) -> tuple[list[str], torch.Tensor]:
+    """Generate candidates; training never calls this path."""
+    return generate_greedy(
+        model,
+        batch,
+        tokenizer,
+        max_new_tokens,
+        min_new_tokens,
+        repetition_penalty,
+        no_repeat_ngram_size,
+        compact_finished,
+        do_sample=True,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+        generator=generator,
+    )
 
 
 def append_jsonl(path: str | Path, rows: Iterable[dict[str, Any]]) -> None:

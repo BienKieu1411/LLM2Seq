@@ -287,16 +287,28 @@ def validate_config(config: dict[str, Any]) -> None:
             "no_repeat_ngram_size",
             "num_beams",
             "do_sample",
+            "temperature",
+            "top_k",
+            "top_p",
             "compact_finished",
         },
         "generation",
     )
-    if int(generation.get("num_beams", 0)) != 1 or bool(generation.get("do_sample", True)):
-        raise ValueError("AFMR evaluation is greedy: num_beams=1 and do_sample=false")
+    if int(generation.get("num_beams", 0)) != 1:
+        raise ValueError("AFMR generation currently supports num_beams=1 only")
     if float(generation.get("repetition_penalty", 1.0)) <= 0:
         raise ValueError("generation.repetition_penalty must be positive")
     if int(generation.get("no_repeat_ngram_size", 0)) < 0:
         raise ValueError("generation.no_repeat_ngram_size must be non-negative")
+    temperature = float(generation.get("temperature", 0.0))
+    if bool(generation.get("do_sample", False)) and temperature <= 0:
+        raise ValueError("generation.temperature must be positive when do_sample=true")
+    if not bool(generation.get("do_sample", False)) and temperature < 0:
+        raise ValueError("generation.temperature must be non-negative")
+    if int(generation.get("top_k", 0)) < 0:
+        raise ValueError("generation.top_k must be non-negative")
+    if not 0 < float(generation.get("top_p", 1.0)) <= 1:
+        raise ValueError("generation.top_p must lie in (0, 1]")
     if not 0 <= int(generation.get("min_new_tokens", 0)) < int(generation.get("max_new_tokens", 0)):
         raise ValueError("Require 0 <= min_new_tokens < max_new_tokens")
     for section, key in (

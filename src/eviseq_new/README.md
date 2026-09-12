@@ -105,7 +105,7 @@ bash scripts/prepare_afmr.sh --dataset wikilingua --input-dir /data/wikilingua -
 
 ## A100 training/evaluation
 
-Start from `configs/afmr_base.yaml`, copy it to a task recipe, and set only model locations, data files, lengths, batch resources, and output directory. The generic base uses one warm-up epoch and four full-finetuning epochs; benchmark recipes override this to match the corresponding T5Gemma total (PubMed 1+3, CNNDM/WikiLingua 1+5). Decoding is greedy (`num_beams: 1`, `do_sample: false`), and training is CE-only.
+Start from `configs/afmr_base.yaml`, copy it to a task recipe, and set only model locations, data files, lengths, batch resources, and output directory. The generic base uses one warm-up epoch and four full-finetuning epochs; benchmark recipes override this to match the corresponding T5Gemma total (PubMed 1+3, CNNDM/WikiLingua 1+5). The benchmark defaults to greedy decoding (`num_beams: 1`, `do_sample: false`, `temperature: 0.0`, `top_k: 0`, `top_p: 1.0`), and training is CE-only.
 
 ```bash
 cd src/eviseq_new
@@ -136,6 +136,18 @@ bash scripts/run_pubmed_pair.sh
 Preparation is skipped when the canonical PubMed files already exist. Set
 `EVAL_BATCH_SIZE` to control evaluation memory. Set `ROUGE155_SCRIPT` to the
 local `evaluate_rouge.py` wrapper to append the Perl ROUGE-1.5.5 audit.
+
+For separate candidate generation, enable sampling explicitly with a fresh
+output JSONL. Filtering is applied in the order temperature, top-k, then
+nucleus top-p; this path is never called during training:
+
+```bash
+PYTHON=/absolute/path/to/bienkieu_env/bin/python \
+  bash scripts/run_afmr.sh evaluate configs/afmr_pubmed.yaml \
+  runs/afmr/pubmed_value_anchor_wide/last.pt \
+  runs/afmr/pubmed_value_anchor_wide/test_candidates.jsonl \
+  --split test --do-sample --temperature 0.7 --top-k 50 --top-p 0.9
+```
 
 The queue now writes to `runs/afmr/pubmed_pair_afmr_value_anchor_copy`, leaving earlier results untouched. Set `AFMR_GROUNDED_COPY=false` for the value-anchor LM-only control in `pubmed_pair_afmr_value_anchor_lm`. Additionally set `AFMR_ARCHITECTURE=afmr_v1` for the shared-memory LM-only control in `pubmed_pair_afmr_v1_lm`. Numerical/text fixes remain enabled. The queue still runs PPLX then Qwen3-Embedding on the same GPU. For a single experiment, use `run_afmr.sh train` with one task config instead.
 

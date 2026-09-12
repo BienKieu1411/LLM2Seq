@@ -241,6 +241,10 @@ def evaluate(
     batch_size: int | None = None,
     device: str | None = None,
     max_examples: int = 0,
+    do_sample: bool | None = None,
+    temperature: float | None = None,
+    top_k: int | None = None,
+    top_p: float | None = None,
 ) -> dict[str, Any]:
     config = load_config(config_path)
     _configure_precision(config)
@@ -248,7 +252,7 @@ def evaluate(
     if selected_batch_size <= 0:
         raise ValueError("Evaluation batch size must be positive")
     loaders = build_loaders(config, split=split, batch_size_override=selected_batch_size)
-    from .evaluation.generate import append_jsonl, generate_greedy
+    from .evaluation.generate import append_jsonl, generate_greedy, generate_sampled
 
     loader = loaders[split]
     loader.collate_fn.include_targets = False
@@ -310,6 +314,16 @@ def evaluate(
     model = EviSeqAFMR(inference_config).to(device_obj)
     load_checkpoint(checkpoint_path, model, config=config, restore_rng=False)
     model.eval()
+    generation = config["generation"]
+    requested_do_sample = bool(generation.get("do_sample", False) if do_sample is None else do_sample)
+    requested_temperature = float(generation.get("temperature", 1.0) if temperature is None else temperature)
+    requested_top_k = int(generation.get("top_k", 0) if top_k is None else top_k)
+    requested_top_p = float(generation.get("top_p", 1.0) if top_p is None else top_p)
+    if requested_do_sample and resumed_count:
+        raise ValueError("Sampling evaluation requires a fresh output JSONL; do not resume a greedy prefix")
+    generator = None
+    if requested_do_sample:
+        generator = torch.Generator(device=device_obj).manual_seed(int(config["training"].get("seed", 42)))
     loader = DataLoader(
         Subset(loader.dataset, range(resumed_count, total)),
         batch_size=selected_batch_size,
@@ -343,7 +357,8 @@ def evaluate(
                 }
             }
             try:
-                texts, _ = generate_greedy(
+                generate = generate_sampled if requested_do_sample else generate_greedy
+                texts, _ = generate(
                     model,
                     narrowed,
                     loaders[split].collate_fn.decoder_tokenizer,
@@ -352,6 +367,16 @@ def evaluate(
                     float(config["generation"].get("repetition_penalty", 1.0)),
                     int(config["generation"].get("no_repeat_ngram_size", 0)),
                     bool(config["generation"].get("compact_finished", True)),
+                    **(
+                        {
+                            "temperature": requested_temperature,
+                            "top_k": requested_top_k,
+                            "top_p": requested_top_p,
+                            "generator": generator,
+                        }
+                        if requested_do_sample
+                        else {}
+                    ),
                 )
             except torch.cuda.OutOfMemoryError:
                 size = len(narrowed["ids"])
