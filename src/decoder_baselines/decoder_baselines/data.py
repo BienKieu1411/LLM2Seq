@@ -146,6 +146,13 @@ class CausalSummarizationDataset(Dataset[dict[str, torch.Tensor]]):
         self.max_sequence_length = min(configured, int(model_context_length)) if model_context_length else configured
         if self.max_sequence_length < int(data["max_target_length"]):
             raise ValueError("Model context is too short for the configured target budget")
+        # Character lengths are a cheap, tokenizer-independent proxy used by
+        # the length-grouped sampler.  Exact tokenization still happens in
+        # __getitem__, so this does not change the training examples or labels.
+        self.length_estimates = []
+        for row in self.rows:
+            _, source, target = record_texts(row, self.data)
+            self.length_estimates.append(max(1, len(source) + len(target)))
 
     def __len__(self) -> int:
         return len(self.rows)

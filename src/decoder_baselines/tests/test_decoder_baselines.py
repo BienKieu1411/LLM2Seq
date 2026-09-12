@@ -125,6 +125,22 @@ def test_llama3_3b_uses_instruct_checkpoint() -> None:
     assert config["model"]["name_or_path"].endswith("Llama-3.2-3B-Instruct")
 
 
+def test_dataset_exposes_length_estimates_for_padding_bucketing(tmp_path: Path) -> None:
+    path = tmp_path / "train.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "short", "text": "a", "summary": "b"}),
+                json.dumps({"id": "long", "text": "a" * 30, "summary": "b" * 10}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    dataset = CausalSummarizationDataset(path, FakeTokenizer(), _config_data())
+    assert dataset.length_estimates == [2, 40]
+
+
 def test_model_resolution_never_falls_back_to_hub_id(monkeypatch: Any) -> None:
     monkeypatch.delenv("QWEN3_0_6B_PATH", raising=False)
     monkeypatch.delenv("MODEL_ROOT", raising=False)

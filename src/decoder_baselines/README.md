@@ -49,6 +49,11 @@ larger models use smaller evaluation batches, Qwen3-0.6B uses a larger batch,
 and Nemotron uses `batch_size: 1` for its autoregressive cache loop.  Each run
 is written to `runs/decoder_baselines/<model>__<dataset>/` with its
 resolved config, `final_model/`, `trainer_state.json`, predictions and metrics.
+Training enables length-grouped sampling by default, so examples with similar
+source/target lengths share a batch and dynamic padding does less work.  The
+sampler uses a cheap character-length estimate; tokenization and labels are
+unchanged. Persistent workers and prefetching keep the tokenizer pipeline warm
+between epochs.
 The final evaluation uses `temperature: 0`, `top_k: 0`, `top_p: 1`; candidates
 can be generated later by editing a copied run config and enabling sampling.
 Evaluation runs automatically after training on the `test` split.  To evaluate

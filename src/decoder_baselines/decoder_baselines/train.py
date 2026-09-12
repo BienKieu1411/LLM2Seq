@@ -140,6 +140,14 @@ def _training_arguments(config: dict[str, Any], output_dir: Path) -> Any:
         "seed": int(training.get("seed", 42)),
         "ddp_find_unused_parameters": False,
     }
+    num_workers = int(training.get("dataloader_num_workers", 4))
+    if num_workers > 0:
+        values.update(
+            {
+                "dataloader_persistent_workers": bool(training.get("dataloader_persistent_workers", True)),
+                "dataloader_prefetch_factor": int(training.get("dataloader_prefetch_factor", 2)),
+            }
+        )
     parameters = __import__("inspect").signature(TrainingArguments.__init__).parameters
     values = {key: value for key, value in values.items() if key in parameters}
     if "eval_strategy" not in parameters and "evaluation_strategy" in parameters:
@@ -211,15 +219,41 @@ def train(config_path: str | Path, *, overwrite_output_dir: bool = False) -> Pat
         }
         from transformers import Trainer
 
+        trainer_class = Trainer
+        if bool(training.get("length_bucketing", True)):
+            from transformers.trainer_pt_utils import LengthGroupedSampler
+
+            class LengthGroupedTrainer(Trainer):
+                """Use nearby-length examples to minimize dynamic-padding waste."""
+
+                def _get_train_sampler(self, train_dataset=None):
+                    dataset_for_sampler = train_dataset if train_dataset is not None else self.train_dataset
+                    lengths = getattr(dataset_for_sampler, "length_estimates", None)
+                    if not lengths:
+                        return super()._get_train_sampler(dataset_for_sampler)
+                    generator = torch.Generator()
+                    generator.manual_seed(int(self.args.seed))
+                    grouped_batch_size = max(
+                        1,
+                        int(self.args.train_batch_size) * int(self.args.gradient_accumulation_steps),
+                    )
+                    return LengthGroupedSampler(
+                        grouped_batch_size,
+                        lengths=list(lengths),
+                        generator=generator,
+                    )
+
+            trainer_class = LengthGroupedTrainer
+
         trainer_parameters = __import__("inspect").signature(Trainer.__init__).parameters
         if "processing_class" in trainer_parameters:
             trainer_kwargs["processing_class"] = tokenizer
         elif "tokenizer" in trainer_parameters:
             trainer_kwargs["tokenizer"] = tokenizer
-        trainer = Trainer(**trainer_kwargs)
+        trainer = trainer_class(**trainer_kwargs)
         total_parameters = int(sum(parameter.numel() for parameter in model.parameters()))
         LOGGER.info(
-            "run=%s model=%s device=%s examples=%d epochs=%d batch=%d accumulation=%d parameters=%d",
+            "run=%s model=%s device=%s examples=%d epochs=%d batch=%d accumulation=%d length_bucketing=%s parameters=%d",
             config["run"]["name"],
             config["model"].get("model_id", config["model"].get("name_or_path")),
             target,
@@ -227,6 +261,7 @@ def train(config_path: str | Path, *, overwrite_output_dir: bool = False) -> Pat
             int(training["num_train_epochs"]),
             int(training["per_device_train_batch_size"]),
             int(training["gradient_accumulation_steps"]),
+            bool(training.get("length_bucketing", True)),
             total_parameters,
         )
         result = trainer.train()

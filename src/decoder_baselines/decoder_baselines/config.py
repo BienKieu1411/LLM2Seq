@@ -143,6 +143,9 @@ def validate_config(config: dict[str, Any]) -> None:
             "gradient_checkpointing",
             "optim",
             "dataloader_num_workers",
+            "dataloader_persistent_workers",
+            "dataloader_prefetch_factor",
+            "length_bucketing",
             "logging_steps",
             "seed",
         },
@@ -161,6 +164,8 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("training.bf16 and training.fp16 cannot both be true")
     if int(training.get("dataloader_num_workers", 0)) < 0:
         raise ValueError("training.dataloader_num_workers must be non-negative")
+    if int(training.get("dataloader_prefetch_factor", 2)) <= 0:
+        raise ValueError("training.dataloader_prefetch_factor must be positive")
 
     generation = config["generation"]
     _check_keys(
