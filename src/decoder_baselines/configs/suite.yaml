@@ -1,0 +1,150 @@
+# Matrix for decoder-only controls.  The shell runner forces one visible GPU
+# and invokes each model/dataset pair in order; no DDP process is created.
+gpu: "0"
+output_root: "../../../runs/decoder_baselines"
+data_root: "../../eviseq_new/datasets"
+model_order:
+  - qwen3_0_6b
+  - qwen3_8b
+  - qwen3_4b
+  - llama3_8b
+  - llama3_3b
+  - nemotron_diffusion_8b
+  - nemotron_diffusion_3b
+dataset_order:
+  - pubmed
+  - arxiv
+  - booksum
+  - govreport
+
+defaults:
+  model:
+    local_files_only: true
+    trust_remote_code: true
+    torch_dtype: bfloat16
+    eval_torch_dtype: bfloat16
+    attn_implementation: sdpa
+    gradient_checkpointing: true
+    use_cache: false
+  training:
+    num_train_epochs: 4
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1.0e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_epsilon: 1.0e-8
+    warmup_ratio: 0.05
+    weight_decay: 0.01
+    max_grad_norm: 1.0
+    bf16: true
+    fp16: false
+    tf32: true
+    gradient_checkpointing: true
+    optim: adamw_torch_fused
+    dataloader_num_workers: 4
+    logging_steps: 1
+    seed: 42
+  generation:
+    batch_size: 4
+    max_new_tokens: 512
+    min_new_tokens: 32
+    num_beams: 1
+    do_sample: false
+    # Match every T5Gemma benchmark recipe: deterministic greedy decoding.
+    temperature: 0.0
+    top_k: 0
+    top_p: 1.0
+    repetition_penalty: 1.05
+    no_repeat_ngram_size: 3
+  data:
+    source_field: text
+    target_field: summary
+    id_field: id
+    prompt_suffix: ""
+    clean_text: true
+
+models:
+  qwen3_0_6b:
+    model_id: Qwen/Qwen3-0.6B
+    path_env: QWEN3_0_6B_PATH
+    local_dir: Qwen3-0.6B
+    training:
+      # Keep the effective batch at 32 while leaving headroom for long inputs.
+      per_device_train_batch_size: 4
+      gradient_accumulation_steps: 8
+    generation:
+      batch_size: 8
+  qwen3_8b:
+    model_id: Qwen/Qwen3-8B
+    path_env: QWEN3_8B_PATH
+    local_dir: Qwen3-8B
+    training:
+      per_device_train_batch_size: 1
+      gradient_accumulation_steps: 32
+    generation:
+      batch_size: 2
+  qwen3_4b:
+    model_id: Qwen/Qwen3-4B
+    path_env: QWEN3_4B_PATH
+    local_dir: Qwen3-4B
+    training:
+      per_device_train_batch_size: 2
+      gradient_accumulation_steps: 16
+    generation:
+      batch_size: 4
+  llama3_8b:
+    model_id: meta-llama/Llama-3.1-8B
+    path_env: LLAMA3_8B_PATH
+    local_dir: Llama-3.1-8B
+    training:
+      per_device_train_batch_size: 1
+      gradient_accumulation_steps: 32
+    generation:
+      batch_size: 2
+  llama3_3b:
+    model_id: meta-llama/Llama-3.2-3B
+    path_env: LLAMA3_3B_PATH
+    local_dir: Llama-3.2-3B
+    training:
+      per_device_train_batch_size: 4
+      gradient_accumulation_steps: 8
+    generation:
+      batch_size: 4
+  nemotron_diffusion_8b:
+    model_id: nvidia/Nemotron-Labs-Diffusion-8B-Base
+    path_env: NEMOTRON_DIFFUSION_8B_PATH
+    local_dir: Nemotron-Labs-Diffusion-8B-Base
+    family: nemotron_diffusion
+    diffusion_paradigm: autoregressive
+    training:
+      per_device_train_batch_size: 1
+      gradient_accumulation_steps: 32
+    generation:
+      # The custom AR cache loop is intentionally evaluated one example at a time.
+      batch_size: 1
+  nemotron_diffusion_3b:
+    model_id: nvidia/Nemotron-Labs-Diffusion-3B-Base
+    path_env: NEMOTRON_DIFFUSION_3B_PATH
+    local_dir: Nemotron-Labs-Diffusion-3B-Base
+    family: nemotron_diffusion
+    diffusion_paradigm: autoregressive
+    training:
+      per_device_train_batch_size: 2
+      gradient_accumulation_steps: 16
+    generation:
+      batch_size: 1
+
+datasets:
+  pubmed:
+    data_dir: pubmed
+    source_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
+    max_source_length: 4096
+    max_target_length: 512
+    max_sequence_length: 8192
+  arxiv:
+    data_dir: arxiv
+    source_prefix: "Summarize the following scientific research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
+    max_source_length: 8096
+    max_target_length: 512
+    max_sequence_length: 9216
