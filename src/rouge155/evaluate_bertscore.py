@@ -52,6 +52,68 @@ def _default_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def _model_context_length(scorer: Any) -> int:
+    """Return a finite tokenizer length for the loaded BERTScore model.
+
+    Some local tokenizer configurations omit ``model_max_length``.  Older
+    Transformers versions represent that omission with a very large sentinel
+    (roughly 1e30); bert-score passes the sentinel to the Rust tokenizer and
+    recent Transformers releases raise ``OverflowError``.  Prefer the model's
+    configured positional limit and fall back to the standard BERT limit.
+    """
+
+    config = getattr(getattr(scorer, "_model", None), "config", None)
+    value = getattr(config, "max_position_embeddings", None)
+    try:
+        context_length = int(value)
+    except (TypeError, ValueError, OverflowError):
+        context_length = 0
+    if context_length <= 0 or context_length > 1_000_000:
+        return 512
+
+    # RoBERTa-family configs reserve two positions for the offset used by the
+    # embedding table (e.g. 514 positions correspond to 512 input tokens).
+    model_type = str(getattr(config, "model_type", "")).lower()
+    if model_type in {"roberta", "xlm-roberta", "camembert"} and context_length > 512:
+        context_length -= 2
+    return max(1, context_length)
+
+
+def _patch_tokenizer_max_length(scorer: Any, requested: int | None = None) -> int | None:
+    """Replace an overflowing tokenizer length before bert-score tokenizes.
+
+    ``bert-score`` 0.3.x reads ``tokenizer.model_max_length`` internally and
+    does not expose a max-length argument.  This small compatibility shim keeps
+    the package's scoring code unchanged while making local models with the
+    Transformers large-integer sentinel usable.
+    """
+
+    tokenizer = getattr(scorer, "_tokenizer", None)
+    if tokenizer is None:
+        return None
+    if requested is not None:
+        if requested <= 0 or requested > 2**31 - 1:
+            raise ValueError("BERTScore max_length must lie in [1, 2^31-1]")
+        resolved = int(requested)
+    else:
+        current = getattr(tokenizer, "model_max_length", None)
+        try:
+            current_int = int(current)
+        except (TypeError, ValueError, OverflowError):
+            current_int = 0
+        # Keep an explicitly finite model-specific limit.  The sentinel used
+        # by Transformers when no limit is configured is much larger.
+        resolved = current_int if 0 < current_int <= 1_000_000 else _model_context_length(scorer)
+
+    tokenizer.model_max_length = resolved
+    # ``encode`` uses the attribute above, but updating init_kwargs also keeps
+    # tokenizer serialization and backend copies consistent across versions.
+    init_kwargs = getattr(tokenizer, "init_kwargs", None)
+    if isinstance(init_kwargs, dict):
+        init_kwargs["model_max_length"] = resolved
+    return resolved
+
+
 def _as_unit_scores(values: Any, name: str) -> list[float]:
     scores = [float(value) for value in values.tolist()]
     if any(not 0.0 <= value <= 1.0 + 1.0e-4 for value in scores):
@@ -78,7 +140,7 @@ def _build_scorer(
         from bert_score import BERTScorer
     except ImportError as exc:
         raise RuntimeError("BERTScore is unavailable; install the optional `bert-score` package") from exc
-    return BERTScorer(
+    scorer = BERTScorer(
         model_type=str(model_path),
         num_layers=num_layers,
         batch_size=batch_size,
@@ -88,6 +150,7 @@ def _build_scorer(
         rescale_with_baseline=False,
         use_fast_tokenizer=use_fast_tokenizer,
     )
+    return scorer
 
 
 def evaluate(
@@ -103,6 +166,7 @@ def evaluate(
     language: str | None = None,
     use_fast_tokenizer: bool = False,
     idf: bool = False,
+    max_length: int | None = None,
     details: bool = False,
     verbose: bool = False,
 ) -> dict[str, Any]:
@@ -131,6 +195,7 @@ def evaluate(
         use_fast_tokenizer=use_fast_tokenizer,
         idf=idf,
     )
+    tokenizer_max_length = _patch_tokenizer_max_length(scorer, max_length)
     if idf:
         scorer.compute_idf([reference for row in rows for reference in row.references])
     candidates = [row.prediction for row in rows]
@@ -148,6 +213,7 @@ def evaluate(
         "num_layers": resolved_layers,
         "device": resolved_device,
         "idf": bool(idf),
+        "tokenizer_max_length": tokenizer_max_length,
         "score_scale": "0-100",
         "num_examples": len(rows),
         "prediction_field": prediction_field,
@@ -199,6 +265,11 @@ def main() -> None:
     parser.add_argument("--lang", dest="language", help="Optional BERTScore language code")
     parser.add_argument("--use-fast-tokenizer", action="store_true")
     parser.add_argument("--idf", action="store_true", help="Compute IDF weights from the references")
+    parser.add_argument(
+        "--max-length",
+        type=int,
+        help="Tokenizer truncation length; inferred from the model when omitted",
+    )
     parser.add_argument("--details", action="store_true", help="Include per-example scores in the JSON output")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -214,6 +285,7 @@ def main() -> None:
         language=args.language,
         use_fast_tokenizer=args.use_fast_tokenizer,
         idf=args.idf,
+        max_length=args.max_length,
         details=args.details,
         verbose=args.verbose,
     )

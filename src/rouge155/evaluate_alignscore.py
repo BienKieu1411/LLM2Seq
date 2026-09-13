@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -39,6 +40,7 @@ ALIGN_SCORE_PAPER = "Zha et al., ACL 2023"
 DEFAULT_CHUNK_WORDS = 350
 DEFAULT_MAX_LENGTH = 512
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?])(?:[\"'”’)]*)\s+(?=[A-ZÀ-ÖØ-Þ0-9])")
+_SOURCE_FIELD_FALLBACKS = ("source", "text", "document", "article_text", "article")
 
 
 def _default_device() -> str:
@@ -100,6 +102,100 @@ def _source_chunks(source: str, chunk_words: int) -> list[str]:
         " ".join(sentences[start : start + sentences_per_group])
         for start in range(0, len(sentences), sentences_per_group)
     ]
+
+
+def _source_text(value: Any, *, field: str, path: Path, line_number: int) -> str:
+    """Normalize a source value from a test-record JSONL file."""
+
+    if isinstance(value, list):
+        if not all(isinstance(item, str) for item in value):
+            raise ValueError(f"{field!r} must contain strings at {path}:{line_number}")
+        text = "\n".join(item.strip() for item in value if item.strip())
+    elif isinstance(value, str):
+        text = value.strip()
+    else:
+        raise ValueError(f"{field!r} must be a string or list of strings at {path}:{line_number}")
+    if not text:
+        raise ValueError(f"{field!r} is empty at {path}:{line_number}")
+    return text
+
+
+def _load_source_map(path: Path, *, source_field: str, id_field: str) -> dict[str, str]:
+    """Load source text keyed by example ID from a dataset/test JSONL file."""
+
+    path = path.expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Source file not found: {path}")
+
+    source_by_id: dict[str, str] = {}
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, raw in enumerate(handle, start=1):
+            if not raw.strip():
+                continue
+            try:
+                row = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSONL at {path}:{line_number}") from exc
+            if not isinstance(row, dict):
+                raise ValueError(f"Expected a JSON object at {path}:{line_number}")
+
+            raw_id = row.get(id_field)
+            if raw_id in (None, ""):
+                raise ValueError(f"Missing {id_field!r} at {path}:{line_number}")
+            identifier = str(raw_id)
+            if identifier in source_by_id:
+                raise ValueError(f"Duplicate source ID {identifier!r} at {path}:{line_number}")
+
+            value = row.get(source_field)
+            selected_field = source_field
+            if value is None:
+                for fallback in _SOURCE_FIELD_FALLBACKS:
+                    if fallback in row:
+                        value = row[fallback]
+                        selected_field = fallback
+                        break
+            if value is None:
+                fields = ", ".join(repr(field) for field in _SOURCE_FIELD_FALLBACKS)
+                raise ValueError(f"Missing source field (tried {fields}) at {path}:{line_number}")
+            source_by_id[identifier] = _source_text(
+                value,
+                field=selected_field,
+                path=path,
+                line_number=line_number,
+            )
+    if not source_by_id:
+        raise ValueError(f"No source records found in {path}")
+    return source_by_id
+
+
+def _attach_sources(
+    rows: Sequence[EvaluationRow],
+    source_file: Path,
+    *,
+    source_file_field: str,
+    source_id_field: str,
+) -> list[EvaluationRow]:
+    """Join source text onto prediction rows by their example IDs."""
+
+    source_by_id = _load_source_map(
+        source_file,
+        source_field=source_file_field,
+        id_field=source_id_field,
+    )
+    missing: list[str] = []
+    enriched: list[EvaluationRow] = []
+    for row in rows:
+        identifier = str(row.identifier)
+        source = source_by_id.get(identifier)
+        if source is None:
+            missing.append(identifier)
+            continue
+        enriched.append(replace(row, source=source))
+    if missing:
+        preview = ", ".join(repr(identifier) for identifier in missing[:5])
+        suffix = "..." if len(missing) > 5 else ""
+        raise ValueError(f"Source file {source_file} has no record for prediction IDs: {preview}{suffix}")
+    return enriched
 
 
 def _load_checkpoint(path: Path) -> dict[str, Tensor]:
@@ -297,6 +393,9 @@ def evaluate(
     prediction_field: str = "prediction",
     reference_field: str = "reference",
     source_field: str = "source",
+    source_file: Path | None = None,
+    source_file_field: str = "text",
+    source_id_field: str = "id",
     batch_size: int = 32,
     device: str | None = None,
     max_length: int = DEFAULT_MAX_LENGTH,
@@ -307,12 +406,39 @@ def evaluate(
     predictions_file = predictions_file.expanduser().resolve()
     model_path = model_path.expanduser().resolve()
     checkpoint_path = checkpoint_path.expanduser().resolve()
-    rows = load_jsonl(
-        predictions_file,
-        prediction_field=prediction_field,
-        reference_field=reference_field,
-        source_field=source_field,
-    )
+    source_joined = False
+    try:
+        rows = load_jsonl(
+            predictions_file,
+            prediction_field=prediction_field,
+            reference_field=reference_field,
+            source_field=source_field,
+        )
+    except ValueError as exc:
+        missing_source = str(exc).startswith(f"Missing {source_field!r}")
+        if not missing_source:
+            raise
+        if source_file is None:
+            raise ValueError(
+                f"{exc}. Prediction rows do not contain a source; pass --source-file "
+                "with the original test JSONL so sources can be joined by id."
+            ) from exc
+        # Reload without a source requirement, then join the original source
+        # records by ID.  This keeps existing prediction files unchanged while
+        # making AlignScore usable with EviSeq's id/prediction/reference JSONL.
+        rows = load_jsonl(
+            predictions_file,
+            prediction_field=prediction_field,
+            reference_field=reference_field,
+            source_field=None,
+        )
+        rows = _attach_sources(
+            rows,
+            source_file,
+            source_file_field=source_file_field,
+            source_id_field=source_id_field,
+        )
+        source_joined = True
     evaluator = scorer or LocalAlignScore(
         model_path,
         checkpoint_path,
@@ -346,6 +472,10 @@ def evaluate(
         "prediction_field": prediction_field,
         "reference_field": reference_field,
         "source_field": source_field,
+        "source_file": str(source_file.expanduser().resolve()) if source_file is not None else None,
+        "source_file_field": source_file_field,
+        "source_id_field": source_id_field,
+        "source_joined_by_id": source_joined,
         "predictions_file": str(predictions_file),
     }
     if details:
@@ -371,16 +501,32 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Evaluate source-grounded factuality with AlignScore (Zha et al., ACL 2023). "
-            "Both --model-path and --checkpoint-path are local; network access is disabled."
+            "Both --model-path and --checkpoint-path are local; network access is disabled. "
+            "If predictions omit source, --source-file joins it by id."
         )
     )
-    parser.add_argument("predictions", type=Path, help="Prediction JSONL containing source, prediction and reference")
+    parser.add_argument(
+        "predictions",
+        type=Path,
+        help="Prediction JSONL containing prediction/reference and optionally source",
+    )
     parser.add_argument("--model-path", type=Path, required=True, help="Local AlignScore backbone directory")
     parser.add_argument("--checkpoint-path", type=Path, required=True, help="Local AlignScore .ckpt file")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--prediction-field", default="prediction")
     parser.add_argument("--reference-field", default="reference")
     parser.add_argument("--source-field", default="source")
+    parser.add_argument(
+        "--source-file",
+        type=Path,
+        help="Original test JSONL used to join source text by prediction id when source is absent",
+    )
+    parser.add_argument(
+        "--source-file-field",
+        default="text",
+        help="Source field in --source-file (fallbacks include source, document and article)",
+    )
+    parser.add_argument("--source-id-field", default="id", help="ID field in --source-file")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--device", help="Torch device, for example cpu or cuda:0")
     parser.add_argument("--max-length", type=int, default=DEFAULT_MAX_LENGTH)
@@ -395,6 +541,9 @@ def main() -> None:
         prediction_field=args.prediction_field,
         reference_field=args.reference_field,
         source_field=args.source_field,
+        source_file=args.source_file,
+        source_file_field=args.source_file_field,
+        source_id_field=args.source_id_field,
         batch_size=args.batch_size,
         device=args.device,
         max_length=args.max_length,

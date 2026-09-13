@@ -28,6 +28,11 @@ If `--num-layers` is omitted, the script reads the layer count from the local
 reference for that example, as implemented by the `bert-score` package. The
 headline precision, recall and F1 values are reported on a 0--100 scale.
 
+The evaluator patches the very-large `model_max_length` sentinel emitted by
+some Transformers tokenizer configs. This avoids
+`OverflowError: int too big to convert` with bert-score 0.3.x; pass
+`--max-length` only when an explicit truncation limit is required.
+
 ## Paper-grounded hallucination score: AlignScore
 
 For the paper's primary factuality result, use **AlignScore-nli_sp** from
@@ -43,6 +48,10 @@ PyTorch/Transformers pins. Both the AlignScore backbone directory and the
 trained `.ckpt` must already exist locally. Transformers offline mode and
 `local_files_only=True` prevent accidental downloads.
 
+EviSeq prediction files contain `id`, `prediction` and `reference`, but do not
+include the source text. Pass the original test JSONL with `--source-file`;
+the evaluator joins its `text` field to predictions by `id` before scoring.
+
 ```bash
 PYTHONPATH=src \
   /Users/kieugiangbien/bienkieu_env/bin/python \
@@ -50,10 +59,16 @@ PYTHONPATH=src \
   runs/model/last_test_predictions.jsonl \
   --model-path /models/roberta-large \
   --checkpoint-path /models/AlignScore-large.ckpt \
+  --source-file datasets/pubmed/test.jsonl \
   --batch-size 32 \
   --device cuda:0 \
   --details
 ```
+
+Use `--source-file-field` when the test JSONL stores the source under another
+field such as `source` or `document`; use `--source-id-field` when its ID field
+is not `id`. Prediction files that already contain `source` can still be
+evaluated without `--source-file`.
 
 The JSON output contains both `alignscore_consistency` and the transformed
 `hallucination_score`, together with the checkpoint path, chunk size and

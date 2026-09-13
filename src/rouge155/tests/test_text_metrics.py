@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from rouge155.evaluate_bertscore import evaluate as evaluate_bertscore
+from rouge155.evaluate_bertscore import _patch_tokenizer_max_length, evaluate as evaluate_bertscore
 from rouge155.evaluate_alignscore import _sentence_split, _source_chunks, evaluate as evaluate_alignscore
 from rouge155.metric_io import load_jsonl
 
@@ -74,6 +74,28 @@ def test_bertscore_uses_local_scorer_and_supports_multiple_references(
     assert result["num_layers"] == 12
 
 
+def test_bertscore_patches_transformers_large_length_sentinel() -> None:
+    class FakeTokenizer:
+        model_max_length = 10**30
+        init_kwargs: dict[str, int] = {}
+
+    class FakeConfig:
+        model_type = "roberta"
+        max_position_embeddings = 514
+
+    class FakeModel:
+        config = FakeConfig()
+
+    class FakeScorer:
+        _tokenizer = FakeTokenizer()
+        _model = FakeModel()
+
+    scorer = FakeScorer()
+    assert _patch_tokenizer_max_length(scorer) == 512
+    assert scorer._tokenizer.model_max_length == 512
+    assert scorer._tokenizer.init_kwargs["model_max_length"] == 512
+
+
 def test_alignscore_uses_paper_direction_and_transforms_to_hallucination_score(tmp_path: Path) -> None:
     predictions = _write_predictions(
         tmp_path / "predictions.jsonl",
@@ -104,6 +126,58 @@ def test_alignscore_uses_paper_direction_and_transforms_to_hallucination_score(t
     assert result["hallucination_score"] == pytest.approx(0.45)
     assert result["score_direction"] == "hallucination_score_lower_is_better"
     assert result["rows"][0]["hallucination_score"] == pytest.approx(0.1)
+
+
+def test_alignscore_joins_source_from_test_file_when_predictions_omit_it(tmp_path: Path) -> None:
+    predictions = _write_predictions(
+        tmp_path / "predictions.jsonl",
+        [
+            {"id": "a", "prediction": "p a", "reference": "r a"},
+            {"id": "b", "prediction": "p b", "reference": "r b"},
+        ],
+    )
+    source_file = _write_predictions(
+        tmp_path / "test.jsonl",
+        [
+            {"id": "a", "text": "source a"},
+            {"id": "b", "text": "source b"},
+        ],
+    )
+
+    class FakeAlignScore:
+        _splitter = "test"
+
+        def score_document(self, source: str, prediction: str) -> float:
+            assert source == f"source {prediction[-1]}"
+            return 0.8
+
+    result = evaluate_alignscore(
+        predictions,
+        tmp_path / "unused-local-model",
+        tmp_path / "unused-alignscore.ckpt",
+        tmp_path / "alignscore.json",
+        source_file=source_file,
+        scorer=FakeAlignScore(),
+    )
+    assert result["source_joined_by_id"] is True
+    assert result["alignscore_consistency"] == pytest.approx(0.8)
+
+
+def test_alignscore_reports_source_file_ids_that_are_missing(tmp_path: Path) -> None:
+    predictions = _write_predictions(
+        tmp_path / "predictions.jsonl",
+        [{"id": "missing", "prediction": "p", "reference": "r"}],
+    )
+    source_file = _write_predictions(tmp_path / "test.jsonl", [{"id": "other", "text": "source"}])
+
+    with pytest.raises(ValueError, match="no record for prediction IDs"):
+        evaluate_alignscore(
+            predictions,
+            tmp_path / "unused-local-model",
+            tmp_path / "unused-alignscore.ckpt",
+            source_file=source_file,
+            scorer=object(),
+        )
 
 
 def test_alignscore_reproduces_source_chunk_and_claim_sentence_shape() -> None:
