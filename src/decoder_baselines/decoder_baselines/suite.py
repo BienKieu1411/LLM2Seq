@@ -1,4 +1,4 @@
-"""Run a model x dataset matrix sequentially on one visible GPU."""
+"""Run a model x dataset matrix sequentially with optional DDP training."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ from typing import Any
 import yaml
 
 _MODEL_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
+_GPU_SPEC = re.compile(r"[0-9]+(?:,[0-9]+)*")
 
 
 def _merge(*mappings: dict[str, Any]) -> dict[str, Any]:
@@ -43,6 +45,42 @@ def _selected(value: str | None, env_name: str, default: list[str], available: d
     if not names:
         raise ValueError(f"No entries selected for {env_name.lower()}")
     return names
+
+
+def _parse_gpu_ids(value: str) -> list[str]:
+    """Parse the visible-GPU list used by the sequential suite."""
+
+    spec = str(value).strip()
+    if not spec or _GPU_SPEC.fullmatch(spec) is None:
+        raise ValueError("GPU_ID must be a comma-separated list of GPU indices, for example 0,1")
+    ids = spec.split(",")
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"GPU_ID contains duplicate devices: {spec}")
+    return ids
+
+
+def _distributed_train_command(
+    base_command: list[str],
+    *,
+    world_size: int,
+    python_executable: str,
+    torchrun_path: str | None = None,
+) -> list[str]:
+    """Wrap a train module command in torchrun when more than one GPU is used."""
+
+    if world_size <= 1:
+        return base_command
+    if torchrun_path is None:
+        candidate = Path(python_executable).with_name("torchrun")
+        torchrun_path = str(candidate) if candidate.is_file() else None
+    launcher = [torchrun_path] if torchrun_path else [python_executable, "-m", "torch.distributed.run"]
+    return [
+        *launcher,
+        "--standalone",
+        "--nnodes=1",
+        f"--nproc_per_node={world_size}",
+        *base_command[1:],
+    ]
 
 
 def _resolve_model(model_name: str, spec: dict[str, Any]) -> str:
@@ -175,9 +213,9 @@ def run_suite(args: argparse.Namespace) -> int:
         args.datasets, "DECODER_DATASETS", suite.get("dataset_order", list(suite["datasets"])), suite["datasets"]
     )
     gpu = os.environ.get("GPU_ID", str(suite.get("gpu", "0"))).strip()
-    if not gpu or "," in gpu or " " in gpu:
-        raise ValueError("GPU_ID must identify exactly one GPU, for example GPU_ID=0")
-    os.environ["CUDA_VISIBLE_DEVICES"] = gpu
+    gpu_ids = _parse_gpu_ids(gpu)
+    world_size = len(gpu_ids)
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(gpu_ids)
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -186,7 +224,10 @@ def run_suite(args: argparse.Namespace) -> int:
     output_root.mkdir(parents=True, exist_ok=True)
     status_path = output_root / "suite_status.jsonl"
     entries = [(model_name, dataset_name) for model_name in model_names for dataset_name in dataset_names]
-    print(f"Single-GPU sequential suite: GPU_ID={gpu}; runs={len(entries)}")
+    print(
+        f"Sequential suite: GPU_ID={','.join(gpu_ids)}; DDP training world_size={world_size}; "
+        f"evaluation=single-process; runs={len(entries)}"
+    )
     for index, (model_name, dataset_name) in enumerate(entries, start=1):
         config, config_path = build_run_config(
             suite,
@@ -206,11 +247,17 @@ def run_suite(args: argparse.Namespace) -> int:
         started = time.time()
         status = "planned"
         error = ""
+        train_command = _distributed_train_command(
+            [sys.executable, "-m", "decoder_baselines.train", "--config", str(config_path)],
+            world_size=world_size,
+            python_executable=sys.executable,
+        )
+        if args.overwrite_output_dir:
+            train_command.append("--overwrite-output-dir")
+        if args.dry_run:
+            print(f"  train: {shlex.join(train_command)}")
         if not args.dry_run:
             command_env = os.environ.copy()
-            train_command = [sys.executable, "-m", "decoder_baselines.train", "--config", str(config_path)]
-            if args.overwrite_output_dir:
-                train_command.append("--overwrite-output-dir")
             try:
                 subprocess.run(train_command, cwd=str(suite_path.parents[2]), env=command_env, check=True)
                 if not args.skip_eval:
@@ -230,7 +277,13 @@ def run_suite(args: argparse.Namespace) -> int:
                     ]
                     if args.max_eval_examples > 0:
                         evaluate_command.extend(["--max-examples", str(args.max_eval_examples)])
-                    subprocess.run(evaluate_command, cwd=str(suite_path.parents[2]), env=command_env, check=True)
+                    # Generation is deliberately single-process.  Restrict it
+                    # to the first visible GPU so evaluation never duplicates
+                    # a checkpoint across all training devices.
+                    eval_env = command_env.copy()
+                    eval_env["CUDA_VISIBLE_DEVICES"] = gpu_ids[0]
+                    eval_env["GPU_ID"] = gpu_ids[0]
+                    subprocess.run(evaluate_command, cwd=str(suite_path.parents[2]), env=eval_env, check=True)
                 status = "complete"
             except subprocess.CalledProcessError as exc:
                 status = "failed"
@@ -248,6 +301,8 @@ def run_suite(args: argparse.Namespace) -> int:
                     {
                         "model": model_name,
                         "dataset": dataset_name,
+                        "gpu_ids": gpu_ids,
+                        "world_size": world_size,
                         "run_dir": str(run_dir),
                         "config": str(config_path),
                         "status": status,
@@ -263,7 +318,7 @@ def run_suite(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Sequential single-GPU decoder-baseline matrix runner")
+    parser = argparse.ArgumentParser(description="Sequential decoder-baseline matrix runner with optional DDP training")
     parser.add_argument("--config", default=str(Path(__file__).resolve().parents[1] / "configs" / "suite.yaml"))
     parser.add_argument(
         "--models", default=None, help="Comma-separated model keys; defaults to DECODER_MODELS or suite order"

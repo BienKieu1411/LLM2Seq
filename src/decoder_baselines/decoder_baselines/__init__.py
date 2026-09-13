@@ -1,4 +1,4 @@
-"""Single-GPU decoder-only summarization baselines.
+"""Decoder-only summarization baselines with optional DDP fine-tuning.
 
 The package keeps model loading, prompt construction, fine-tuning and
 evaluation in one small, reproducible folder.  It is intentionally separate

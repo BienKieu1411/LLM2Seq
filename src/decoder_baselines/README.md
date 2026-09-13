@@ -12,15 +12,17 @@ to its autoregressive paradigm.  This keeps its diffusion denoising objective
 out of the decoder-only comparison; its custom AR cache loop is used only at
 evaluation time.
 
-## One GPU, sequential matrix
+## Sequential matrix with optional DDP training
 
-The runner exposes exactly one GPU and starts a new Python process for every
-model/dataset pair.  The next run starts only after training and evaluation of
-the previous run have exited, which releases model and optimizer memory.
+The runner starts a new process for every model/dataset pair. Pairs remain
+sequential, which releases model and optimizer memory before the next run. A
+single visible GPU runs normal Trainer training; a comma-separated `GPU_ID`
+launches one DDP worker per GPU. Evaluation stays single-process on the first
+GPU because it does not need gradient synchronization.
 
 ```bash
 cd src/decoder_baselines
-GPU_ID=0 \
+GPU_ID=0,1 \
 QWEN3_0_6B_PATH=/models/Qwen3-0.6B \
 QWEN3_8B_PATH=/models/Qwen3-8B \
 QWEN3_4B_PATH=/models/Qwen3-4B \
@@ -30,6 +32,12 @@ NEMOTRON_DIFFUSION_8B_PATH=/models/Nemotron-Labs-Diffusion-8B-Base \
 NEMOTRON_DIFFUSION_3B_PATH=/models/Nemotron-Labs-Diffusion-3B-Base \
 bash scripts/run_suite.sh --models qwen3_0_6b,qwen3_8b,qwen3_4b,llama3_8b,llama3_3b,nemotron_diffusion_8b,nemotron_diffusion_3b --datasets pubmed,arxiv
 ```
+
+For one GPU, use `GPU_ID=0`. For two GPUs, use `GPU_ID=0,1`; the script
+invokes `torchrun --standalone --nproc_per_node=2` for each training run. The
+training code binds rank `i` to visible device `i`, lets Transformers Trainer
+own the DDP wrapper and gradient all-reduce, and writes checkpoints and
+manifests only from rank zero.
 
 The model paths are mandatory local directories.  The runner sets
 `HF_HUB_OFFLINE=1` and never downloads or resolves a Hugging Face repository
@@ -54,6 +62,11 @@ source/target lengths share a batch and dynamic padding does less work.  The
 sampler uses a cheap character-length estimate; tokenization and labels are
 unchanged. Persistent workers and prefetching keep the tokenizer pipeline warm
 between epochs.
+
+`per_device_train_batch_size` remains the batch on each GPU. With DDP, the
+effective optimizer batch is
+`per_device_train_batch_size × number_of_GPUs × gradient_accumulation_steps`;
+the resolved run manifest records both the world size and this global batch.
 The final evaluation uses `temperature: 0`, `top_k: 0`, `top_p: 1`; candidates
 can be generated later by editing a copied run config and enabling sampling.
 Evaluation runs automatically after training on the `test` split.  To evaluate

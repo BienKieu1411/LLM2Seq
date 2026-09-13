@@ -10,7 +10,8 @@ import yaml
 from decoder_baselines.config import validate_config
 from decoder_baselines.data import CausalCollator, CausalSummarizationDataset, encode_prompt
 from decoder_baselines.evaluate import _filter_logits
-from decoder_baselines.suite import build_run_config
+from decoder_baselines.train import _read_distributed_context
+from decoder_baselines.suite import _distributed_train_command, _parse_gpu_ids, build_run_config
 
 
 class FakeTokenizer:
@@ -172,3 +173,40 @@ def test_arxiv_context_budget_covers_source_and_target() -> None:
     assert config["data"]["max_source_length"] == 8096
     assert config["data"]["max_target_length"] == 512
     assert config["data"]["max_sequence_length"] == 9216
+
+
+def test_gpu_spec_supports_two_distinct_devices() -> None:
+    assert _parse_gpu_ids("0,1") == ["0", "1"]
+    assert _parse_gpu_ids("3") == ["3"]
+
+
+def test_ddp_launcher_wraps_only_training_command() -> None:
+    base = ["python", "-m", "decoder_baselines.train", "--config", "run.yaml"]
+    assert _distributed_train_command(base, world_size=1, python_executable="python") == base
+    assert _distributed_train_command(
+        base,
+        world_size=2,
+        python_executable="python",
+        torchrun_path="/usr/bin/torchrun",
+    ) == [
+        "/usr/bin/torchrun",
+        "--standalone",
+        "--nnodes=1",
+        "--nproc_per_node=2",
+        "-m",
+        "decoder_baselines.train",
+        "--config",
+        "run.yaml",
+    ]
+
+
+def test_distributed_context_reads_torchrun_environment(monkeypatch: Any) -> None:
+    monkeypatch.setenv("RANK", "1")
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    context = _read_distributed_context()
+    assert context.rank == 1
+    assert context.local_rank == 1
+    assert context.world_size == 2
+    assert context.enabled is True
+    assert context.is_main is False

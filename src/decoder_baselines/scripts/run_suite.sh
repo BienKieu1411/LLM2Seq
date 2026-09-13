@@ -15,9 +15,20 @@ else
 fi
 
 GPU_ID="${GPU_ID:-${CUDA_VISIBLE_DEVICES:-0}}"
-if [[ -z "${GPU_ID}" || "${GPU_ID}" == *,* || "${GPU_ID}" == *[[:space:]]* ]]; then
-  echo "GPU_ID must identify exactly one GPU, for example GPU_ID=0." >&2
+if [[ ! "${GPU_ID}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+  echo "GPU_ID must be a comma-separated list of GPU indices, for example GPU_ID=0,1." >&2
   exit 2
+fi
+IFS=',' read -r -a GPU_IDS <<< "${GPU_ID}"
+if (( ${#GPU_IDS[@]} > 1 )); then
+  for ((index = 0; index < ${#GPU_IDS[@]}; index++)); do
+    for ((other = index + 1; other < ${#GPU_IDS[@]}; other++)); do
+      if [[ "${GPU_IDS[index]}" == "${GPU_IDS[other]}" ]]; then
+        echo "GPU_ID contains duplicate devices: ${GPU_ID}" >&2
+        exit 2
+      fi
+    done
+  done
 fi
 export GPU_ID
 export CUDA_VISIBLE_DEVICES="${GPU_ID}"

@@ -1,5 +1,7 @@
-# Matrix for decoder-only controls.  The shell runner forces one visible GPU
-# and invokes each model/dataset pair in order; no DDP process is created.
+# Matrix for decoder-only controls.  Set GPU_ID=0,1 to launch each training
+# run with torchrun DDP on two visible GPUs; model/dataset pairs remain
+# sequential so checkpoints do not compete for memory.  Evaluation is one
+# process on the first visible GPU.
 gpu: "0"
 output_root: "../../../runs/decoder_baselines"
 data_root: "../../eviseq_new/datasets"

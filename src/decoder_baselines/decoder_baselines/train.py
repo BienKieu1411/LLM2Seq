@@ -8,6 +8,7 @@ import logging
 import os
 import shutil
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,101 @@ from .config import load_config
 from .data import CausalCollator, CausalSummarizationDataset
 
 LOGGER = logging.getLogger("decoder_baselines.train")
+
+
+@dataclass(frozen=True)
+class _DistributedContext:
+    """Runtime process information supplied by ``torchrun``.
+
+    The Transformers ``Trainer`` owns the DDP wrapper and gradient reduction.
+    This small context only selects the local CUDA device and coordinates the
+    filesystem work that must be performed by rank zero.
+    """
+
+    rank: int
+    local_rank: int
+    world_size: int
+
+    @property
+    def enabled(self) -> bool:
+        return self.world_size > 1
+
+    @property
+    def is_main(self) -> bool:
+        return self.rank == 0
+
+
+def _read_distributed_context() -> _DistributedContext:
+    """Read and validate the environment variables emitted by ``torchrun``."""
+
+    def _integer(name: str, default: str) -> int:
+        raw = os.environ.get(name, default)
+        try:
+            return int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
+
+    world_size = _integer("WORLD_SIZE", "1")
+    rank = _integer("RANK", "0")
+    local_rank = _integer("LOCAL_RANK", "0" if world_size > 1 else "-1")
+    if world_size <= 0:
+        raise ValueError(f"WORLD_SIZE must be positive, got {world_size}")
+    if rank < 0 or rank >= world_size:
+        raise ValueError(f"RANK must be in [0, {world_size}), got {rank}")
+    if world_size > 1 and local_rank < 0:
+        raise ValueError(f"LOCAL_RANK must be non-negative for DDP, got {local_rank}")
+    return _DistributedContext(rank=rank, local_rank=local_rank, world_size=world_size)
+
+
+def _initialize_distributed(context: _DistributedContext) -> None:
+    """Bind each worker to its local GPU before Trainer initializes Accelerate."""
+
+    if not context.enabled:
+        return
+    if not torch.distributed.is_available():
+        raise RuntimeError("torch.distributed is unavailable; cannot run a multi-process baseline")
+    if torch.cuda.is_available():
+        device_count = torch.cuda.device_count()
+        if context.local_rank >= device_count:
+            raise RuntimeError(
+                f"LOCAL_RANK={context.local_rank} but only {device_count} visible CUDA device(s) are available"
+            )
+        torch.cuda.set_device(context.local_rank)
+        return
+
+
+def _wait_for_path(path: Path, *, timeout_seconds: float = 300.0) -> None:
+    """Wait for rank zero to finish shared-filesystem setup before loading data."""
+
+    deadline = time.monotonic() + float(timeout_seconds)
+    while not path.exists():
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Timed out waiting for rank-zero setup file: {path}")
+        time.sleep(0.1)
+
+
+def _destroy_distributed(context: _DistributedContext) -> None:
+    if context.enabled and torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
+
+
+def _validate_trainer_distribution(training_args: Any, context: _DistributedContext) -> None:
+    """Fail early if Trainer did not recognize the torchrun world."""
+
+    if not context.enabled:
+        return
+    actual_world_size = int(getattr(training_args, "world_size", 1))
+    parallel_mode = str(getattr(training_args, "parallel_mode", "")).lower()
+    if (
+        actual_world_size != context.world_size
+        or "distributed" not in parallel_mode
+        or "not_distributed" in parallel_mode
+    ):
+        raise RuntimeError(
+            "DDP launch was not recognized by Transformers: "
+            f"expected world_size={context.world_size}, got world_size={actual_world_size}, "
+            f"parallel_mode={parallel_mode!r}"
+        )
 
 
 def _dtype(name: str) -> torch.dtype:
@@ -162,39 +258,68 @@ def _write_json(path: Path, value: Any) -> None:
 def train(config_path: str | Path, *, overwrite_output_dir: bool = False) -> Path:
     config = load_config(config_path)
     output_dir = Path(config["run"]["output_dir"])
-    if output_dir.exists() and any(output_dir.iterdir()):
-        if not overwrite_output_dir:
-            raise FileExistsError(
-                f"Refusing to mix a decoder-baseline run with existing artifacts: {output_dir}. "
-                "Use --overwrite-output-dir for an intentional rerun."
-            )
-        shutil.rmtree(output_dir)
+    distributed = _read_distributed_context()
+    # Only rank zero performs the preflight.  A non-main worker may start
+    # after rank zero has created RUNNING, so checking the directory on every
+    # worker would incorrectly reject an otherwise clean DDP run.
+    has_artifacts = distributed.is_main and output_dir.exists() and any(output_dir.iterdir())
+    if distributed.is_main and has_artifacts and not overwrite_output_dir:
+        raise FileExistsError(
+            f"Refusing to mix a decoder-baseline run with existing artifacts: {output_dir}. "
+            "Use --overwrite-output-dir for an intentional rerun."
+        )
+
+    # Each worker owns one model replica.  Trainer/Accelerate performs the
+    # DDP wrapping and gradient all-reduce; this context only handles device
+    # placement and rank-zero filesystem ownership.
+    _initialize_distributed(distributed)
+    if distributed.is_main:
+        if has_artifacts:
+            shutil.rmtree(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        marker = output_dir / "RUNNING"
+        marker.write_text(f"pid={os.getpid()} rank={distributed.rank}\n", encoding="utf-8")
+    else:
+        marker = output_dir / "RUNNING"
+        _wait_for_path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    marker = output_dir / "RUNNING"
-    marker.write_text(f"pid={os.getpid()}\n", encoding="utf-8")
     started = time.time()
     try:
-        (output_dir / "resolved_config.yaml").write_text(
-            yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8"
-        )
+        resolved_config = output_dir / "resolved_config.yaml"
+        if distributed.is_main:
+            resolved_config.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        else:
+            _wait_for_path(resolved_config)
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-            handlers=[logging.StreamHandler(), logging.FileHandler(output_dir / "train.log", encoding="utf-8")],
+            handlers=[
+                logging.StreamHandler(),
+                *([logging.FileHandler(output_dir / "train.log", encoding="utf-8")] if distributed.is_main else []),
+            ],
             force=True,
         )
         from transformers import set_seed
 
         training = config["training"]
         set_seed(int(training.get("seed", 42)))
-        target = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        target = (
+            torch.device("cuda", distributed.local_rank if distributed.enabled else 0)
+            if torch.cuda.is_available()
+            else torch.device("cpu")
+        )
         if target.type != "cuda":
-            LOGGER.warning("No CUDA device is visible; this run is configured for a single GPU")
+            LOGGER.warning("No CUDA device is visible; running on CPU (world_size=%d)", distributed.world_size)
         if target.type == "cuda" and bool(training.get("tf32", True)):
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
             torch.set_float32_matmul_precision("high")
 
+        training_args = _training_arguments(config, output_dir)
+        # TrainingArguments constructs Accelerate's PartialState from the
+        # torchrun environment.  Do not initialize a raw process group here;
+        # doing so makes Trainer think it is in non-distributed mode.
+        _validate_trainer_distribution(training_args, distributed)
         tokenizer, model = _load_tokenizer_and_model(config)
         context_length = _context_length(model)
         configured_context = int(config["data"]["max_sequence_length"])
@@ -213,7 +338,7 @@ def train(config_path: str | Path, *, overwrite_output_dir: bool = False) -> Pat
         collator = CausalCollator(tokenizer.pad_token_id)
         trainer_kwargs: dict[str, Any] = {
             "model": model,
-            "args": _training_arguments(config, output_dir),
+            "args": training_args,
             "train_dataset": dataset,
             "data_collator": collator,
         }
@@ -253,48 +378,69 @@ def train(config_path: str | Path, *, overwrite_output_dir: bool = False) -> Pat
         trainer = trainer_class(**trainer_kwargs)
         total_parameters = int(sum(parameter.numel() for parameter in model.parameters()))
         LOGGER.info(
-            "run=%s model=%s device=%s examples=%d epochs=%d batch=%d accumulation=%d length_bucketing=%s parameters=%d",
+            "run=%s rank=%d world_size=%d model=%s device=%s examples=%d epochs=%d per_device_batch=%d "
+            "global_batch=%d accumulation=%d length_bucketing=%s parameters=%d",
             config["run"]["name"],
+            distributed.rank,
+            distributed.world_size,
             config["model"].get("model_id", config["model"].get("name_or_path")),
             target,
             len(dataset),
             int(training["num_train_epochs"]),
             int(training["per_device_train_batch_size"]),
+            int(training["per_device_train_batch_size"])
+            * distributed.world_size
+            * int(training["gradient_accumulation_steps"]),
             int(training["gradient_accumulation_steps"]),
             bool(training.get("length_bucketing", True)),
             total_parameters,
         )
         result = trainer.train()
         final_dir = output_dir / "final_model"
-        final_dir.mkdir(parents=True, exist_ok=True)
-        model.config.use_cache = True
-        model.save_pretrained(final_dir, safe_serialization=True)
-        tokenizer.save_pretrained(final_dir)
-        trainer.state.save_to_json(str(output_dir / "trainer_state.json"))
-        _write_json(
-            output_dir / "run_manifest.json",
-            {
-                "run": config["run"]["name"],
-                "model_id": config["model"].get("model_id", config["model"].get("name_or_path")),
-                "model_path": config["model"].get("name_or_path"),
-                "dataset": config["data"].get("dataset", ""),
-                "num_train_examples": len(dataset),
-                "num_epochs": int(training["num_train_epochs"]),
-                "trainable_parameter_elements": total_parameters,
-                "train_metrics": result.metrics,
-                "elapsed_seconds": round(time.time() - started, 3),
-                "prompt_protocol": "t5gemma_source_prefix_plus_causal_target_masking",
-            },
-        )
-        marker.unlink(missing_ok=True)
-        (output_dir / "COMPLETE").write_text("complete\n", encoding="utf-8")
-        LOGGER.info("completed run=%s elapsed_seconds=%.1f", config["run"]["name"], time.time() - started)
+        if distributed.is_main:
+            final_dir.mkdir(parents=True, exist_ok=True)
+            model.config.use_cache = True
+            model.save_pretrained(final_dir, safe_serialization=True)
+            tokenizer.save_pretrained(final_dir)
+            trainer.state.save_to_json(str(output_dir / "trainer_state.json"))
+            _write_json(
+                output_dir / "run_manifest.json",
+                {
+                    "run": config["run"]["name"],
+                    "model_id": config["model"].get("model_id", config["model"].get("name_or_path")),
+                    "model_path": config["model"].get("name_or_path"),
+                    "dataset": config["data"].get("dataset", ""),
+                    "num_train_examples": len(dataset),
+                    "num_epochs": int(training["num_train_epochs"]),
+                    "per_device_train_batch_size": int(training["per_device_train_batch_size"]),
+                    "world_size": distributed.world_size,
+                    "global_batch_size": int(training["per_device_train_batch_size"])
+                    * distributed.world_size
+                    * int(training["gradient_accumulation_steps"]),
+                    "gradient_accumulation_steps": int(training["gradient_accumulation_steps"]),
+                    "trainable_parameter_elements": total_parameters,
+                    "train_metrics": result.metrics,
+                    "elapsed_seconds": round(time.time() - started, 3),
+                    "prompt_protocol": "t5gemma_source_prefix_plus_causal_target_masking",
+                },
+            )
+        if distributed.is_main:
+            marker.unlink(missing_ok=True)
+            (output_dir / "COMPLETE").write_text("complete\n", encoding="utf-8")
+            LOGGER.info("completed run=%s elapsed_seconds=%.1f", config["run"]["name"], time.time() - started)
+        else:
+            # All gradient collectives have completed before Trainer returns.
+            # A filesystem sentinel keeps non-main workers alive until rank
+            # zero has finished serializing the shared checkpoint.
+            _wait_for_path(output_dir / "COMPLETE")
         return final_dir
     except Exception:
         LOGGER.exception("decoder-baseline run failed: %s", config["run"]["name"])
         raise
     finally:
-        marker.unlink(missing_ok=True)
+        if distributed.is_main:
+            marker.unlink(missing_ok=True)
+        _destroy_distributed(distributed)
 
 
 def main() -> None:
