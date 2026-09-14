@@ -178,6 +178,27 @@ def _local_host(host: str) -> bool:
     return host in {"localhost", "127.0.0.1", "::1"}
 
 
+def _log_tail(path: Path, *, max_chars: int = 6000) -> str:
+    """Read the useful tail of a server log without masking the startup error.
+
+    The evaluator starts vLLM as a child process and redirects both streams to
+    a file.  A generic ``process exited`` exception is otherwise not actionable
+    on a remote GPU host, so include a bounded tail in the exception while
+    keeping the complete log on disk for follow-up diagnosis.
+    """
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"<could not read log: {exc}>"
+    text = text.strip()
+    if not text:
+        return "<log is empty>"
+    if len(text) > int(max_chars):
+        return "..." + text[-int(max_chars) :]
+    return text
+
+
 def build_vllm_command(
     checkpoint: str | Path,
     *,
@@ -188,6 +209,7 @@ def build_vllm_command(
     trust_remote_code: bool,
     model_impl: str = "auto",
     served_model_name: str | None = None,
+    enforce_eager: bool = False,
 ) -> list[str]:
     """Build the local vLLM command without importing the GPU-heavy package.
 
@@ -225,6 +247,12 @@ def build_vllm_command(
         command.extend(["--served-model-name", str(served_model_name).strip()])
     if trust_remote_code:
         command.append("--trust-remote-code")
+    if enforce_eager:
+        # The Nemotron remote model exposes a custom AutoModel forward without
+        # ``inputs_embeds``.  vLLM's Transformers torch-compile decorator
+        # requires that argument, while eager execution runs the model's
+        # supported token-id path directly.
+        command.append("--enforce-eager")
     extra = os.environ.get("VLLM_SERVER_EXTRA_ARGS", "").strip()
     if extra:
         command.extend(shlex.split(extra))
@@ -251,6 +279,7 @@ class VLLMServer:
         trust_remote_code: bool = True,
         model_impl: str = "auto",
         served_model_name: str | None = None,
+        enforce_eager: bool = False,
         startup_timeout: float = 900.0,
         log_path: str | Path | None = None,
     ) -> "VLLMServer":
@@ -273,6 +302,7 @@ class VLLMServer:
             trust_remote_code=trust_remote_code,
             model_impl=model_impl,
             served_model_name=served_model_name,
+            enforce_eager=enforce_eager,
         )
         resolved_log = Path(log_path).expanduser().resolve() if log_path else Path("vllm_server.log").resolve()
         resolved_log.parent.mkdir(parents=True, exist_ok=True)
@@ -289,9 +319,23 @@ class VLLMServer:
         server = cls(process, log_handle, resolved_log, client)
         try:
             model = client.wait_until_ready(timeout_seconds=startup_timeout, process=process)
-        except Exception:
+        except Exception as exc:
+            # Flush before reading so the last traceback is visible even when
+            # vLLM exits during import/model discovery.
+            try:
+                log_handle.flush()
+            except OSError:
+                pass
+            return_code = process.poll()
+            tail = _log_tail(resolved_log)
             server.stop()
-            raise RuntimeError(f"vLLM failed to start; inspect {resolved_log}") from None
+            status = f"exit_code={return_code}" if return_code is not None else "startup timeout"
+            command_text = " ".join(shlex.quote(item) for item in command)
+            raise RuntimeError(
+                f"vLLM failed to start ({status}); inspect {resolved_log}\n"
+                f"command: {command_text}\n"
+                f"last server log lines:\n{tail}"
+            ) from exc
         print(f"[vllm] service ready: url={client.base_url} model={model} log={resolved_log}", flush=True)
         return server
 

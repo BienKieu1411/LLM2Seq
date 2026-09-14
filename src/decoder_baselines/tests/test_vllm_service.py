@@ -66,11 +66,13 @@ def test_vllm_completion_uses_token_batches_and_preserves_order(monkeypatch: Any
     assert "no_repeat_ngram_size" not in captured["payload"]
 
 
-def test_auto_backend_uses_vllm_for_custom_nemotron() -> None:
+def test_auto_backend_uses_vllm_for_custom_nemotron(monkeypatch: Any) -> None:
     assert _resolve_backend({"model": {"family": "causal_lm"}}, "auto") == "vllm"
     assert _resolve_backend({"model": {"family": "nemotron_diffusion"}}, "auto") == "vllm"
     assert _vllm_model_impl({"model": {"family": "nemotron_diffusion"}}) == "transformers"
     assert _vllm_model_impl({"model": {"family": "causal_lm"}}) == "auto"
+    monkeypatch.setenv("VLLM_MODEL_IMPL", "auto")
+    assert _vllm_model_impl({"model": {"family": "nemotron_diffusion"}}) == "auto"
 
 
 def test_vllm_model_name_must_match_served_model(monkeypatch: Any) -> None:
@@ -98,6 +100,7 @@ def test_build_vllm_command_for_nemotron(tmp_path: Any) -> None:
         trust_remote_code=True,
         model_impl="transformers",
         served_model_name="nvidia/Nemotron-Labs-Diffusion-3B",
+        enforce_eager=True,
     )
     assert command[:3] == ["vllm", "serve", str(checkpoint.resolve())]
     assert "--model-impl" in command
@@ -105,3 +108,4 @@ def test_build_vllm_command_for_nemotron(tmp_path: Any) -> None:
     assert "--served-model-name" in command
     assert command[command.index("--served-model-name") + 1] == "nvidia/Nemotron-Labs-Diffusion-3B"
     assert "--trust-remote-code" in command
+    assert "--enforce-eager" in command

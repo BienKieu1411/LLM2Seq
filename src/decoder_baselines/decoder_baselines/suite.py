@@ -135,6 +135,8 @@ def build_run_config(
         model_config["diffusion_paradigm"] = model_spec["diffusion_paradigm"]
     if "vllm_model_impl" in model_spec:
         model_config["vllm_model_impl"] = model_spec["vllm_model_impl"]
+    if "vllm_enforce_eager" in model_spec:
+        model_config["vllm_enforce_eager"] = bool(model_spec["vllm_enforce_eager"])
     data_config = _merge(defaults.get("data", {}), dataset_spec)
     for key in ("data_dir", "training", "generation"):
         data_config.pop(key, None)

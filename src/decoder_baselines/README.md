@@ -60,10 +60,13 @@ The arXiv recipe uses a `9216`-token total context so its `8096`-token source
 budget can coexist with the `512`-token target and the instruction overhead.
 
 Training and evaluation batch sizes are configured independently per model:
-larger models use smaller evaluation batches, Qwen3-0.6B uses a larger batch,
-and Nemotron uses near-length, token-budgeted batches for its autoregressive
-cache loop.  Its configured `generation.batch_size` is an upper bound; the
-resolved metrics record the actual number and average size of the batches.
+larger models use smaller evaluation batches and Qwen3-0.6B uses a larger
+batch. With the default vLLM backend, `generation.batch_size` is the number of
+tokenized prompts sent in one HTTP request; `VLLM_BATCH_SIZE` or
+`--vllm-batch-size` overrides it without editing the YAML. vLLM may internally
+schedule those requests in smaller GPU-safe groups. The local Nemotron
+fallback still uses near-length, token-budgeted batches for its custom AR cache
+loop.
 Each run is written to `runs/decoder_baselines/<model>__<dataset>/` with its
 resolved config, `final_model/`, `trainer_state.json`, predictions and metrics.
 Training enables length-grouped sampling by default, so examples with similar
@@ -85,8 +88,13 @@ after that evaluation. Set `VLLM_BASE_URL` to use an already-running service;
 the service model must match the checkpoint being evaluated. Use
 `VLLM_BATCH_SIZE=32` (or another value appropriate for GPU memory) to increase
 the HTTP request batch size independently from the training batch size. The
-Nemotron server is launched with `--model-impl transformers` and the canonical
-model ID as `--served-model-name`.
+Nemotron server is launched with `--model-impl transformers`,
+`--enforce-eager` and the canonical model ID as `--served-model-name`.
+`--enforce-eager` is required for this custom model because its `forward()`
+does not expose the `inputs_embeds` argument expected by vLLM's compile wrapper.
+If the installed vLLM release does not accept the backend flag, set
+`VLLM_MODEL_IMPL=auto`; vLLM will select its Transformers backend from the
+checkpoint's `auto_map`.
 
 Every evaluation prints `[eval] batch ... ETA=...` and a final
 `[eval] COMPLETE ...` line. It also writes `*.metrics.json` with

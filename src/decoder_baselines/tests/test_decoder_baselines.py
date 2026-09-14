@@ -104,6 +104,7 @@ def test_suite_materializes_nemotron_ar_recipe() -> None:
     assert config["model"]["family"] == "nemotron_diffusion"
     assert config["model"]["model_id"] == "nvidia/Nemotron-Labs-Diffusion-3B"
     assert config["model"]["name_or_path"].endswith("Nemotron-Labs-Diffusion-3B")
+    assert config["model"]["vllm_enforce_eager"] is True
     assert config["model"]["vllm_model_impl"] == "transformers"
     assert config["model"]["diffusion_paradigm"] == "autoregressive"
     assert config["data"]["source_prefix"].startswith("Summarize the following biomedical")

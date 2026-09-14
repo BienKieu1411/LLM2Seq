@@ -1,8 +1,8 @@
 _base_: afmr_base.yaml
 
 experiment:
-  name: afmr_8096_avg
-  output_dir: runs/afmr/8096_avg
+  name: afmr_8192_avg
+  output_dir: runs/afmr/8192_avg
 
 model:
   # Replace these with the local encoder and decoder directories on the server.
@@ -13,9 +13,9 @@ data:
   # Prepared JSONL is expected to contain text, summary and optionally
   # system_prompt. Change system_prompt in this file for training, or pass
   # --system-prompt to evaluate for an evaluation-only override.
-  train_file: datasets/8096_avg/train.jsonl
-  validation_file: datasets/8096_avg/validation.jsonl
-  test_file: datasets/8096_avg/test.jsonl
+  train_file: datasets/8192_avg/train.jsonl
+  validation_file: datasets/8192_avg/validation.jsonl
+  test_file: datasets/8192_avg/test.jsonl
   source_field: text
   target_field: summary
   id_field: id
@@ -28,7 +28,7 @@ data:
   decoder_prompt: "Hãy tóm tắt văn bản đã được mã hóa. Chỉ trả về nội dung tóm tắt."
   decoder_chat_template: true
   decoder_prefix: ""
-  max_source_length: 8096
+  max_source_length: 8192
   max_target_length: 512
 
 generation:

@@ -625,10 +625,27 @@ def _vllm_dtype(config: dict[str, Any]) -> str:
 def _vllm_model_impl(config: dict[str, Any]) -> str:
     """Resolve the vLLM implementation for the configured model family."""
 
-    value = str(config["model"].get("vllm_model_impl", "auto")).strip().lower()
+    # Keep the suite as the reproducible default, while allowing a server-side
+    # compatibility override for older/newer vLLM releases without editing a
+    # generated config.  An explicit ``VLLM_MODEL_IMPL=auto`` must remain
+    # ``auto``; it is the escape hatch for vLLM versions that do not expose the
+    # ``--model-impl transformers`` flag.
+    override = os.environ.get("VLLM_MODEL_IMPL")
+    value = str(override if override is not None else config["model"].get("vllm_model_impl", "auto")).strip().lower()
+    if override is not None:
+        return value
     if value == "auto" and str(config["model"].get("family", "causal_lm")) == "nemotron_diffusion":
         return "transformers"
     return value
+
+
+def _vllm_enforce_eager(config: dict[str, Any]) -> bool:
+    """Return whether the vLLM server must avoid torch.compile."""
+
+    override = os.environ.get("VLLM_ENFORCE_EAGER")
+    if override is not None:
+        return override.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(config["model"].get("vllm_enforce_eager", False))
 
 
 def _evaluate_vllm(
@@ -683,6 +700,7 @@ def _evaluate_vllm(
                 trust_remote_code=bool(config["model"].get("trust_remote_code", True)),
                 model_impl=_vllm_model_impl(config),
                 served_model_name=served_model_name,
+                enforce_eager=_vllm_enforce_eager(config),
                 startup_timeout=vllm_startup_timeout,
                 log_path=output_path.with_name(f"{output_path.stem}.vllm.log"),
             )
@@ -725,6 +743,7 @@ def _evaluate_vllm(
                 "vllm_base_url": client.base_url,
                 "vllm_model": served_model,
                 "vllm_model_impl": _vllm_model_impl(config),
+                "vllm_enforce_eager": _vllm_enforce_eager(config),
                 "vllm_request_batch_size": batch_size,
                 "vllm_unsupported_generation_controls": ["no_repeat_ngram_size"]
                 if int(generation.get("no_repeat_ngram_size", 0)) > 0

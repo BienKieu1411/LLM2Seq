@@ -89,12 +89,12 @@ The decoder can render a true system/user chat prefix. Set `data.system_prompt` 
 
 ```bash
 PYTHON=/absolute/path/to/bienkieu_env/bin/python \
-  bash scripts/run_afmr.sh evaluate configs/8096_avg.yaml \
-  runs/afmr/8096_avg/last.pt runs/afmr/8096_avg/test_predictions.jsonl \
+  bash scripts/run_afmr.sh evaluate configs/8192_avg.yaml \
+  runs/afmr/8192_avg/last.pt runs/afmr/8192_avg/test_predictions.jsonl \
   --split test --system-prompt "Bạn là trợ lý chuyên tóm tắt văn bản tiếng Việt. Chỉ trả về nội dung tóm tắt."
 ```
 
-`decoder_chat_template: true` sends `[system, user]` messages to the decoder tokenizer and appends its assistant generation marker. With `decoder_chat_template: false`, the two prompts are joined as literal text. `configs/8096_avg.yaml` is a ready recipe with an 8,096-token source budget and this prompt contract.
+`decoder_chat_template: true` sends `[system, user]` messages to the decoder tokenizer and appends its assistant generation marker. With `decoder_chat_template: false`, the two prompts are joined as literal text. `configs/8192_avg.yaml` is a ready recipe with an 8,192-token source budget and this prompt contract.
 When changing the prompt for a comparison, use a fresh prediction filename so an existing JSONL resume prefix cannot be mistaken for generations made with the new instruction.
 
 PubMed, ArXiv and CNNDM preparation detokenizes punctuation, brackets, quotes and contractions using the T5Gemma sentence-level rules, preserving sentence newlines. Their recipes also enable `data.detokenize: true`, so already-prepared files receive the same idempotent normalization when read. No full-corpus cache or repeated copy is required. This applies to both source and target, including test references. Legacy resolved configs without this key retain their previous text handling; do not mix old partial predictions with newly normalized references. WikiLingua does not enable this English-oriented normalization.
