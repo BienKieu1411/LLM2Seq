@@ -56,7 +56,6 @@ defaults:
     min_new_tokens: 32
     num_beams: 1
     do_sample: false
-    # Match every T5Gemma benchmark recipe: deterministic greedy decoding.
     temperature: 0.0
     top_k: 0
     top_p: 1.0
@@ -126,8 +125,10 @@ models:
       per_device_train_batch_size: 1
       gradient_accumulation_steps: 32
     generation:
-      # Maximum examples per length-homogeneous AR batch; tune for GPU memory.
+      # Maximum examples per near-length AR batch; tune for GPU memory.
       batch_size: 2
+      nemotron_max_padding_ratio: 1.5
+      nemotron_max_padded_tokens: 32768
   nemotron_diffusion_3b:
     model_id: nvidia/Nemotron-Labs-Diffusion-3B-Base
     path_env: NEMOTRON_DIFFUSION_3B_PATH
@@ -138,8 +139,10 @@ models:
       per_device_train_batch_size: 2
       gradient_accumulation_steps: 16
     generation:
-      # Maximum examples per length-homogeneous AR batch; tune for GPU memory.
+      # Maximum examples per near-length AR batch; tune for GPU memory.
       batch_size: 4
+      nemotron_max_padding_ratio: 1.5
+      nemotron_max_padded_tokens: 32768
 
 datasets:
   pubmed:

@@ -44,21 +44,30 @@ def _filter_logits(logits: torch.Tensor, *, top_k: int, top_p: float) -> torch.T
 
 
 def _no_repeat_ngram_mask(logits: torch.Tensor, generated: torch.Tensor, ngram_size: int) -> torch.Tensor:
-    if ngram_size <= 0 or generated.shape[1] < ngram_size - 1:
+    """Mask tokens that would complete an n-gram seen in the same row.
+
+    The old implementation converted every generated row to a Python list.
+    During Nemotron decoding that forced a device synchronization for every
+    row at every autoregressive step.  The unfold/equality formulation keeps
+    the complete operation on the active device and has the same masking
+    semantics for the configured n-gram sizes.
+    """
+
+    if ngram_size <= 1 or generated.shape[1] < ngram_size:
+        return logits
+
+    # ``ngrams`` has shape [batch, number_of_complete_ngrams, n].  A match
+    # means that its prefix equals the current suffix; its last token is then
+    # the token that must be masked.
+    ngrams = generated.unfold(dimension=1, size=ngram_size, step=1)
+    suffix = generated[:, -(ngram_size - 1) :]
+    matches = (ngrams[..., :-1] == suffix.unsqueeze(1)).all(dim=-1)
+    rows, columns = matches.nonzero(as_tuple=True)
+    if rows.numel() == 0:
         return logits
     result = logits.clone()
-    for row in range(generated.shape[0]):
-        tokens = generated[row].tolist()
-        if len(tokens) < ngram_size - 1:
-            continue
-        prefix = tuple(tokens[-(ngram_size - 1) :])
-        banned = {
-            tokens[index + ngram_size - 1]
-            for index in range(len(tokens) - ngram_size + 1)
-            if tuple(tokens[index : index + ngram_size - 1]) == prefix
-        }
-        if banned:
-            result[row, list(banned)] = -torch.inf
+    banned_tokens = ngrams[..., -1][rows, columns]
+    result[rows, banned_tokens] = -torch.inf
     return result
 
 
@@ -101,6 +110,7 @@ def generate_nemotron_ar(
     prompt_ids: torch.Tensor,
     tokenizer: Any,
     generation: dict[str, Any],
+    attention_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Generate with Nemotron-Labs-Diffusion's explicit AR cache API.
 
@@ -109,9 +119,11 @@ def generate_nemotron_ar(
     lets the baseline honor the same temperature/top-k/top-p controls while
     keeping the model in autoregressive mode (no diffusion training objective).
 
-    The caller groups prompts with the same tokenized length before calling
-    this function.  That keeps one shared position sequence per batch while
-    still making ``generation.batch_size`` effective.
+    Equal-length prompts use the model's fast unmasked causal path.  For a
+    near-length batch, ``attention_mask`` can be supplied for left-padded
+    prompts; the cache still uses one physical sequence length while masked
+    padding is excluded from attention and each row keeps its own RoPE
+    positions.
     """
 
     if prompt_ids.ndim != 2 or prompt_ids.shape[0] < 1 or prompt_ids.shape[1] < 1:
@@ -127,15 +139,29 @@ def generate_nemotron_ar(
     device = prompt_ids.device
     batch_size = int(prompt_ids.shape[0])
     prompt_length = int(prompt_ids.shape[1])
+    padded = attention_mask is not None
+    if padded:
+        attention_mask = attention_mask.to(device=device)
+        if attention_mask.ndim != 2 or tuple(attention_mask.shape) != tuple(prompt_ids.shape):
+            raise ValueError("Nemotron attention_mask must have the same [batch, prompt_length] shape as prompt_ids")
+        prompt_lengths = attention_mask.to(dtype=torch.long).sum(dim=-1)
+        position_ids = attention_mask.to(dtype=torch.long).cumsum(dim=-1) - 1
+        position_ids = position_ids.masked_fill(attention_mask == 0, 0)
+    else:
+        prompt_lengths = None
+        position_ids = None
     cache = DynamicCache()
     positions = torch.arange(prompt_length, device=device)
-    encoded = model.encoder(
-        input_ids=prompt_ids,
-        position_ids=positions.unsqueeze(0).expand(batch_size, -1),
-        past_key_values=cache,
-        use_cache=True,
-        cache_position=positions,
-    )
+    prefill_kwargs: dict[str, Any] = {
+        "input_ids": prompt_ids,
+        "position_ids": position_ids if position_ids is not None else positions.unsqueeze(0).expand(batch_size, -1),
+        "past_key_values": cache,
+        "use_cache": True,
+        "cache_position": positions,
+    }
+    if padded:
+        prefill_kwargs.update({"attention_mask": attention_mask, "use_causal_mask": True})
+    encoded = model.encoder(**prefill_kwargs)
     cache = encoded.past_key_values
     logits = model.diffusion_head(encoded.last_hidden_state[:, -1, :])
     eos_token_id = getattr(tokenizer, "eos_token_id", None)
@@ -144,20 +170,30 @@ def generate_nemotron_ar(
         pad_token_id = eos_token_id
     if pad_token_id is None:
         raise ValueError("Nemotron AR generation requires tokenizer.pad_token_id or tokenizer.eos_token_id")
-    generated = torch.empty((batch_size, 0), dtype=torch.long, device=device)
+    max_new_tokens = int(generation["max_new_tokens"])
+    generated = torch.empty((batch_size, max_new_tokens), dtype=torch.long, device=device)
+    if padded:
+        # Preallocate the full mask so decoding does not repeatedly allocate
+        # and concatenate a [batch, seen_tokens] tensor.
+        decode_attention = torch.zeros(
+            (batch_size, prompt_length + max_new_tokens), dtype=attention_mask.dtype, device=device
+        )
+        decode_attention[:, :prompt_length] = attention_mask
     finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
-    for step in range(int(generation["max_new_tokens"])):
+    generated_length = 0
+    for step in range(max_new_tokens):
         token = _next_token(
             logits,
             generation=generation,
-            generated=generated,
+            generated=generated[:, :generated_length],
             eos_token_id=eos_token_id,
             step=step,
         )
         was_finished = finished.clone()
         if was_finished.any():
             token = token.masked_fill(was_finished.unsqueeze(1), int(pad_token_id))
-        generated = torch.cat([generated, token], dim=1)
+        generated[:, step : step + 1] = token
+        generated_length = step + 1
         if eos_token_id is not None and step + 1 >= int(generation.get("min_new_tokens", 0)):
             finished |= (~was_finished) & (token.squeeze(1) == int(eos_token_id))
         if eos_token_id is not None and bool(finished.all()):
@@ -165,16 +201,27 @@ def generate_nemotron_ar(
         if step + 1 >= int(generation["max_new_tokens"]):
             break
         cache_position = torch.tensor([prompt_length + step], device=device)
-        encoded = model.encoder(
-            input_ids=token,
-            position_ids=cache_position.unsqueeze(0).expand(batch_size, -1),
-            past_key_values=cache,
-            use_cache=True,
-            cache_position=cache_position,
-        )
+        step_kwargs: dict[str, Any] = {
+            "input_ids": token,
+            "past_key_values": cache,
+            "use_cache": True,
+            "cache_position": cache_position,
+        }
+        if padded:
+            decode_attention[:, prompt_length + step] = 1
+            step_kwargs.update(
+                {
+                    "attention_mask": decode_attention[:, : prompt_length + step + 1],
+                    "position_ids": (prompt_lengths + step).unsqueeze(1),
+                    "use_causal_mask": True,
+                }
+            )
+        else:
+            step_kwargs["position_ids"] = cache_position.unsqueeze(0).expand(batch_size, -1)
+        encoded = model.encoder(**step_kwargs)
         cache = encoded.past_key_values
         logits = model.diffusion_head(encoded.last_hidden_state[:, -1, :])
-    return torch.cat([prompt_ids, generated], dim=1)
+    return torch.cat([prompt_ids, generated[:, :generated_length]], dim=1)
 
 
 def _generation_kwargs(generation: dict[str, Any], tokenizer: Any) -> dict[str, Any]:
@@ -276,18 +323,72 @@ def _write_prediction_batch(handle: Any, records: list[dict[str, str]], predicti
     handle.flush()
 
 
-def _nemotron_batch_indices(prompts: list[list[int]], batch_size: int) -> list[list[int]]:
-    """Build length-homogeneous Nemotron batches without changing dataset order."""
+def _nemotron_batch_indices(
+    prompts: list[list[int]],
+    batch_size: int,
+    *,
+    max_padding_ratio: float | None = None,
+    max_padded_tokens: int = 0,
+) -> list[list[int]]:
+    """Build safe Nemotron batches while retaining the original dataset order.
+
+    With ``max_padding_ratio`` omitted, the historical exact-length grouping is
+    retained.  Supplying a ratio enables sorted near-length batches; callers
+    then left-pad and pass an attention mask to the AR cache loop.  The token
+    budget bounds the padded prefill/cache footprint and can be used to avoid
+    turning a nominally large example batch into an OOM.
+    """
 
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
-    by_length: dict[int, list[int]] = {}
-    for index, prompt in enumerate(prompts):
-        by_length.setdefault(len(prompt), []).append(index)
+    if max_padding_ratio is not None and float(max_padding_ratio) <= 0:
+        raise ValueError("max_padding_ratio must be positive")
+    if int(max_padded_tokens) < 0:
+        raise ValueError("max_padded_tokens must be non-negative")
+
+    # Keep the old behavior for direct callers and old tests.  Evaluation opts
+    # into near-length batching explicitly below.
+    if max_padding_ratio is None and int(max_padded_tokens) == 0:
+        by_length: dict[int, list[int]] = {}
+        for index, prompt in enumerate(prompts):
+            by_length.setdefault(len(prompt), []).append(index)
+        batches: list[list[int]] = []
+        for indices in by_length.values():
+            for start in range(0, len(indices), batch_size):
+                batches.append(indices[start : start + batch_size])
+        return batches
+
+    ordered = sorted(range(len(prompts)), key=lambda index: (len(prompts[index]), index))
     batches: list[list[int]] = []
-    for indices in by_length.values():
-        for start in range(0, len(indices), batch_size):
-            batches.append(indices[start : start + batch_size])
+    current: list[int] = []
+    current_min = 0
+    current_max = 0
+
+    def flush() -> None:
+        nonlocal current, current_min, current_max
+        if current:
+            batches.append(current)
+        current = []
+        current_min = 0
+        current_max = 0
+
+    for index in ordered:
+        length = len(prompts[index])
+        candidate_min = length if not current else min(current_min, length)
+        candidate_max = length if not current else max(current_max, length)
+        candidate_count = len(current) + 1
+        too_many = candidate_count > batch_size
+        too_many_tokens = int(max_padded_tokens) > 0 and candidate_count * candidate_max > int(max_padded_tokens)
+        too_wide = max_padding_ratio is not None and candidate_max > max(
+            1, int(candidate_min * float(max_padding_ratio))
+        )
+        if current and (too_many or too_many_tokens or too_wide):
+            flush()
+            candidate_min = candidate_max = length
+            candidate_count = 1
+        current.append(index)
+        current_min, current_max = candidate_min, candidate_max
+    flush()
     return batches
 
 
@@ -384,7 +485,17 @@ def _evaluate_local(
     batch_size = int(generation["batch_size"])
     family = str(config["model"].get("family", "causal_lm"))
     if family == "nemotron_diffusion":
-        batch_indices = _nemotron_batch_indices(prompts, batch_size)
+        # ``batch_size`` is a ceiling.  Near-length padding lets Nemotron use
+        # useful batches while the token budget prevents a large nominal batch
+        # from exhausting VRAM on long-document datasets.
+        max_padding_ratio = float(generation.get("nemotron_max_padding_ratio", 1.5))
+        max_padded_tokens = int(generation.get("nemotron_max_padded_tokens", 32768))
+        batch_indices = _nemotron_batch_indices(
+            prompts,
+            batch_size,
+            max_padding_ratio=max_padding_ratio,
+            max_padded_tokens=max_padded_tokens,
+        )
     else:
         batch_indices = [
             list(range(start, min(start + batch_size, len(prompts)))) for start in range(0, len(prompts), batch_size)
@@ -392,9 +503,16 @@ def _evaluate_local(
     predictions: list[str] = []
     predictions_by_index: list[str | None] = [None] * len(prompts)
     batch_total = len(batch_indices)
+    batch_note = ""
+    if family == "nemotron_diffusion":
+        average_batch = len(prompts) / batch_total if batch_total else 0.0
+        batch_note = (
+            f" | actual_batches={batch_total} | avg_actual_batch={average_batch:.2f}"
+            f" | max_padding_ratio={max_padding_ratio:.2f} | max_padded_tokens={max_padded_tokens}"
+        )
     print(
         f"[eval] START | backend=local | split={split} | examples={len(prompts)} | "
-        f"batch_size={batch_size} | started={started_at}",
+        f"batch_size={batch_size}{batch_note} | started={started_at}",
         flush=True,
     )
     with output_path.open("w", encoding="utf-8") as handle:
@@ -403,17 +521,27 @@ def _evaluate_local(
         for batch_index, indices in enumerate(batch_indices, start=1):
             batch_prompts = [prompts[index] for index in indices]
             if family == "nemotron_diffusion":
-                # Length-homogeneous batches are required because the custom
-                # AR cache API receives one shared position sequence.  The
-                # batch size in YAML remains the maximum number of examples.
-                input_ids = torch.tensor(batch_prompts, dtype=torch.long, device=target)
-                attention = None
+                # Preserve the old fast path for equal lengths.  Near-length
+                # batches are left-padded and masked inside the custom AR loop.
+                if len({len(prompt) for prompt in batch_prompts}) == 1:
+                    input_ids = torch.tensor(batch_prompts, dtype=torch.long, device=target)
+                    attention = None
+                else:
+                    input_ids, attention = left_pad_prompts(batch_prompts, tokenizer.pad_token_id)
+                    input_ids = input_ids.to(target)
+                    attention = attention.to(target)
             else:
                 input_ids, attention = left_pad_prompts(batch_prompts, tokenizer.pad_token_id)
                 input_ids = input_ids.to(target)
                 attention = attention.to(target)
             if family == "nemotron_diffusion":
-                outputs = generate_nemotron_ar(model, input_ids, tokenizer, generation)
+                outputs = generate_nemotron_ar(
+                    model,
+                    input_ids,
+                    tokenizer,
+                    generation,
+                    attention_mask=attention,
+                )
             else:
                 outputs = model.generate(
                     input_ids=input_ids,
@@ -460,6 +588,17 @@ def _evaluate_local(
         backend="local",
         started=started,
         started_at=started_at,
+        extra=(
+            {
+                "requested_batch_size": batch_size,
+                "actual_batch_count": batch_total,
+                "average_actual_batch_size": round(len(prompts) / batch_total, 4) if batch_total else 0.0,
+                "nemotron_max_padding_ratio": max_padding_ratio,
+                "nemotron_max_padded_tokens": max_padded_tokens,
+            }
+            if family == "nemotron_diffusion"
+            else None
+        ),
     )
 
 

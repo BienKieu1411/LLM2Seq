@@ -56,8 +56,10 @@ budget can coexist with the `512`-token target and the instruction overhead.
 
 Training and evaluation batch sizes are configured independently per model:
 larger models use smaller evaluation batches, Qwen3-0.6B uses a larger batch,
-and Nemotron uses `batch_size: 1` for its autoregressive cache loop.  Each run
-is written to `runs/decoder_baselines/<model>__<dataset>/` with its
+and Nemotron uses near-length, token-budgeted batches for its autoregressive
+cache loop.  Its configured `generation.batch_size` is an upper bound; the
+resolved metrics record the actual number and average size of the batches.
+Each run is written to `runs/decoder_baselines/<model>__<dataset>/` with its
 resolved config, `final_model/`, `trainer_state.json`, predictions and metrics.
 Training enables length-grouped sampling by default, so examples with similar
 source/target lengths share a batch and dynamic padding does less work.  The

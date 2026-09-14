@@ -9,7 +9,12 @@ import yaml
 
 from decoder_baselines.config import validate_config
 from decoder_baselines.data import CausalCollator, CausalSummarizationDataset, encode_prompt
-from decoder_baselines.evaluate import _config_from_suite, _filter_logits, _nemotron_batch_indices
+from decoder_baselines.evaluate import (
+    _config_from_suite,
+    _filter_logits,
+    _nemotron_batch_indices,
+    _no_repeat_ngram_mask,
+)
 from decoder_baselines.train import _read_distributed_context
 from decoder_baselines.suite import _distributed_train_command, _parse_gpu_ids, build_run_config
 
@@ -181,6 +186,28 @@ def test_nemotron_eval_batch_size_groups_equal_prompt_lengths() -> None:
     batches = _nemotron_batch_indices(prompts, batch_size=2)
     assert batches == [[0, 2], [4], [1, 3], [5]]
     assert sorted(index for batch in batches for index in batch) == list(range(len(prompts)))
+
+
+def test_nemotron_near_length_batches_are_bounded_and_cover_all_rows() -> None:
+    prompts = [[0] * 4, [1] * 5, [2] * 6, [3] * 10, [4] * 11, [5] * 12]
+    batches = _nemotron_batch_indices(
+        prompts,
+        batch_size=4,
+        max_padding_ratio=1.5,
+        max_padded_tokens=24,
+    )
+    assert all(len(batch) <= 4 for batch in batches)
+    assert all(len(batch) * max(len(prompts[index]) for index in batch) <= 24 for batch in batches)
+    assert sorted(index for batch in batches for index in batch) == list(range(len(prompts)))
+
+
+def test_no_repeat_ngram_mask_matches_rowwise_semantics() -> None:
+    generated = torch.tensor([[1, 2, 1, 2, 1], [3, 4, 5, 3, 4]])
+    logits = torch.zeros(2, 8)
+    masked = _no_repeat_ngram_mask(logits, generated, ngram_size=3)
+    assert torch.isneginf(masked[0, 2])
+    assert torch.isneginf(masked[1, 5])
+    assert torch.isfinite(masked[0, 3])
 
 
 def test_arxiv_context_budget_covers_source_and_target() -> None:

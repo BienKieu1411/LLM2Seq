@@ -181,6 +181,8 @@ def validate_config(config: dict[str, Any]) -> None:
             "top_p",
             "repetition_penalty",
             "no_repeat_ngram_size",
+            "nemotron_max_padding_ratio",
+            "nemotron_max_padded_tokens",
         },
         "generation",
     )
@@ -204,6 +206,10 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("generation.repetition_penalty must be positive")
     if int(generation.get("no_repeat_ngram_size", 0)) < 0:
         raise ValueError("generation.no_repeat_ngram_size must be non-negative")
+    if "nemotron_max_padding_ratio" in generation and float(generation["nemotron_max_padding_ratio"]) <= 0:
+        raise ValueError("generation.nemotron_max_padding_ratio must be positive")
+    if "nemotron_max_padded_tokens" in generation and int(generation["nemotron_max_padded_tokens"]) < 0:
+        raise ValueError("generation.nemotron_max_padded_tokens must be non-negative")
 
     limits = config.get("limits", {})
     if not isinstance(limits, dict):
