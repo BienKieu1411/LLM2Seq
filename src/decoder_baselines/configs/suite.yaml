@@ -153,3 +153,19 @@ datasets:
     max_source_length: 8096
     max_target_length: 512
     max_sequence_length: 9216
+  booksum:
+    data_dir: booksum
+    source_prefix: "Summarize the following literary narrative into a coherent, faithful summary. Preserve the main characters, key events, causal and temporal relationships, and important outcomes; do not add information.\nNarrative:\n"
+    max_source_length: 16384
+    max_target_length: 1024
+    max_sequence_length: 17408
+    generation:
+      max_new_tokens: 1024
+  govreport:
+    data_dir: govreport
+    source_prefix: "Summarize the following government report into a concise, factual summary. Preserve the main objectives, findings, evidence, and recommendations; do not add information.\nReport:\n"
+    max_source_length: 16384
+    max_target_length: 1024
+    max_sequence_length: 17408
+    generation:
+      max_new_tokens: 1024
