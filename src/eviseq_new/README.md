@@ -83,7 +83,7 @@ The script creates an isolated `runs/smoke/run_*` directory and never overwrites
 
 ## Preparing data
 
-Each input record contains the configured source and target fields (strings or lists of strings). Training can read raw JSONL directly. For the same three-split preparation used by `eviseq_v2`, run `prepare-dataset`: PubMed/ArXiv expect `train.label.jsonl`, `val.label.jsonl`, and `test.label.jsonl`; CNNDM/WikiLingua accept the usual `train`, `val`/`validation`, and `test` JSONL/JSON/TXT names. The command copies raw files, writes canonical `id/text/summary` JSONL, emits `preparation_report.json`, and rejects duplicate IDs or exact source text across splits. Evidence labels are not consumed by AFMR.
+Each input record contains the configured source and target fields (strings or lists of strings). Training can read raw JSONL directly. For the same three-split preparation used by `eviseq_v2`, run `prepare-dataset`: PubMed/ArXiv first look for `train.label.jsonl`, `val.label.jsonl`, and `test.label.jsonl`, then fall back to the usual split names; CNNDM, WikiLingua, and BookSum accept `train`, `val`/`validation`, and `test` JSONL/JSON/TXT names. GovReport accepts those names and the public release's `gao_{train,valid,test}` and `crs_{train,valid,test}` files, merging GAO and CRS records when both are present. BookSum aliases `chapter`/`chapter_text` and `summary_text`; GovReport also flattens nested `report`/`highlight` sections. The command copies raw files, writes canonical `id/text/summary` JSONL, emits `preparation_report.json`, and rejects duplicate IDs or exact source text across splits. Evidence labels are not consumed by AFMR.
 
 PubMed, ArXiv and CNNDM preparation detokenizes punctuation, brackets, quotes and contractions using the T5Gemma sentence-level rules, preserving sentence newlines. Their recipes also enable `data.detokenize: true`, so already-prepared files receive the same idempotent normalization when read. No full-corpus cache or repeated copy is required. This applies to both source and target, including test references. Legacy resolved configs without this key retain their previous text handling; do not mix old partial predictions with newly normalized references. WikiLingua does not enable this English-oriented normalization.
 
@@ -101,6 +101,24 @@ The same command handles ArXiv, CNN/DailyMail, and WikiLingua by changing
 bash scripts/prepare_afmr.sh --dataset arxiv --input-dir /data/arxiv --output-dir datasets/arxiv
 bash scripts/prepare_afmr.sh --dataset cnndm --input-dir /data/cnndm --output-dir datasets/cnndm
 bash scripts/prepare_afmr.sh --dataset wikilingua --input-dir /data/wikilingua --output-dir datasets/wikilingua
+```
+
+To prepare the ArXiv, BookSum, and GovReport benchmark tree in one command, set one input root containing a subdirectory for each dataset (or pass the three `--*-input` paths explicitly):
+
+```bash
+PYTHON=/absolute/path/to/bienkieu_env/bin/python \
+  bash scripts/prepare_benchmark_datasets.sh \
+  --input-root /data/summarization \
+  --output-root datasets \
+  --raw-root data/raw
+```
+
+For BookSum mirrors whose source and target columns have different names, use the single-dataset wrapper with explicit fields:
+
+```bash
+bash scripts/prepare_afmr.sh --dataset booksum \
+  --input-dir /data/booksum --output-dir datasets/booksum \
+  --source-field chapter --target-field summary_text --id-field chapter_id
 ```
 
 ## A100 training/evaluation

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .config import load_config
 from .data.prepare import prepare_split
+from .data.prepare_dataset import SUPPORTED_DATASETS
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -47,12 +48,15 @@ def main(argv: list[str] | None = None) -> None:
     prepare.add_argument("input_path")
     prepare.add_argument("output_path")
     prepare_dataset = subparsers.add_parser("prepare-dataset")
-    prepare_dataset.add_argument(
-        "--dataset", required=True, choices=("pubmed", "arxiv", "cnndm", "wikilingua", "custom")
-    )
+    prepare_dataset.add_argument("--dataset", required=True, choices=SUPPORTED_DATASETS)
     prepare_dataset.add_argument("--input-dir", required=True)
     prepare_dataset.add_argument("--output-dir", required=True)
     prepare_dataset.add_argument("--raw-copy-dir", default=None)
+    prepare_dataset.add_argument("--source-field", default=None)
+    prepare_dataset.add_argument("--target-field", default=None)
+    prepare_dataset.add_argument("--id-field", default=None)
+    prepare_dataset.add_argument("--list-separator", default="\n")
+    prepare_dataset.add_argument("--detokenize", action=argparse.BooleanOptionalAction, default=None)
     prepare_dataset.add_argument("--allow-cross-split-content", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "smoke":
@@ -102,6 +106,11 @@ def main(argv: list[str] | None = None) -> None:
             dataset=args.dataset,
             raw_copy_dir=args.raw_copy_dir,
             allow_cross_split_content=args.allow_cross_split_content,
+            source_field=args.source_field,
+            target_field=args.target_field,
+            id_field=args.id_field,
+            list_separator=args.list_separator,
+            detokenize_text=args.detokenize,
         )
         for split, stats in report["splits"].items():
             print(f"{split}: {stats['kept']} examples (skipped {stats['skipped']}) -> {stats['processed_path']}")
