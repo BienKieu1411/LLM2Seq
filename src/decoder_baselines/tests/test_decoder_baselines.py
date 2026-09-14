@@ -12,7 +12,6 @@ from decoder_baselines.data import CausalCollator, CausalSummarizationDataset, e
 from decoder_baselines.evaluate import (
     _config_from_suite,
     _filter_logits,
-    _nemotron_batch_indices,
     _no_repeat_ngram_mask,
 )
 from decoder_baselines.train import _read_distributed_context
@@ -104,8 +103,6 @@ def test_suite_materializes_nemotron_ar_recipe() -> None:
     assert config["model"]["family"] == "nemotron_diffusion"
     assert config["model"]["model_id"] == "nvidia/Nemotron-Labs-Diffusion-3B"
     assert config["model"]["name_or_path"].endswith("Nemotron-Labs-Diffusion-3B")
-    assert config["model"]["vllm_enforce_eager"] is True
-    assert config["model"]["vllm_model_impl"] == "transformers"
     assert config["model"]["diffusion_paradigm"] == "autoregressive"
     assert config["data"]["source_prefix"].startswith("Summarize the following biomedical")
     assert config["generation"]["temperature"] == 0.0
@@ -201,26 +198,6 @@ def test_evaluate_can_materialize_config_directly_from_suite() -> None:
     assert config["generation"]["temperature"] == 0.0
     assert config["generation"]["top_k"] == 0
     assert config["generation"]["top_p"] == 1.0
-
-
-def test_nemotron_eval_batch_size_groups_equal_prompt_lengths() -> None:
-    prompts = [[1, 2], [3], [4, 5], [6], [7, 8], [9, 10, 11]]
-    batches = _nemotron_batch_indices(prompts, batch_size=2)
-    assert batches == [[0, 2], [4], [1, 3], [5]]
-    assert sorted(index for batch in batches for index in batch) == list(range(len(prompts)))
-
-
-def test_nemotron_near_length_batches_are_bounded_and_cover_all_rows() -> None:
-    prompts = [[0] * 4, [1] * 5, [2] * 6, [3] * 10, [4] * 11, [5] * 12]
-    batches = _nemotron_batch_indices(
-        prompts,
-        batch_size=4,
-        max_padding_ratio=1.5,
-        max_padded_tokens=24,
-    )
-    assert all(len(batch) <= 4 for batch in batches)
-    assert all(len(batch) * max(len(prompts[index]) for index in batch) <= 24 for batch in batches)
-    assert sorted(index for batch in batches for index in batch) == list(range(len(prompts)))
 
 
 def test_no_repeat_ngram_mask_matches_rowwise_semantics() -> None:

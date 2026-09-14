@@ -119,11 +119,10 @@ def generate_nemotron_ar(
     lets the baseline honor the same temperature/top-k/top-p controls while
     keeping the model in autoregressive mode (no diffusion training objective).
 
-    Equal-length prompts use the model's fast unmasked causal path.  For a
-    near-length batch, ``attention_mask`` can be supplied for left-padded
-    prompts; the cache still uses one physical sequence length while masked
-    padding is excluded from attention and each row keeps its own RoPE
-    positions.
+    Equal-length prompts use the model's fast unmasked causal path. For a
+    variable-length batch, ``attention_mask`` is supplied for left-padded
+    prompts; the cache uses one physical sequence length while masked padding
+    is excluded from attention and each row keeps its own RoPE positions.
     """
 
     if prompt_ids.ndim != 2 or prompt_ids.shape[0] < 1 or prompt_ids.shape[1] < 1:
@@ -279,12 +278,18 @@ def _resolve_backend(config: dict[str, Any], requested: str) -> str:
     backend = str(requested).strip().lower()
     if backend not in {"auto", "local", "vllm"}:
         raise ValueError("Evaluation backend must be auto, local, or vllm")
+    family = str(config["model"].get("family", "causal_lm"))
     if backend == "auto":
-        # The suite evaluates every decoder through the same OpenAI-compatible
-        # service.  Nemotron-Labs-Diffusion is loaded by vLLM's Transformers
-        # backend (configured per model) because it exposes AutoModel rather
-        # than the unrelated NemotronForCausalLM class.
-        return "vllm"
+        # Standard decoder-only LMs use the shared vLLM service.  Nemotron's
+        # custom AutoModel has an explicit AR cache API, so keep its reference
+        # generation in-process where the model's native path is available.
+        return "local" if family == "nemotron_diffusion" else "vllm"
+    if backend == "vllm" and family == "nemotron_diffusion":
+        # Keep old suite/CLI invocations usable after the vLLM compile path
+        # failed on this custom remote model.  Nemotron is always evaluated by
+        # the local native AR loop, even when a stale ``--backend vllm`` flag is
+        # still present in a copied command.
+        return "local"
     return backend
 
 
@@ -314,78 +319,12 @@ def _load_eval_records(
 def _write_prediction_batch(handle: Any, records: list[dict[str, str]], predictions: list[str]) -> None:
     if len(records) != len(predictions):
         raise RuntimeError(f"Prediction count mismatch: records={len(records)}, predictions={len(predictions)}")
-    for record, prediction in zip(records, predictions):
+    for record, prediction in zip(records, predictions, strict=True):
         handle.write(json.dumps({**record, "prediction": prediction.strip()}, ensure_ascii=False) + "\n")
-    handle.flush()
-
-
-def _nemotron_batch_indices(
-    prompts: list[list[int]],
-    batch_size: int,
-    *,
-    max_padding_ratio: float | None = None,
-    max_padded_tokens: int = 0,
-) -> list[list[int]]:
-    """Build safe Nemotron batches while retaining the original dataset order.
-
-    With ``max_padding_ratio`` omitted, the historical exact-length grouping is
-    retained.  Supplying a ratio enables sorted near-length batches; callers
-    then left-pad and pass an attention mask to the AR cache loop.  The token
-    budget bounds the padded prefill/cache footprint and can be used to avoid
-    turning a nominally large example batch into an OOM.
-    """
-
-    if batch_size <= 0:
-        raise ValueError("batch_size must be positive")
-    if max_padding_ratio is not None and float(max_padding_ratio) <= 0:
-        raise ValueError("max_padding_ratio must be positive")
-    if int(max_padded_tokens) < 0:
-        raise ValueError("max_padded_tokens must be non-negative")
-
-    # Keep the old behavior for direct callers and old tests.  Evaluation opts
-    # into near-length batching explicitly below.
-    if max_padding_ratio is None and int(max_padded_tokens) == 0:
-        by_length: dict[int, list[int]] = {}
-        for index, prompt in enumerate(prompts):
-            by_length.setdefault(len(prompt), []).append(index)
-        batches: list[list[int]] = []
-        for indices in by_length.values():
-            for start in range(0, len(indices), batch_size):
-                batches.append(indices[start : start + batch_size])
-        return batches
-
-    ordered = sorted(range(len(prompts)), key=lambda index: (len(prompts[index]), index))
-    batches: list[list[int]] = []
-    current: list[int] = []
-    current_min = 0
-    current_max = 0
-
-    def flush() -> None:
-        nonlocal current, current_min, current_max
-        if current:
-            batches.append(current)
-        current = []
-        current_min = 0
-        current_max = 0
-
-    for index in ordered:
-        length = len(prompts[index])
-        candidate_min = length if not current else min(current_min, length)
-        candidate_max = length if not current else max(current_max, length)
-        candidate_count = len(current) + 1
-        too_many = candidate_count > batch_size
-        too_many_tokens = int(max_padded_tokens) > 0 and candidate_count * candidate_max > int(max_padded_tokens)
-        too_wide = max_padding_ratio is not None and candidate_max > max(
-            1, int(candidate_min * float(max_padding_ratio))
-        )
-        if current and (too_many or too_many_tokens or too_wide):
-            flush()
-            candidate_min = candidate_max = length
-            candidate_count = 1
-        current.append(index)
-        current_min, current_max = candidate_min, candidate_max
-    flush()
-    return batches
+        # Keep the append-only artifact observable if a long generation run is
+        # interrupted. A completed sample is flushed before the next one is
+        # decoded, while the model still computes one batch at a time.
+        handle.flush()
 
 
 def _log_progress(
@@ -480,45 +419,27 @@ def _evaluate_local(
     generation = dict(config["generation"])
     batch_size = int(generation["batch_size"])
     family = str(config["model"].get("family", "causal_lm"))
-    if family == "nemotron_diffusion":
-        # ``batch_size`` is a ceiling.  Near-length padding lets Nemotron use
-        # useful batches while the token budget prevents a large nominal batch
-        # from exhausting VRAM on long-document datasets.
-        max_padding_ratio = float(generation.get("nemotron_max_padding_ratio", 1.5))
-        max_padded_tokens = int(generation.get("nemotron_max_padded_tokens", 32768))
-        batch_indices = _nemotron_batch_indices(
-            prompts,
-            batch_size,
-            max_padding_ratio=max_padding_ratio,
-            max_padded_tokens=max_padded_tokens,
-        )
-    else:
-        batch_indices = [
-            list(range(start, min(start + batch_size, len(prompts)))) for start in range(0, len(prompts), batch_size)
-        ]
+    batch_indices = [
+        list(range(start, min(start + batch_size, len(prompts)))) for start in range(0, len(prompts), batch_size)
+    ]
     predictions: list[str] = []
-    predictions_by_index: list[str | None] = [None] * len(prompts)
     batch_total = len(batch_indices)
     batch_note = ""
     if family == "nemotron_diffusion":
         average_batch = len(prompts) / batch_total if batch_total else 0.0
-        batch_note = (
-            f" | actual_batches={batch_total} | avg_actual_batch={average_batch:.2f}"
-            f" | max_padding_ratio={max_padding_ratio:.2f} | max_padded_tokens={max_padded_tokens}"
-        )
+        batch_note = f" | actual_batches={batch_total} | avg_actual_batch={average_batch:.2f}"
     print(
         f"[eval] START | backend=local | split={split} | examples={len(prompts)} | "
         f"batch_size={batch_size}{batch_note} | started={started_at}",
         flush=True,
     )
     with output_path.open("w", encoding="utf-8") as handle:
-        written = 0
         generated_count = 0
         for batch_index, indices in enumerate(batch_indices, start=1):
             batch_prompts = [prompts[index] for index in indices]
             if family == "nemotron_diffusion":
-                # Preserve the old fast path for equal lengths.  Near-length
-                # batches are left-padded and masked inside the custom AR loop.
+                # Preserve the fast path for equal lengths. Variable-length
+                # batches are left-padded and masked inside the AR cache loop.
                 if len({len(prompt) for prompt in batch_prompts}) == 1:
                     input_ids = torch.tensor(batch_prompts, dtype=torch.long, device=target)
                     attention = None
@@ -548,21 +469,9 @@ def _evaluate_local(
             decoded = [value.strip() for value in tokenizer.batch_decode(outputs[:, width:], skip_special_tokens=True)]
             if len(decoded) != len(indices):
                 raise RuntimeError(f"Prediction count mismatch: indices={len(indices)}, decoded={len(decoded)}")
-            for index, prediction in zip(indices, decoded):
-                predictions_by_index[index] = prediction
+            _write_prediction_batch(handle, records[indices[0] : indices[-1] + 1], decoded)
+            predictions.extend(decoded)
             generated_count += len(indices)
-
-            # Length bucketing can generate examples out of dataset order.
-            # Flush every contiguous prefix that is ready so JSONL remains
-            # ordered and still appears incrementally while evaluation runs.
-            ready_records: list[dict[str, str]] = []
-            ready_predictions: list[str] = []
-            while written < len(records) and predictions_by_index[written] is not None:
-                ready_records.append(records[written])
-                ready_predictions.append(str(predictions_by_index[written]))
-                written += 1
-            if ready_records:
-                _write_prediction_batch(handle, ready_records, ready_predictions)
             _log_progress(
                 started=started,
                 processed=generated_count,
@@ -571,9 +480,6 @@ def _evaluate_local(
                 batch_total=batch_total,
                 every=progress_every,
             )
-    if any(prediction is None for prediction in predictions_by_index):
-        raise RuntimeError("Nemotron batching did not produce a prediction for every example")
-    predictions = [str(prediction) for prediction in predictions_by_index]
     return _finish_metrics(
         config,
         output_path=output_path,
@@ -589,8 +495,6 @@ def _evaluate_local(
                 "requested_batch_size": batch_size,
                 "actual_batch_count": batch_total,
                 "average_actual_batch_size": round(len(prompts) / batch_total, 4) if batch_total else 0.0,
-                "nemotron_max_padding_ratio": max_padding_ratio,
-                "nemotron_max_padded_tokens": max_padded_tokens,
             }
             if family == "nemotron_diffusion"
             else None
@@ -620,32 +524,6 @@ def _checkpoint_context_length(checkpoint_path: Path, config: dict[str, Any]) ->
 def _vllm_dtype(config: dict[str, Any]) -> str:
     value = str(config["model"].get("eval_torch_dtype", "bfloat16")).lower()
     return {"bf16": "bfloat16", "fp16": "float16", "fp32": "float32"}.get(value, value)
-
-
-def _vllm_model_impl(config: dict[str, Any]) -> str:
-    """Resolve the vLLM implementation for the configured model family."""
-
-    # Keep the suite as the reproducible default, while allowing a server-side
-    # compatibility override for older/newer vLLM releases without editing a
-    # generated config.  An explicit ``VLLM_MODEL_IMPL=auto`` must remain
-    # ``auto``; it is the escape hatch for vLLM versions that do not expose the
-    # ``--model-impl transformers`` flag.
-    override = os.environ.get("VLLM_MODEL_IMPL")
-    value = str(override if override is not None else config["model"].get("vllm_model_impl", "auto")).strip().lower()
-    if override is not None:
-        return value
-    if value == "auto" and str(config["model"].get("family", "causal_lm")) == "nemotron_diffusion":
-        return "transformers"
-    return value
-
-
-def _vllm_enforce_eager(config: dict[str, Any]) -> bool:
-    """Return whether the vLLM server must avoid torch.compile."""
-
-    override = os.environ.get("VLLM_ENFORCE_EAGER")
-    if override is not None:
-        return override.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(config["model"].get("vllm_enforce_eager", False))
 
 
 def _evaluate_vllm(
@@ -691,16 +569,12 @@ def _evaluate_vllm(
     server: VLLMServer | None = None
     try:
         if start_vllm_service:
-            served_model_name = vllm_model or str(config["model"].get("model_id", "")).strip() or None
             server = VLLMServer.start(
                 checkpoint_path,
                 base_url=vllm_base_url,
                 max_model_len=context_length,
                 dtype=_vllm_dtype(config),
                 trust_remote_code=bool(config["model"].get("trust_remote_code", True)),
-                model_impl=_vllm_model_impl(config),
-                served_model_name=served_model_name,
-                enforce_eager=_vllm_enforce_eager(config),
                 startup_timeout=vllm_startup_timeout,
                 log_path=output_path.with_name(f"{output_path.stem}.vllm.log"),
             )
@@ -742,8 +616,6 @@ def _evaluate_vllm(
             extra={
                 "vllm_base_url": client.base_url,
                 "vllm_model": served_model,
-                "vllm_model_impl": _vllm_model_impl(config),
-                "vllm_enforce_eager": _vllm_enforce_eager(config),
                 "vllm_request_batch_size": batch_size,
                 "vllm_unsupported_generation_controls": ["no_repeat_ngram_size"]
                 if int(generation.get("no_repeat_ngram_size", 0)) > 0
@@ -790,6 +662,12 @@ def evaluate(
         f"output={output_path} | started={started_at}",
         flush=True,
     )
+    if (
+        selected_backend == "local"
+        and str(config["model"].get("family", "causal_lm")) == "nemotron_diffusion"
+        and str(backend).strip().lower() == "vllm"
+    ):
+        print("[eval] Nemotron uses native local AR generation; ignoring the stale vLLM backend flag", flush=True)
     if selected_backend == "local":
         return _evaluate_local(
             config,
@@ -837,7 +715,7 @@ def main() -> None:
         dest="backend",
         choices=("auto", "vllm", "local"),
         default=os.environ.get("DECODER_EVAL_BACKEND", "auto"),
-        help="auto uses the vLLM OpenAI service for every decoder; use local to force in-process Transformers",
+        help="auto uses vLLM for standard decoder-only LMs and local native AR generation for Nemotron; use local to force in-process Transformers",
     )
     parser.add_argument("--vllm-base-url", default=os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000/v1"))
     parser.add_argument("--vllm-model", default=os.environ.get("VLLM_MODEL"))

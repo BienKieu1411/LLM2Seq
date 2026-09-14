@@ -72,8 +72,6 @@ def validate_config(config: dict[str, Any]) -> None:
             "gradient_checkpointing",
             "use_cache",
             "diffusion_paradigm",
-            "vllm_model_impl",
-            "vllm_enforce_eager",
         },
         "model",
     )
@@ -89,11 +87,6 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError(
             "Nemotron diffusion baselines use the autoregressive objective for a matched decoder-only control"
         )
-    vllm_model_impl = str(model.get("vllm_model_impl", "auto")).strip().lower()
-    if vllm_model_impl not in {"auto", "vllm", "transformers"}:
-        raise ValueError("model.vllm_model_impl must be auto, vllm, or transformers")
-    if "vllm_enforce_eager" in model and not isinstance(model["vllm_enforce_eager"], bool):
-        raise ValueError("model.vllm_enforce_eager must be a boolean")
     for key in ("torch_dtype", "eval_torch_dtype"):
         if str(model.get(key, "bfloat16")).lower() not in {"float32", "float16", "bfloat16", "fp32", "fp16", "bf16"}:
             raise ValueError(f"Unsupported model.{key}: {model[key]}")
@@ -188,8 +181,6 @@ def validate_config(config: dict[str, Any]) -> None:
             "top_p",
             "repetition_penalty",
             "no_repeat_ngram_size",
-            "nemotron_max_padding_ratio",
-            "nemotron_max_padded_tokens",
         },
         "generation",
     )
@@ -213,11 +204,6 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("generation.repetition_penalty must be positive")
     if int(generation.get("no_repeat_ngram_size", 0)) < 0:
         raise ValueError("generation.no_repeat_ngram_size must be non-negative")
-    if "nemotron_max_padding_ratio" in generation and float(generation["nemotron_max_padding_ratio"]) <= 0:
-        raise ValueError("generation.nemotron_max_padding_ratio must be positive")
-    if "nemotron_max_padded_tokens" in generation and int(generation["nemotron_max_padded_tokens"]) < 0:
-        raise ValueError("generation.nemotron_max_padded_tokens must be non-negative")
-
     limits = config.get("limits", {})
     if not isinstance(limits, dict):
         raise ValueError("limits must be a mapping")

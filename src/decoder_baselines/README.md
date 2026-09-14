@@ -8,20 +8,20 @@ is applied.  Every target token, including EOS, is supervised while all prompt
 tokens are `-100` in the causal loss.
 
 Nemotron-Labs-Diffusion is loaded through `AutoModel` and explicitly switched
-to its autoregressive paradigm for fine-tuning. Evaluation uses the
-OpenAI-compatible vLLM service with the Transformers backend; `--backend local`
-remains available for a direct custom-AR check. This keeps its diffusion
-denoising objective out of the decoder-only comparison.
+to its autoregressive paradigm for fine-tuning. Evaluation uses the model's
+native in-process autoregressive cache loop; this keeps its diffusion denoising
+objective and the incompatible vLLM compile path out of the decoder-only
+comparison.
 
 ## Sequential matrix with optional DDP training
 
 The runner starts a new process for every model/dataset pair. Pairs remain
 sequential, which releases model and optimizer memory before the next run. A
 single visible GPU runs normal Trainer training; a comma-separated `GPU_ID`
-launches one DDP worker per GPU. Evaluation uses the vLLM OpenAI-compatible
-service for every model, with progress logs and incremental JSONL writes.
-Nemotron-Labs-Diffusion selects vLLM's `transformers` backend because it
-exposes the custom `NemotronLabsDiffusionModel` through `AutoModel`.
+launches one DDP worker per GPU. Standard decoder-only evaluation uses the
+vLLM OpenAI-compatible service. Nemotron-Labs-Diffusion is evaluated locally
+through its native autoregressive API, with progress logs and incremental JSONL
+writes for both paths.
 
 ```bash
 cd src/decoder_baselines
@@ -61,12 +61,12 @@ budget can coexist with the `512`-token target and the instruction overhead.
 
 Training and evaluation batch sizes are configured independently per model:
 larger models use smaller evaluation batches and Qwen3-0.6B uses a larger
-batch. With the default vLLM backend, `generation.batch_size` is the number of
-tokenized prompts sent in one HTTP request; `VLLM_BATCH_SIZE` or
-`--vllm-batch-size` overrides it without editing the YAML. vLLM may internally
-schedule those requests in smaller GPU-safe groups. The local Nemotron
-fallback still uses near-length, token-budgeted batches for its custom AR cache
-loop.
+batch. Standard decoder-only models use vLLM by default; Nemotron uses its
+native in-process AR cache loop. For vLLM runs, `generation.batch_size` is the
+number of tokenized prompts sent in one HTTP request; `VLLM_BATCH_SIZE` or
+`--vllm-batch-size` overrides it without editing the YAML. Nemotron's local
+generation processes exactly that many prompts per batch and preserves dataset
+order.
 Each run is written to `runs/decoder_baselines/<model>__<dataset>/` with its
 resolved config, `final_model/`, `trainer_state.json`, predictions and metrics.
 Training enables length-grouped sampling by default, so examples with similar
@@ -82,19 +82,14 @@ the resolved run manifest records both the world size and this global batch.
 The final evaluation uses `temperature: 0`, `top_k: 0`, `top_p: 1`; candidates
 can be generated later by editing a copied run config and enabling sampling.
 Evaluation runs automatically after training on the `test` split. By default,
-the suite starts a local `vllm serve` process for each checkpoint,
-waits for `/v1/models`, sends batched completion requests, and stops the service
-after that evaluation. Set `VLLM_BASE_URL` to use an already-running service;
+the suite starts a local `vllm serve` process for standard decoder checkpoints;
+that service waits for `/v1/models`, sends batched completion requests, and
+stops after evaluation. Nemotron is evaluated in-process. Set `VLLM_BASE_URL`
+to use an already-running service for the standard decoder models;
 the service model must match the checkpoint being evaluated. Use
 `VLLM_BATCH_SIZE=32` (or another value appropriate for GPU memory) to increase
 the HTTP request batch size independently from the training batch size. The
-Nemotron server is launched with `--model-impl transformers`,
-`--enforce-eager` and the canonical model ID as `--served-model-name`.
-`--enforce-eager` is required for this custom model because its `forward()`
-does not expose the `inputs_embeds` argument expected by vLLM's compile wrapper.
-If the installed vLLM release does not accept the backend flag, set
-`VLLM_MODEL_IMPL=auto`; vLLM will select its Transformers backend from the
-checkpoint's `auto_map`.
+Nemotron does not require a vLLM service for reference evaluation.
 
 Every evaluation prints `[eval] batch ... ETA=...` and a final
 `[eval] COMPLETE ...` line. It also writes `*.metrics.json` with
@@ -123,8 +118,8 @@ EviSeq data files, prompt, context limits and per-model generation batch size;
 it does not write a temporary config. For an existing service, replace
 `--start-vllm-service` with `--no-start-vllm-service` and set
 `VLLM_BASE_URL=http://host:8000/v1`. Use `--backend local` only when you need
-the in-process Transformers evaluator or when the installed vLLM cannot load
-the custom Nemotron checkpoint.
+the in-process Transformers evaluator; Nemotron is selected automatically for
+the local native AR path.
 
 The seven model IDs in the bundled matrix are `Qwen/Qwen3-0.6B`, `Qwen/Qwen3-8B`,
 `Qwen/Qwen3-4B`, `meta-llama/Llama-3.1-8B`, `meta-llama/Llama-3.2-3B-Instruct`,
