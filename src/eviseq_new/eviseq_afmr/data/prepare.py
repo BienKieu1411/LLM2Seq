@@ -18,6 +18,8 @@ def prepare_split(
     source_field: str = "text",
     target_field: str = "summary",
     id_field: str = "id",
+    system_prompt_field: str = "system_prompt",
+    default_system_prompt: str = "",
     max_examples: int = 0,
 ) -> int:
     destination = Path(output_path)
@@ -29,7 +31,14 @@ def prepare_split(
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             for count, record in enumerate(
-                iter_jsonl(str(input_path), source_field=source_field, target_field=target_field, id_field=id_field),
+                iter_jsonl(
+                    str(input_path),
+                    source_field=source_field,
+                    target_field=target_field,
+                    id_field=id_field,
+                    system_prompt_field=system_prompt_field,
+                    default_system_prompt=default_system_prompt,
+                ),
                 start=1,
             ):
                 row = replace(record, example_id=record.example_id or str(count)).as_dict()
@@ -54,6 +63,8 @@ def main() -> None:
     parser.add_argument("--source-field", default="text")
     parser.add_argument("--target-field", default="summary")
     parser.add_argument("--id-field", default="id")
+    parser.add_argument("--system-prompt-field", default="system_prompt")
+    parser.add_argument("--default-system-prompt", "--system-prompt", dest="default_system_prompt", default="")
     parser.add_argument("--max-examples", type=int, default=0)
     args = parser.parse_args()
     count = prepare_split(**vars(args))

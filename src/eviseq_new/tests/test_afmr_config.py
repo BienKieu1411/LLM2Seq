@@ -10,6 +10,14 @@ def test_smoke_config_is_valid():
     assert config["generation"]["num_beams"] == 1
 
 
+def test_8096_avg_config_exposes_system_prompt_and_context_budget():
+    config = load_config(Path(__file__).parents[1] / "configs" / "8096_avg.yaml")
+    assert config["data"]["system_prompt_field"] == "system_prompt"
+    assert "Bạn là trợ lý chuyên tóm tắt" in config["data"]["system_prompt"]
+    assert config["data"]["max_source_length"] == 8096
+    assert config["data"]["decoder_chat_template"] is True
+
+
 def test_pubmed_recipe_matches_t5gemma_prompt_and_decode_contract():
     config = load_config(Path(__file__).parents[1] / "configs" / "afmr_pubmed.yaml")
     assert config["data"]["encoder_prefix"] == (

@@ -4,7 +4,9 @@ Production datasets stay outside the repository and are referenced by an AFMR
 task YAML. The files in this directory are small development fixtures only.
 
 The preparation command writes canonical `train.jsonl`, `validation.jsonl`, and
-`test.jsonl` files containing `id`, `text`, and `summary`:
+`test.jsonl` files containing `id`, `text`, and `summary`. If the input rows
+contain `system_prompt`, that field is preserved; `--default-system-prompt`
+can populate it for rows where it is absent:
 
 ```bash
 PYTHON=/absolute/path/to/bienkieu_env/bin/python \
@@ -25,5 +27,7 @@ Prepare a canonical split with the public AFMR command:
 
 ```bash
 PYTHONPATH=src/eviseq_new python -m eviseq_afmr.cli prepare \
-  /absolute/path/to/input.jsonl datasets/task/train.jsonl
+  /absolute/path/to/input.jsonl datasets/task/train.jsonl \
+  --system-prompt-field system_prompt \
+  --default-system-prompt "You are a faithful summarizer."
 ```

@@ -109,6 +109,7 @@ def build_loaders(
     config: dict[str, Any],
     split: str | None = None,
     batch_size_override: int | None = None,
+    system_prompt_override: str | None = None,
     max_train_examples: int = 0,
     max_validation_examples: int = 0,
 ):
@@ -126,6 +127,7 @@ def build_loaders(
             decoder_tokenizer,
             split_data,
             grounded_copy=bool(config["decoder"].get("grounded_copy", {}).get("enabled", False)),
+            system_prompt_override=system_prompt_override,
         )
         batch_size = (
             int(config["training"].get("validation_batch_size", 4))
@@ -245,13 +247,19 @@ def evaluate(
     temperature: float | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
+    system_prompt: str | None = None,
 ) -> dict[str, Any]:
     config = load_config(config_path)
     _configure_precision(config)
     selected_batch_size = int(batch_size if batch_size is not None else config["generation"]["batch_size"])
     if selected_batch_size <= 0:
         raise ValueError("Evaluation batch size must be positive")
-    loaders = build_loaders(config, split=split, batch_size_override=selected_batch_size)
+    loaders = build_loaders(
+        config,
+        split=split,
+        batch_size_override=selected_batch_size,
+        system_prompt_override=system_prompt,
+    )
     from .evaluation.generate import append_jsonl, generate_greedy, generate_sampled
 
     loader = loaders[split]

@@ -50,12 +50,16 @@ class JsonlSummarizationDataset(Dataset[CanonicalRecord]):
         self._handle.seek(self.offsets[index])
         row = json.loads(self._handle.readline())
         config = self.data_config
+        system_prompt_field = config.get("system_prompt_field", "system_prompt")
+        default_system_prompt = config.get("system_prompt", "")
         record = CanonicalRecord.from_mapping(
             row,
             source_field=str(config.get("source_field", "text")),
             target_field=str(config.get("target_field", "summary")),
             id_field=str(config.get("id_field", "id")),
             separator=str(config.get("list_separator", "\n")),
+            system_prompt_field="" if system_prompt_field is None else str(system_prompt_field),
+            default_system_prompt="" if default_system_prompt is None else str(default_system_prompt),
         )
         if config.get("detokenize", False):
             record = replace(record, source=detokenize(record.source), target=detokenize(record.target))

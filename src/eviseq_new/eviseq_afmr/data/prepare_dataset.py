@@ -240,6 +240,18 @@ def _join_text(value: Any, separator: str, *, role: str) -> str:
     return str(value).strip()
 
 
+def _join_prompt(value: Any, separator: str) -> str:
+    """Normalize a system prompt without interpreting it as document structure."""
+
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple)):
+        return separator.join(part for part in (_join_prompt(item, separator) for item in value) if part).strip()
+    return str(value).strip()
+
+
 def _example_id(row: dict[str, Any], source: Path, dataset: str, split: str, index: int) -> str:
     if dataset == "booksum":
         book_id = _get_field(row, "book_id")
@@ -275,6 +287,8 @@ def _convert(
     source_field: str | None = None,
     target_field: str | None = None,
     id_field: str | None = None,
+    system_prompt_field: str | None = "system_prompt",
+    default_system_prompt: str = "",
     list_separator: str = "\n",
     detokenize_text: bool | None = None,
     allow_duplicate_ids: bool = False,
@@ -319,19 +333,21 @@ def _convert(
                             suffix += 1
                             example_id = f"{base_identifier}::{global_index:06d}_{suffix}"
                     ids.add(example_id)
-                    output.write(
-                        json.dumps(
-                            {
-                                "id": example_id,
-                                "text": text,
-                                "summary": summary,
-                                "task": "summarization",
-                                "dataset": dataset,
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
+                    system_prompt = _join_prompt(default_system_prompt, list_separator)
+                    if system_prompt_field:
+                        row_system_prompt = _join_prompt(_get_field(row, system_prompt_field), list_separator)
+                        if row_system_prompt:
+                            system_prompt = row_system_prompt
+                    prepared = {
+                        "id": example_id,
+                        "text": text,
+                        "summary": summary,
+                        "task": "summarization",
+                        "dataset": dataset,
+                    }
+                    if system_prompt:
+                        prepared["system_prompt"] = system_prompt
+                    output.write(json.dumps(prepared, ensure_ascii=False) + "\n")
                     kept += 1
                     global_index += 1
         if not kept:
@@ -371,6 +387,8 @@ def prepare_dataset(
     source_field: str | None = None,
     target_field: str | None = None,
     id_field: str | None = None,
+    system_prompt_field: str | None = "system_prompt",
+    default_system_prompt: str = "",
     list_separator: str = "\n",
     detokenize_text: bool | None = None,
     allow_duplicate_ids: bool = False,
@@ -402,6 +420,8 @@ def prepare_dataset(
                 source_field=source_field,
                 target_field=target_field,
                 id_field=id_field,
+                system_prompt_field=system_prompt_field,
+                default_system_prompt=default_system_prompt,
                 list_separator=list_separator,
                 detokenize_text=detokenize_text,
                 allow_duplicate_ids=allow_duplicate_ids,
@@ -448,6 +468,18 @@ def main() -> None:
     parser.add_argument("--source-field", default=None, help="Optional source field or dotted path")
     parser.add_argument("--target-field", default=None, help="Optional target field or dotted path")
     parser.add_argument("--id-field", default=None, help="Optional ID field or dotted path")
+    parser.add_argument(
+        "--system-prompt-field",
+        default="system_prompt",
+        help="Optional per-row system prompt field or dotted path (default: system_prompt)",
+    )
+    parser.add_argument(
+        "--default-system-prompt",
+        "--system-prompt",
+        dest="default_system_prompt",
+        default="",
+        help="System prompt to write when a row does not provide one",
+    )
     parser.add_argument("--list-separator", default="\n")
     parser.add_argument(
         "--detokenize",
@@ -467,6 +499,8 @@ def main() -> None:
         source_field=args.source_field,
         target_field=args.target_field,
         id_field=args.id_field,
+        system_prompt_field=args.system_prompt_field,
+        default_system_prompt=args.default_system_prompt,
         list_separator=args.list_separator,
         detokenize_text=args.detokenize,
         allow_duplicate_ids=args.allow_duplicate_ids,

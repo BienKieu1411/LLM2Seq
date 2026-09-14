@@ -20,6 +20,7 @@ class CanonicalRecord:
     example_id: str
     source: str
     target: str
+    system_prompt: str = ""
 
     @classmethod
     def from_mapping(
@@ -30,6 +31,8 @@ class CanonicalRecord:
         target_field: str = "summary",
         id_field: str = "id",
         separator: str = "\n",
+        system_prompt_field: str = "system_prompt",
+        default_system_prompt: str = "",
     ) -> "CanonicalRecord":
         def field(name: str) -> Any:
             value: Any = row
@@ -59,10 +62,23 @@ class CanonicalRecord:
             raise ValueError("source and target must be non-empty")
         raw_id = row.get(id_field, row.get("article_id", ""))
         example_id = str(raw_id) if raw_id not in (None, "") else ""
-        return cls(example_id, source, target)
+        system_prompt = _as_text(default_system_prompt or "", separator).strip()
+        if system_prompt_field:
+            try:
+                raw_system_prompt = field(system_prompt_field)
+            except KeyError:
+                raw_system_prompt = None
+            if raw_system_prompt not in (None, ""):
+                candidate = _as_text(raw_system_prompt, separator).strip()
+                if candidate:
+                    system_prompt = candidate
+        return cls(example_id, source, target, system_prompt)
 
     def as_dict(self) -> dict[str, Any]:
-        return {"id": self.example_id, "text": self.source, "summary": self.target}
+        result = {"id": self.example_id, "text": self.source, "summary": self.target}
+        if self.system_prompt:
+            result["system_prompt"] = self.system_prompt
+        return result
 
 
 def iter_jsonl(path: str, **kwargs: Any) -> Iterable[CanonicalRecord]:

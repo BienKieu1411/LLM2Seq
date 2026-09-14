@@ -42,11 +42,21 @@ def main(argv: list[str] | None = None) -> None:
     evaluate.add_argument("--temperature", type=float, default=None)
     evaluate.add_argument("--top-k", type=int, default=None)
     evaluate.add_argument("--top-p", type=float, default=None)
+    evaluate.add_argument(
+        "--system-prompt",
+        default=None,
+        help="Override the configured/row system prompt for every evaluated example",
+    )
     validate = subparsers.add_parser("validate-config")
     validate.add_argument("config")
     prepare = subparsers.add_parser("prepare")
     prepare.add_argument("input_path")
     prepare.add_argument("output_path")
+    prepare.add_argument("--source-field", default="text")
+    prepare.add_argument("--target-field", default="summary")
+    prepare.add_argument("--id-field", default="id")
+    prepare.add_argument("--system-prompt-field", default="system_prompt")
+    prepare.add_argument("--default-system-prompt", "--system-prompt", dest="default_system_prompt", default="")
     prepare_dataset = subparsers.add_parser("prepare-dataset")
     prepare_dataset.add_argument("--dataset", required=True, choices=SUPPORTED_DATASETS)
     prepare_dataset.add_argument("--input-dir", required=True)
@@ -55,6 +65,8 @@ def main(argv: list[str] | None = None) -> None:
     prepare_dataset.add_argument("--source-field", default=None)
     prepare_dataset.add_argument("--target-field", default=None)
     prepare_dataset.add_argument("--id-field", default=None)
+    prepare_dataset.add_argument("--system-prompt-field", default="system_prompt")
+    prepare_dataset.add_argument("--default-system-prompt", "--system-prompt", dest="default_system_prompt", default="")
     prepare_dataset.add_argument("--list-separator", default="\n")
     prepare_dataset.add_argument("--detokenize", action=argparse.BooleanOptionalAction, default=None)
     prepare_dataset.add_argument("--allow-duplicate-ids", action="store_true")
@@ -95,6 +107,7 @@ def main(argv: list[str] | None = None) -> None:
             temperature=args.temperature,
             top_k=args.top_k,
             top_p=args.top_p,
+            system_prompt=args.system_prompt,
         )
         print(__import__("json").dumps(result, ensure_ascii=False, indent=2))
         return
@@ -110,6 +123,8 @@ def main(argv: list[str] | None = None) -> None:
             source_field=args.source_field,
             target_field=args.target_field,
             id_field=args.id_field,
+            system_prompt_field=args.system_prompt_field,
+            default_system_prompt=args.default_system_prompt,
             list_separator=args.list_separator,
             detokenize_text=args.detokenize,
             allow_duplicate_ids=args.allow_duplicate_ids,
@@ -120,6 +135,11 @@ def main(argv: list[str] | None = None) -> None:
     count = prepare_split(
         args.input_path,
         args.output_path,
+        source_field=args.source_field,
+        target_field=args.target_field,
+        id_field=args.id_field,
+        system_prompt_field=args.system_prompt_field,
+        default_system_prompt=args.default_system_prompt,
     )
     print(f"prepared {count} records -> {args.output_path}")
 

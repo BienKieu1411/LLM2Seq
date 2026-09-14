@@ -23,6 +23,32 @@ def test_pubmed_style_three_split_prepare_writes_report_and_canonical_rows(tmp_p
     assert (output / "preparation_report.json").is_file()
 
 
+def test_prepare_dataset_preserves_row_prompt_and_can_fill_default_prompt(tmp_path):
+    source = tmp_path / "custom"
+    output = tmp_path / "processed"
+    source.mkdir()
+    _write(
+        source / "train.jsonl",
+        [{"id": "tr", "input": "source", "content": "summary", "system_prompt": "row prompt"}],
+    )
+    _write(source / "val.jsonl", [{"id": "va", "input": "source va", "content": "summary va"}])
+    _write(source / "test.jsonl", [{"id": "te", "input": "source te", "content": "summary te"}])
+
+    prepare_dataset(
+        source,
+        output,
+        dataset="custom",
+        source_field="input",
+        target_field="content",
+        default_system_prompt="default prompt",
+    )
+
+    train_row = json.loads((output / "train.jsonl").read_text(encoding="utf-8"))
+    validation_row = json.loads((output / "validation.jsonl").read_text(encoding="utf-8"))
+    assert train_row["system_prompt"] == "row prompt"
+    assert validation_row["system_prompt"] == "default prompt"
+
+
 def test_prepare_rejects_cross_split_source_content(tmp_path):
     source = tmp_path / "data"
     source.mkdir()

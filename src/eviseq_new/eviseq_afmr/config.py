@@ -264,6 +264,8 @@ def validate_config(config: dict[str, Any]) -> None:
             "id_field",
             "list_separator",
             "encoder_prefix",
+            "system_prompt",
+            "system_prompt_field",
             "decoder_prompt",
             "decoder_chat_template",
             "decoder_prefix",
@@ -276,6 +278,10 @@ def validate_config(config: dict[str, Any]) -> None:
     for name in ("train_file", "validation_file", "test_file", "source_field", "target_field"):
         if not str(data.get(name, "")).strip():
             raise ValueError(f"data.{name} is required")
+    for name in ("system_prompt", "system_prompt_field"):
+        value = data.get(name, "")
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"data.{name} must be a string when provided")
     generation = config["generation"]
     _check_keys(
         generation,

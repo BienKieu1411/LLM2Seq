@@ -48,6 +48,26 @@ def test_preparation_preserves_text_and_discards_external_labels(tmp_path):
     assert row == {"id": "x", "text": "first sentence.\nsecond sentence.", "summary": "first sentence."}
 
 
+def test_preparation_preserves_optional_system_prompt(tmp_path):
+    source = tmp_path / "raw.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "id": "x",
+                "text": "source",
+                "summary": "summary",
+                "system_prompt": "Follow the source faithfully.",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    destination = tmp_path / "test.jsonl"
+    prepare_split(source, destination)
+    row = json.loads(destination.read_text(encoding="utf-8"))
+    assert row["system_prompt"] == "Follow the source faithfully."
+
+
 def test_cli_prepare_requires_no_evidence_options(tmp_path):
     from eviseq_afmr.cli import main
 
@@ -101,6 +121,55 @@ def test_chat_prompt_uses_native_template_and_excludes_reference():
     assert first["decoder_prompt_ids"].tolist() == [expected]
     torch.testing.assert_close(first["decoder_prompt_ids"], second["decoder_prompt_ids"])
     assert first["labels"][0, : len(expected)].eq(-100).all()
+
+
+def test_chat_prompt_uses_system_then_user_roles():
+    class ChatTokenizer(_TinyTokenizer):
+        def apply_chat_template(self, messages, **kwargs):
+            assert messages == [
+                {"role": "system", "content": "You are a faithful summarizer."},
+                {"role": "user", "content": "Summarize the encoded source."},
+            ]
+            assert kwargs == {
+                "tokenize": True,
+                "return_dict": False,
+                "add_generation_prompt": True,
+                "enable_thinking": False,
+            }
+            return [7, 8]
+
+    collator = SummarizationCollator(
+        _TinyTokenizer(),
+        ChatTokenizer(),
+        {
+            "system_prompt": "You are a faithful summarizer.",
+            "decoder_prompt": "Summarize the encoded source.",
+            "decoder_chat_template": True,
+        },
+    )
+    batch = collator([CanonicalRecord("x", "source", "reference")])
+    assert batch["decoder_prompt_ids"].tolist() == [[7, 8]]
+    assert batch["labels"][0, :2].eq(-100).all()
+
+
+def test_row_system_prompt_overrides_yaml_default_and_eval_override_wins():
+    record = CanonicalRecord("x", "source", "reference", "row instruction")
+    common = {
+        "system_prompt": "yaml instruction",
+        "decoder_prompt": "summarize",
+        "decoder_chat_template": False,
+    }
+    row_collator = SummarizationCollator(_TinyTokenizer(), _TinyTokenizer(), common)
+    default_batch = row_collator([record])
+    fallback_batch = row_collator([CanonicalRecord("y", "source", "reference")])
+    assert not torch.equal(default_batch["decoder_prompt_ids"], fallback_batch["decoder_prompt_ids"])
+
+    override_collator = SummarizationCollator(
+        _TinyTokenizer(), _TinyTokenizer(), common, system_prompt_override="eval instruction"
+    )
+    override_batch = override_collator([record])
+    override_without_row = override_collator([CanonicalRecord("y", "source", "reference")])
+    torch.testing.assert_close(override_batch["decoder_prompt_ids"], override_without_row["decoder_prompt_ids"])
 
 
 @pytest.mark.parametrize("kind", ["mapping", "batch_encoding", "tensor", "batched_tensor"])
