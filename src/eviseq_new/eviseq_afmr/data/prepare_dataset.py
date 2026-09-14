@@ -10,7 +10,6 @@ from typing import Any, Iterable, Iterator
 from .normalization import detokenize
 
 SUPPORTED_DATASETS = ("pubmed", "arxiv", "cnndm", "wikilingua", "booksum", "govreport", "custom")
-_SPLITS = {"train": "train", "validation": "validation", "test": "test"}
 _LABEL_FILES = {"train": "train.label.jsonl", "validation": "val.label.jsonl", "test": "test.label.jsonl"}
 _GENERIC_FILES = {
     "train": ("train.jsonl", "train.json", "train.txt"),
@@ -278,6 +277,7 @@ def _convert(
     id_field: str | None = None,
     list_separator: str = "\n",
     detokenize_text: bool | None = None,
+    allow_duplicate_ids: bool = False,
 ) -> dict[str, Any]:
     source_paths = (sources,) if isinstance(sources, Path) else tuple(sources)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -310,7 +310,14 @@ def _convert(
                     else:
                         example_id = _example_id(row, source, dataset, split, global_index)
                     if example_id in ids:
-                        raise ValueError(f"Duplicate id {example_id!r} in {source}")
+                        if not allow_duplicate_ids:
+                            raise ValueError(f"Duplicate id {example_id!r} in {source}")
+                        base_identifier = example_id
+                        suffix = 1
+                        example_id = f"{base_identifier}::{global_index:06d}"
+                        while example_id in ids:
+                            suffix += 1
+                            example_id = f"{base_identifier}::{global_index:06d}_{suffix}"
                     ids.add(example_id)
                     output.write(
                         json.dumps(
@@ -366,6 +373,7 @@ def prepare_dataset(
     id_field: str | None = None,
     list_separator: str = "\n",
     detokenize_text: bool | None = None,
+    allow_duplicate_ids: bool = False,
 ) -> dict[str, Any]:
     if dataset not in SUPPORTED_DATASETS:
         raise ValueError(f"Unsupported dataset {dataset!r}; choose from {', '.join(SUPPORTED_DATASETS)}")
@@ -396,6 +404,7 @@ def prepare_dataset(
                 id_field=id_field,
                 list_separator=list_separator,
                 detokenize_text=detokenize_text,
+                allow_duplicate_ids=allow_duplicate_ids,
             )
             duplicate_ids = sorted(stats["ids"] & seen_ids)
             duplicate_sources = _register_sources(destination, split, connection)
@@ -446,6 +455,7 @@ def main() -> None:
         default=None,
         help="Normalize punctuation spacing (dataset defaults: PubMed/ArXiv/CNNDM enabled)",
     )
+    parser.add_argument("--allow-duplicate-ids", action="store_true")
     parser.add_argument("--allow-cross-split-content", action="store_true")
     args = parser.parse_args()
     report = prepare_dataset(
@@ -459,6 +469,7 @@ def main() -> None:
         id_field=args.id_field,
         list_separator=args.list_separator,
         detokenize_text=args.detokenize,
+        allow_duplicate_ids=args.allow_duplicate_ids,
     )
     for split, stats in report["splits"].items():
         print(f"{split}: {stats['kept']} examples (skipped {stats['skipped']}) -> {stats['processed_path']}")

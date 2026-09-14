@@ -80,3 +80,22 @@ def test_govreport_merges_gao_and_crs_structured_splits(tmp_path):
     assert {row["id"] for row in rows} == {"GAO_valid-gao", "CRS_valid-crs"}
     assert rows[0]["text"] == "Findings\nFinding for valid-gao.\nA second finding."
     assert rows[0]["summary"] == "Summary\nThe report summary."
+
+
+def test_duplicate_ids_can_be_disambiguated_explicitly(tmp_path):
+    source = tmp_path / "booksum"
+    source.mkdir()
+    for split in ("train", "val", "test"):
+        _write(
+            source / f"{split}.jsonl",
+            [
+                {"id": f"{split}-same", "source": f"source-{split}-1", "target": "summary"},
+                {"id": f"{split}-same", "source": f"source-{split}-2", "target": "summary"},
+            ],
+        )
+
+    report = prepare_dataset(source, tmp_path / "processed", dataset="booksum", allow_duplicate_ids=True)
+
+    assert report["splits"]["train"]["kept"] == 2
+    train_ids = [json.loads(line)["id"] for line in (tmp_path / "processed" / "train.jsonl").read_text().splitlines()]
+    assert train_ids == ["train-same", "train-same::000001"]

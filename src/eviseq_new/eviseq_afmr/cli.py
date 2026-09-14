@@ -57,6 +57,7 @@ def main(argv: list[str] | None = None) -> None:
     prepare_dataset.add_argument("--id-field", default=None)
     prepare_dataset.add_argument("--list-separator", default="\n")
     prepare_dataset.add_argument("--detokenize", action=argparse.BooleanOptionalAction, default=None)
+    prepare_dataset.add_argument("--allow-duplicate-ids", action="store_true")
     prepare_dataset.add_argument("--allow-cross-split-content", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "smoke":
@@ -111,6 +112,7 @@ def main(argv: list[str] | None = None) -> None:
             id_field=args.id_field,
             list_separator=args.list_separator,
             detokenize_text=args.detokenize,
+            allow_duplicate_ids=args.allow_duplicate_ids,
         )
         for split, stats in report["splits"].items():
             print(f"{split}: {stats['kept']} examples (skipped {stats['skipped']}) -> {stats['processed_path']}")

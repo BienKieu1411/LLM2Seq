@@ -550,13 +550,18 @@ def evaluate(
     checkpoint_path = Path(checkpoint).expanduser().resolve()
     if not checkpoint_path.is_dir():
         raise FileNotFoundError(f"Missing checkpoint directory: {checkpoint_path}")
-    selected_backend = _resolve_backend(config, backend)
     output_path = Path(output).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Make the resolved destination visible before model loading.  ``touch``
+    # does not truncate an existing result, while the backend opens it in
+    # write mode once generation starts.
+    output_path.touch(exist_ok=True)
+    selected_backend = _resolve_backend(config, backend)
     started = time.perf_counter()
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     print(
-        f"[eval] initializing | backend={selected_backend} | checkpoint={checkpoint_path} | started={started_at}",
+        f"[eval] initializing | backend={selected_backend} | checkpoint={checkpoint_path} | "
+        f"output={output_path} | started={started_at}",
         flush=True,
     )
     if selected_backend == "local":

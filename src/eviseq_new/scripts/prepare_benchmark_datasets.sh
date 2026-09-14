@@ -15,6 +15,7 @@ BOOKSUM_INPUT_DIR="${BOOKSUM_INPUT_DIR:-}"
 GOVREPORT_INPUT_DIR="${GOVREPORT_INPUT_DIR:-}"
 ALLOW_CROSS_SPLIT_CONTENT="${ALLOW_CROSS_SPLIT_CONTENT:-0}"
 DETOKENIZE_ARGS=()
+ALLOW_DUPLICATE_IDS=0
 
 usage() {
     cat <<'EOF'
@@ -31,6 +32,7 @@ Options:
   --datasets LIST        Comma-separated subset (default: arxiv,booksum,govreport)
   --detokenize           Enable punctuation normalization for every selected dataset
   --no-detokenize        Disable punctuation normalization for every selected dataset
+  --allow-duplicate-ids  Add a deterministic row suffix instead of failing within a split
   --allow-cross-split-content
   -h, --help
 
@@ -92,6 +94,10 @@ while [[ $# -gt 0 ]]; do
             DETOKENIZE_ARGS=(--no-detokenize)
             shift
             ;;
+        --allow-duplicate-ids)
+            ALLOW_DUPLICATE_IDS=1
+            shift
+            ;;
         --allow-cross-split-content)
             ALLOW_CROSS_SPLIT_CONTENT=1
             shift
@@ -147,6 +153,9 @@ for dataset in "${selected_datasets[@]}"; do
     fi
     if [[ "$ALLOW_CROSS_SPLIT_CONTENT" == "1" || "$ALLOW_CROSS_SPLIT_CONTENT" == "true" || "$ALLOW_CROSS_SPLIT_CONTENT" == "yes" ]]; then
         command+=(--allow-cross-split-content)
+    fi
+    if [[ "$ALLOW_DUPLICATE_IDS" -eq 1 ]]; then
+        command+=(--allow-duplicate-ids)
     fi
     echo "[$dataset] $input_dir -> $OUTPUT_ROOT/$dataset"
     PYTHON="$PYTHON_BIN" "${command[@]}"
