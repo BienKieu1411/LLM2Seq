@@ -33,7 +33,7 @@ LLAMA3_8B_PATH=/models/Llama-3.1-8B \
 LLAMA3_3B_PATH=/models/Llama-3.2-3B-Instruct \
 NEMOTRON_DIFFUSION_8B_PATH=/models/Nemotron-Labs-Diffusion-8B-Base \
 NEMOTRON_DIFFUSION_3B_PATH=/models/Nemotron-Labs-Diffusion-3B \
-bash scripts/run_suite.sh --models qwen3_0_6b,qwen3_8b,qwen3_4b,llama3_8b,llama3_3b,nemotron_diffusion_8b,nemotron_diffusion_3b --datasets pubmed,arxiv
+bash scripts/run_suite.sh --models qwen3_0_6b,qwen3_8b,qwen3_4b,llama3_8b,llama3_3b,nemotron_diffusion_8b,nemotron_diffusion_3b --datasets pubmed,arxiv,booksum,govreport
 ```
 
 For one GPU, use `GPU_ID=0`. For two GPUs, use `GPU_ID=0,1`; the script
@@ -59,14 +59,16 @@ stable file-local ID such as `row-00000001` for the prediction JSONL.
 The arXiv recipe uses a `9216`-token total context so its `8096`-token source
 budget can coexist with the `512`-token target and the instruction overhead.
 
-Training and evaluation batch sizes are configured independently per model:
-larger models use smaller evaluation batches and Qwen3-0.6B uses a larger
-batch. Standard decoder-only models use vLLM by default; Nemotron uses its
-native in-process AR cache loop. For vLLM runs, `generation.batch_size` is the
-number of tokenized prompts sent in one HTTP request; `VLLM_BATCH_SIZE` or
-`--vllm-batch-size` overrides it without editing the YAML. Nemotron's local
-generation processes exactly that many prompts per batch and preserves dataset
-order.
+Training and evaluation batch sizes are configured independently per model and
+dataset. The suite resolves each dataset's
+`generation.batch_size_by_model` matrix into one scalar batch size in the
+materialized run config: long arXiv, BookSum and GovReport inputs therefore use
+smaller batches than PubMed, with larger models reduced further. Standard
+decoder-only models use vLLM by default; Nemotron uses its native in-process AR
+cache loop. For vLLM runs, `generation.batch_size` is the number of tokenized
+prompts sent in one HTTP request; `VLLM_BATCH_SIZE` or `--vllm-batch-size`
+overrides it without editing the YAML. Nemotron's local generation processes
+exactly the resolved batch size per batch and preserves dataset order.
 Each run is written to `runs/decoder_baselines/<model>__<dataset>/` with its
 resolved config, `final_model/`, `trainer_state.json`, predictions and metrics.
 Training enables length-grouped sampling by default, so examples with similar

@@ -141,6 +141,22 @@ def test_training_and_eval_batch_sizes_are_independent() -> None:
         assert config["generation"]["batch_size"] == eval_batch
 
 
+def test_generation_batch_matrix_tracks_dataset_length() -> None:
+    suite_path = Path(__file__).parents[1] / "configs" / "suite.yaml"
+    suite = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
+    expected = {
+        "qwen3_0_6b": {"pubmed": 8, "arxiv": 4, "booksum": 2, "govreport": 2},
+        "qwen3_4b": {"pubmed": 4, "arxiv": 2, "booksum": 1, "govreport": 1},
+        "nemotron_diffusion_3b": {"pubmed": 4, "arxiv": 2, "booksum": 1, "govreport": 1},
+    }
+    for model_name, datasets in expected.items():
+        for dataset_name, batch_size in datasets.items():
+            config, _ = build_run_config(suite, suite_path, model_name, dataset_name)
+            validate_config(config)
+            assert config["generation"]["batch_size"] == batch_size
+            assert not isinstance(config["generation"]["batch_size"], dict)
+
+
 def test_llama3_3b_uses_instruct_checkpoint() -> None:
     suite_path = Path(__file__).parents[1] / "configs" / "suite.yaml"
     suite = yaml.safe_load(suite_path.read_text(encoding="utf-8"))

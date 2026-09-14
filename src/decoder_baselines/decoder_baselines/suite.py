@@ -103,6 +103,37 @@ def _resolve_model(model_name: str, spec: dict[str, Any]) -> str:
     )
 
 
+def _resolve_generation(
+    defaults: dict[str, Any], model_spec: dict[str, Any], dataset_spec: dict[str, Any], model_name: str
+) -> dict[str, Any]:
+    """Resolve generation controls, including a dataset/model batch matrix.
+
+    Sequence lengths belong to the dataset, while model memory footprints are
+    different.  A dataset may therefore provide ``generation.batch_size_by_model``
+    in the suite YAML.  The generated per-run config always contains one scalar
+    ``generation.batch_size`` so the evaluator does not need to know about the
+    suite matrix.
+    """
+
+    generation = _merge(
+        defaults.get("generation", {}),
+        model_spec.get("generation", {}),
+        dataset_spec.get("generation", {}),
+    )
+    batch_matrix = generation.pop("batch_size_by_model", None)
+    if batch_matrix is None:
+        return generation
+    if not isinstance(batch_matrix, dict):
+        raise ValueError(f"datasets.*.generation.batch_size_by_model must be a mapping, got {batch_matrix!r}")
+    selected = batch_matrix.get(model_name, batch_matrix.get("default"))
+    if selected is None:
+        raise ValueError(
+            f"No generation batch size for model {model_name!r}; add it to the dataset matrix or provide default"
+        )
+    generation["batch_size"] = selected
+    return generation
+
+
 def build_run_config(
     suite: dict[str, Any],
     suite_path: Path,
@@ -155,14 +186,10 @@ def build_run_config(
         "model": model_config,
         "data": data_config,
         "training": training,
-        # Evaluation memory is independent from training memory.  A model may
-        # therefore override generation.batch_size while dataset recipes still
-        # provide task-specific length limits.
-        "generation": _merge(
-            defaults.get("generation", {}),
-            model_spec.get("generation", {}),
-            dataset_spec.get("generation", {}),
-        ),
+        # Evaluation memory is independent from training memory.  The dataset
+        # can further specialize its generation batch for each model because
+        # its source/target length determines the activation and KV footprint.
+        "generation": _resolve_generation(defaults, model_spec, dataset_spec, model_name),
         "limits": limits,
     }
     safe_name = _MODEL_NAME.sub("_", run_name)
