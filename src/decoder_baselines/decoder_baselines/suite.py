@@ -133,6 +133,8 @@ def build_run_config(
     )
     if "diffusion_paradigm" in model_spec:
         model_config["diffusion_paradigm"] = model_spec["diffusion_paradigm"]
+    if "vllm_model_impl" in model_spec:
+        model_config["vllm_model_impl"] = model_spec["vllm_model_impl"]
     data_config = _merge(defaults.get("data", {}), dataset_spec)
     for key in ("data_dir", "training", "generation"):
         data_config.pop(key, None)
@@ -352,7 +354,7 @@ def main() -> None:
         dest="eval_backend",
         choices=("auto", "vllm", "local"),
         default=os.environ.get("DECODER_EVAL_BACKEND", "auto"),
-        help="auto uses vLLM for causal LMs and local Transformers for Nemotron-Labs-Diffusion",
+        help="auto uses the vLLM OpenAI service for every decoder; use local to force in-process Transformers",
     )
     parser.add_argument("--vllm-base-url", default=os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000/v1"))
     parser.add_argument("--vllm-model", default=os.environ.get("VLLM_MODEL"))

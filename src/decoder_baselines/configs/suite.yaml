@@ -121,6 +121,7 @@ models:
     local_dir: Nemotron-Labs-Diffusion-8B-Base
     family: nemotron_diffusion
     diffusion_paradigm: autoregressive
+    vllm_model_impl: transformers
     training:
       per_device_train_batch_size: 1
       gradient_accumulation_steps: 32
@@ -130,11 +131,12 @@ models:
       nemotron_max_padding_ratio: 1.5
       nemotron_max_padded_tokens: 32768
   nemotron_diffusion_3b:
-    model_id: nvidia/Nemotron-Labs-Diffusion-3B-Base
+    model_id: nvidia/Nemotron-Labs-Diffusion-3B
     path_env: NEMOTRON_DIFFUSION_3B_PATH
-    local_dir: Nemotron-Labs-Diffusion-3B-Base
+    local_dir: Nemotron-Labs-Diffusion-3B
     family: nemotron_diffusion
     diffusion_paradigm: autoregressive
+    vllm_model_impl: transformers
     training:
       per_device_train_batch_size: 2
       gradient_accumulation_steps: 16

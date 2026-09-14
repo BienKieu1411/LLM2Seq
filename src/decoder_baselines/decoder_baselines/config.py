@@ -72,6 +72,7 @@ def validate_config(config: dict[str, Any]) -> None:
             "gradient_checkpointing",
             "use_cache",
             "diffusion_paradigm",
+            "vllm_model_impl",
         },
         "model",
     )
@@ -87,6 +88,9 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError(
             "Nemotron diffusion baselines use the autoregressive objective for a matched decoder-only control"
         )
+    vllm_model_impl = str(model.get("vllm_model_impl", "auto")).strip().lower()
+    if vllm_model_impl not in {"auto", "vllm", "transformers"}:
+        raise ValueError("model.vllm_model_impl must be auto, vllm, or transformers")
     for key in ("torch_dtype", "eval_torch_dtype"):
         if str(model.get(key, "bfloat16")).lower() not in {"float32", "float16", "bfloat16", "fp32", "fp16", "bf16"}:
             raise ValueError(f"Unsupported model.{key}: {model[key]}")

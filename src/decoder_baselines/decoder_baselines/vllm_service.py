@@ -81,9 +81,16 @@ class VLLMClient:
         return valid_models
 
     def model_name(self, requested: str | None = None) -> str:
-        if requested and str(requested).strip():
-            return str(requested).strip()
         models = self.models()
+        available = [str(item.get("id", "")).strip() for item in models]
+        available = [item for item in available if item]
+        if requested and str(requested).strip():
+            requested_name = str(requested).strip()
+            if requested_name not in available:
+                raise RuntimeError(
+                    f"Requested vLLM model {requested_name!r} is not served; available models={available!r}"
+                )
+            return requested_name
         name = models[0].get("id")
         if not str(name or "").strip():
             raise RuntimeError(f"vLLM served model has no id: {models[0]!r}")
@@ -171,6 +178,59 @@ def _local_host(host: str) -> bool:
     return host in {"localhost", "127.0.0.1", "::1"}
 
 
+def build_vllm_command(
+    checkpoint: str | Path,
+    *,
+    host: str,
+    port: int,
+    dtype: str,
+    max_model_len: int,
+    trust_remote_code: bool,
+    model_impl: str = "auto",
+    served_model_name: str | None = None,
+) -> list[str]:
+    """Build the local vLLM command without importing the GPU-heavy package.
+
+    Nemotron-Labs-Diffusion exposes ``AutoModel`` with custom remote code, so
+    the suite selects vLLM's Transformers backend explicitly for that model.
+    Other decoder-only models keep vLLM's automatic native/backend selection.
+    """
+
+    normalized_impl = str(model_impl).strip().lower()
+    if normalized_impl not in {"auto", "vllm", "transformers"}:
+        raise ValueError("model_impl must be auto, vllm, or transformers")
+    checkpoint_path = Path(checkpoint).expanduser().resolve()
+    if not checkpoint_path.is_dir():
+        raise FileNotFoundError(f"vLLM checkpoint directory does not exist: {checkpoint_path}")
+    if int(port) <= 0 or int(port) > 65535:
+        raise ValueError(f"vLLM port must be in [1, 65535], got {port}")
+    command = [
+        os.environ.get("VLLM_BIN", "vllm"),
+        "serve",
+        str(checkpoint_path),
+        "--host",
+        str(host),
+        "--port",
+        str(int(port)),
+        "--dtype",
+        str(dtype),
+        "--max-model-len",
+        str(int(max_model_len)),
+        "--generation-config",
+        "vllm",
+    ]
+    if normalized_impl != "auto":
+        command.extend(["--model-impl", normalized_impl])
+    if served_model_name and str(served_model_name).strip():
+        command.extend(["--served-model-name", str(served_model_name).strip()])
+    if trust_remote_code:
+        command.append("--trust-remote-code")
+    extra = os.environ.get("VLLM_SERVER_EXTRA_ARGS", "").strip()
+    if extra:
+        command.extend(shlex.split(extra))
+    return command
+
+
 class VLLMServer:
     """Lifecycle wrapper for an automatically started local vLLM server."""
 
@@ -189,6 +249,8 @@ class VLLMServer:
         max_model_len: int,
         dtype: str = "bfloat16",
         trust_remote_code: bool = True,
+        model_impl: str = "auto",
+        served_model_name: str | None = None,
         startup_timeout: float = 900.0,
         log_path: str | Path | None = None,
     ) -> "VLLMServer":
@@ -202,26 +264,16 @@ class VLLMServer:
         if not _local_host(host):
             raise ValueError(f"--start-vllm-service only accepts a local URL, got host {host!r}")
         port = parts.port or 8000
-        command = [
-            os.environ.get("VLLM_BIN", "vllm"),
-            "serve",
-            str(Path(checkpoint).expanduser().resolve()),
-            "--host",
-            host,
-            "--port",
-            str(port),
-            "--dtype",
-            str(dtype),
-            "--max-model-len",
-            str(int(max_model_len)),
-            "--generation-config",
-            "vllm",
-        ]
-        if trust_remote_code:
-            command.append("--trust-remote-code")
-        extra = os.environ.get("VLLM_SERVER_EXTRA_ARGS", "").strip()
-        if extra:
-            command.extend(shlex.split(extra))
+        command = build_vllm_command(
+            checkpoint,
+            host=host,
+            port=port,
+            dtype=dtype,
+            max_model_len=max_model_len,
+            trust_remote_code=trust_remote_code,
+            model_impl=model_impl,
+            served_model_name=served_model_name,
+        )
         resolved_log = Path(log_path).expanduser().resolve() if log_path else Path("vllm_server.log").resolve()
         resolved_log.parent.mkdir(parents=True, exist_ok=True)
         log_handle = resolved_log.open("a", encoding="utf-8")

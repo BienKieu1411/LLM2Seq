@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from decoder_baselines.evaluate import _resolve_backend
-from decoder_baselines.vllm_service import VLLMClient, normalize_base_url
+from decoder_baselines.evaluate import _resolve_backend, _vllm_model_impl
+from decoder_baselines.vllm_service import VLLMClient, build_vllm_command, normalize_base_url
 
 
 class _Response:
@@ -66,6 +66,42 @@ def test_vllm_completion_uses_token_batches_and_preserves_order(monkeypatch: Any
     assert "no_repeat_ngram_size" not in captured["payload"]
 
 
-def test_auto_backend_keeps_custom_nemotron_local() -> None:
+def test_auto_backend_uses_vllm_for_custom_nemotron() -> None:
     assert _resolve_backend({"model": {"family": "causal_lm"}}, "auto") == "vllm"
-    assert _resolve_backend({"model": {"family": "nemotron_diffusion"}}, "auto") == "local"
+    assert _resolve_backend({"model": {"family": "nemotron_diffusion"}}, "auto") == "vllm"
+    assert _vllm_model_impl({"model": {"family": "nemotron_diffusion"}}) == "transformers"
+    assert _vllm_model_impl({"model": {"family": "causal_lm"}}) == "auto"
+
+
+def test_vllm_model_name_must_match_served_model(monkeypatch: Any) -> None:
+    client = VLLMClient("http://localhost:8000/v1")
+    monkeypatch.setattr(client, "models", lambda: [{"id": "local/nemotron"}])
+    assert client.model_name("local/nemotron") == "local/nemotron"
+    try:
+        client.model_name("wrong-model")
+    except RuntimeError as exc:
+        assert "wrong-model" in str(exc)
+        assert "local/nemotron" in str(exc)
+    else:  # pragma: no cover - defensive assertion for the test itself
+        raise AssertionError("model_name accepted an unserved model")
+
+
+def test_build_vllm_command_for_nemotron(tmp_path: Any) -> None:
+    checkpoint = tmp_path / "Nemotron-Labs-Diffusion-3B"
+    checkpoint.mkdir()
+    command = build_vllm_command(
+        checkpoint,
+        host="127.0.0.1",
+        port=8123,
+        dtype="bfloat16",
+        max_model_len=8192,
+        trust_remote_code=True,
+        model_impl="transformers",
+        served_model_name="nvidia/Nemotron-Labs-Diffusion-3B",
+    )
+    assert command[:3] == ["vllm", "serve", str(checkpoint.resolve())]
+    assert "--model-impl" in command
+    assert command[command.index("--model-impl") + 1] == "transformers"
+    assert "--served-model-name" in command
+    assert command[command.index("--served-model-name") + 1] == "nvidia/Nemotron-Labs-Diffusion-3B"
+    assert "--trust-remote-code" in command

@@ -8,9 +8,10 @@ is applied.  Every target token, including EOS, is supervised while all prompt
 tokens are `-100` in the causal loss.
 
 Nemotron-Labs-Diffusion is loaded through `AutoModel` and explicitly switched
-to its autoregressive paradigm.  This keeps its diffusion denoising objective
-out of the decoder-only comparison; its custom AR cache loop is used only at
-evaluation time.
+to its autoregressive paradigm for fine-tuning. Evaluation uses the
+OpenAI-compatible vLLM service with the Transformers backend; `--backend local`
+remains available for a direct custom-AR check. This keeps its diffusion
+denoising objective out of the decoder-only comparison.
 
 ## Sequential matrix with optional DDP training
 
@@ -18,9 +19,9 @@ The runner starts a new process for every model/dataset pair. Pairs remain
 sequential, which releases model and optimizer memory before the next run. A
 single visible GPU runs normal Trainer training; a comma-separated `GPU_ID`
 launches one DDP worker per GPU. Evaluation uses the vLLM OpenAI-compatible
-service for causal LMs, with progress logs and incremental JSONL writes.
-Nemotron-Labs-Diffusion remains on the local Transformers path because its
-custom diffusion model is not registered as a vLLM causal-LM architecture.
+service for every model, with progress logs and incremental JSONL writes.
+Nemotron-Labs-Diffusion selects vLLM's `transformers` backend because it
+exposes the custom `NemotronLabsDiffusionModel` through `AutoModel`.
 
 ```bash
 cd src/decoder_baselines
@@ -31,7 +32,7 @@ QWEN3_4B_PATH=/models/Qwen3-4B \
 LLAMA3_8B_PATH=/models/Llama-3.1-8B \
 LLAMA3_3B_PATH=/models/Llama-3.2-3B-Instruct \
 NEMOTRON_DIFFUSION_8B_PATH=/models/Nemotron-Labs-Diffusion-8B-Base \
-NEMOTRON_DIFFUSION_3B_PATH=/models/Nemotron-Labs-Diffusion-3B-Base \
+NEMOTRON_DIFFUSION_3B_PATH=/models/Nemotron-Labs-Diffusion-3B \
 bash scripts/run_suite.sh --models qwen3_0_6b,qwen3_8b,qwen3_4b,llama3_8b,llama3_3b,nemotron_diffusion_8b,nemotron_diffusion_3b --datasets pubmed,arxiv
 ```
 
@@ -50,6 +51,10 @@ after their three prepared files exist under `src/eviseq_new/datasets/`, or
 override `data_root` in a copied suite YAML.  Use `--dry-run` to materialize
 and inspect all commands without loading a model.  Use `--continue-on-error`
 only when a failed run should not stop the matrix.
+
+Each JSONL row must contain the configured source and target fields.  An ID
+field is optional: when `id_field` is absent from a row, the loader assigns a
+stable file-local ID such as `row-00000001` for the prediction JSONL.
 
 The arXiv recipe uses a `9216`-token total context so its `8096`-token source
 budget can coexist with the `512`-token target and the instruction overhead.
@@ -74,12 +79,14 @@ the resolved run manifest records both the world size and this global batch.
 The final evaluation uses `temperature: 0`, `top_k: 0`, `top_p: 1`; candidates
 can be generated later by editing a copied run config and enabling sampling.
 Evaluation runs automatically after training on the `test` split. By default,
-the suite starts a local `vllm serve` process for each causal-LM checkpoint,
+the suite starts a local `vllm serve` process for each checkpoint,
 waits for `/v1/models`, sends batched completion requests, and stops the service
 after that evaluation. Set `VLLM_BASE_URL` to use an already-running service;
 the service model must match the checkpoint being evaluated. Use
 `VLLM_BATCH_SIZE=32` (or another value appropriate for GPU memory) to increase
-the HTTP request batch size independently from the training batch size.
+the HTTP request batch size independently from the training batch size. The
+Nemotron server is launched with `--model-impl transformers` and the canonical
+model ID as `--served-model-name`.
 
 Every evaluation prints `[eval] batch ... ETA=...` and a final
 `[eval] COMPLETE ...` line. It also writes `*.metrics.json` with
@@ -108,11 +115,12 @@ EviSeq data files, prompt, context limits and per-model generation batch size;
 it does not write a temporary config. For an existing service, replace
 `--start-vllm-service` with `--no-start-vllm-service` and set
 `VLLM_BASE_URL=http://host:8000/v1`. Use `--backend local` only when you need
-the old in-process Transformers evaluator.
+the in-process Transformers evaluator or when the installed vLLM cannot load
+the custom Nemotron checkpoint.
 
 The seven model IDs in the bundled matrix are `Qwen/Qwen3-0.6B`, `Qwen/Qwen3-8B`,
 `Qwen/Qwen3-4B`, `meta-llama/Llama-3.1-8B`, `meta-llama/Llama-3.2-3B-Instruct`,
 `nvidia/Nemotron-Labs-Diffusion-8B-Base` and
-`nvidia/Nemotron-Labs-Diffusion-3B-Base`.  If a local directory uses another
+`nvidia/Nemotron-Labs-Diffusion-3B`. If a local directory uses another
 name, set the corresponding `*_PATH` variable; the suite records both the
 canonical model ID and the resolved local path.

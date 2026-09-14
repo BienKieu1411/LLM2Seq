@@ -50,6 +50,11 @@ def read_jsonl(path: str | Path, *, max_examples: int = 0) -> list[dict[str, Any
                 raise ValueError(f"Invalid JSONL at {path}:{line_number}") from exc
             if not isinstance(row, dict):
                 raise ValueError(f"Expected an object at {path}:{line_number}")
+            # IDs are useful for joining predictions back to the input, but
+            # they are not required by the training format.  Preserve a
+            # caller-provided ID and otherwise attach a deterministic,
+            # file-local fallback that does not alter source/target fields.
+            row.setdefault("_decoder_baseline_row_id", f"row-{line_number:08d}")
             records.append(row)
     if not records:
         raise ValueError(f"Dataset is empty: {path}")
@@ -59,7 +64,21 @@ def read_jsonl(path: str | Path, *, max_examples: int = 0) -> list[dict[str, Any
 def record_texts(row: Mapping[str, Any], data: Mapping[str, Any]) -> tuple[str, str, str]:
     source = _as_text(_field(row, str(data["source_field"]), ("source", "text", "article")))
     target = _as_text(_field(row, str(data["target_field"]), ("target", "summary", "abstract")))
-    identifier = str(row.get(str(data.get("id_field", "id")), row.get("id", "")))
+    id_field = str(data.get("id_field", "id")).strip()
+    identifier = ""
+    if id_field:
+        try:
+            value = _field(row, id_field, ())
+        except KeyError:
+            value = None
+        if value not in (None, ""):
+            identifier = str(value)
+    if not identifier:
+        for fallback in ("id", "_id", "uid", "example_id", "_decoder_baseline_row_id"):
+            value = row.get(fallback)
+            if value not in (None, ""):
+                identifier = str(value)
+                break
     if bool(data.get("clean_text", True)):
         source = unicodedata.normalize("NFC", source).strip()
         target = unicodedata.normalize("NFC", target).strip()

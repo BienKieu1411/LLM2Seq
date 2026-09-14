@@ -279,16 +279,12 @@ def _resolve_backend(config: dict[str, Any], requested: str) -> str:
     backend = str(requested).strip().lower()
     if backend not in {"auto", "local", "vllm"}:
         raise ValueError("Evaluation backend must be auto, local, or vllm")
-    family = str(config["model"].get("family", "causal_lm"))
     if backend == "auto":
-        # Nemotron-Labs-Diffusion is an AutoModel with a custom tri-mode API;
-        # it is not the NemotronForCausalLM architecture registered by vLLM.
-        return "local" if family == "nemotron_diffusion" else "vllm"
-    if backend == "vllm" and family == "nemotron_diffusion":
-        raise ValueError(
-            "vLLM backend does not support the Nemotron-Labs-Diffusion custom model. "
-            "Use --backend local (or --backend auto for the safe fallback)."
-        )
+        # The suite evaluates every decoder through the same OpenAI-compatible
+        # service.  Nemotron-Labs-Diffusion is loaded by vLLM's Transformers
+        # backend (configured per model) because it exposes AutoModel rather
+        # than the unrelated NemotronForCausalLM class.
+        return "vllm"
     return backend
 
 
@@ -626,6 +622,15 @@ def _vllm_dtype(config: dict[str, Any]) -> str:
     return {"bf16": "bfloat16", "fp16": "float16", "fp32": "float32"}.get(value, value)
 
 
+def _vllm_model_impl(config: dict[str, Any]) -> str:
+    """Resolve the vLLM implementation for the configured model family."""
+
+    value = str(config["model"].get("vllm_model_impl", "auto")).strip().lower()
+    if value == "auto" and str(config["model"].get("family", "causal_lm")) == "nemotron_diffusion":
+        return "transformers"
+    return value
+
+
 def _evaluate_vllm(
     config: dict[str, Any],
     checkpoint_path: Path,
@@ -669,12 +674,15 @@ def _evaluate_vllm(
     server: VLLMServer | None = None
     try:
         if start_vllm_service:
+            served_model_name = vllm_model or str(config["model"].get("model_id", "")).strip() or None
             server = VLLMServer.start(
                 checkpoint_path,
                 base_url=vllm_base_url,
                 max_model_len=context_length,
                 dtype=_vllm_dtype(config),
                 trust_remote_code=bool(config["model"].get("trust_remote_code", True)),
+                model_impl=_vllm_model_impl(config),
+                served_model_name=served_model_name,
                 startup_timeout=vllm_startup_timeout,
                 log_path=output_path.with_name(f"{output_path.stem}.vllm.log"),
             )
@@ -716,6 +724,7 @@ def _evaluate_vllm(
             extra={
                 "vllm_base_url": client.base_url,
                 "vllm_model": served_model,
+                "vllm_model_impl": _vllm_model_impl(config),
                 "vllm_request_batch_size": batch_size,
                 "vllm_unsupported_generation_controls": ["no_repeat_ngram_size"]
                 if int(generation.get("no_repeat_ngram_size", 0)) > 0
@@ -809,7 +818,7 @@ def main() -> None:
         dest="backend",
         choices=("auto", "vllm", "local"),
         default=os.environ.get("DECODER_EVAL_BACKEND", "auto"),
-        help="auto uses vLLM for causal LMs and local Transformers for Nemotron-Labs-Diffusion",
+        help="auto uses the vLLM OpenAI service for every decoder; use local to force in-process Transformers",
     )
     parser.add_argument("--vllm-base-url", default=os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000/v1"))
     parser.add_argument("--vllm-model", default=os.environ.get("VLLM_MODEL"))

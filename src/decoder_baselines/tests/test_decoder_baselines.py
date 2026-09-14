@@ -8,7 +8,7 @@ import torch
 import yaml
 
 from decoder_baselines.config import validate_config
-from decoder_baselines.data import CausalCollator, CausalSummarizationDataset, encode_prompt
+from decoder_baselines.data import CausalCollator, CausalSummarizationDataset, encode_prompt, read_jsonl, record_texts
 from decoder_baselines.evaluate import (
     _config_from_suite,
     _filter_logits,
@@ -69,6 +69,24 @@ def test_prompt_masking_preserves_t5gemma_source_instruction(tmp_path: Path) -> 
     assert collated["labels"].shape == collated["input_ids"].shape
 
 
+def test_jsonl_without_id_gets_stable_row_identifier(tmp_path: Path) -> None:
+    path = tmp_path / "no_id.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({"input": "source one", "content": "target one"}),
+                json.dumps({"input": "source two", "content": "target two"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rows = read_jsonl(path)
+    data = {"source_field": "input", "target_field": "content", "id_field": "id", "clean_text": True}
+    assert record_texts(rows[0], data)[0] == "row-00000001"
+    assert record_texts(rows[1], data)[0] == "row-00000002"
+
+
 def test_top_k_and_top_p_filtering_keeps_valid_logits() -> None:
     logits = torch.tensor([[0.0, 1.0, 2.0, 3.0]])
     filtered = _filter_logits(logits, top_k=2, top_p=1.0)
@@ -84,6 +102,9 @@ def test_suite_materializes_nemotron_ar_recipe() -> None:
     config, _ = build_run_config(suite, suite_path, "nemotron_diffusion_3b", "pubmed")
     validate_config(config)
     assert config["model"]["family"] == "nemotron_diffusion"
+    assert config["model"]["model_id"] == "nvidia/Nemotron-Labs-Diffusion-3B"
+    assert config["model"]["name_or_path"].endswith("Nemotron-Labs-Diffusion-3B")
+    assert config["model"]["vllm_model_impl"] == "transformers"
     assert config["model"]["diffusion_paradigm"] == "autoregressive"
     assert config["data"]["source_prefix"].startswith("Summarize the following biomedical")
     assert config["generation"]["temperature"] == 0.0
