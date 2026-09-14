@@ -9,7 +9,7 @@ import yaml
 
 from decoder_baselines.config import validate_config
 from decoder_baselines.data import CausalCollator, CausalSummarizationDataset, encode_prompt
-from decoder_baselines.evaluate import _config_from_suite, _filter_logits
+from decoder_baselines.evaluate import _config_from_suite, _filter_logits, _nemotron_batch_indices
 from decoder_baselines.train import _read_distributed_context
 from decoder_baselines.suite import _distributed_train_command, _parse_gpu_ids, build_run_config
 
@@ -107,8 +107,8 @@ def test_training_and_eval_batch_sizes_are_independent() -> None:
         "qwen3_8b": (1, 2),
         "llama3_3b": (4, 4),
         "llama3_8b": (1, 2),
-        "nemotron_diffusion_3b": (2, 1),
-        "nemotron_diffusion_8b": (1, 1),
+        "nemotron_diffusion_3b": (2, 4),
+        "nemotron_diffusion_8b": (1, 2),
     }
     for model_name, (train_batch, eval_batch) in expected.items():
         config, _ = build_run_config(suite, suite_path, model_name, "pubmed")
@@ -174,6 +174,13 @@ def test_evaluate_can_materialize_config_directly_from_suite() -> None:
     assert config["generation"]["temperature"] == 0.0
     assert config["generation"]["top_k"] == 0
     assert config["generation"]["top_p"] == 1.0
+
+
+def test_nemotron_eval_batch_size_groups_equal_prompt_lengths() -> None:
+    prompts = [[1, 2], [3], [4, 5], [6], [7, 8], [9, 10, 11]]
+    batches = _nemotron_batch_indices(prompts, batch_size=2)
+    assert batches == [[0, 2], [4], [1, 3], [5]]
+    assert sorted(index for batch in batches for index in batch) == list(range(len(prompts)))
 
 
 def test_arxiv_context_budget_covers_source_and_target() -> None:

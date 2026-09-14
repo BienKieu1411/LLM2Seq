@@ -126,8 +126,8 @@ models:
       per_device_train_batch_size: 1
       gradient_accumulation_steps: 32
     generation:
-      # The custom AR cache loop is intentionally evaluated one example at a time.
-      batch_size: 1
+      # Maximum examples per length-homogeneous AR batch; tune for GPU memory.
+      batch_size: 2
   nemotron_diffusion_3b:
     model_id: nvidia/Nemotron-Labs-Diffusion-3B-Base
     path_env: NEMOTRON_DIFFUSION_3B_PATH
@@ -138,7 +138,8 @@ models:
       per_device_train_batch_size: 2
       gradient_accumulation_steps: 16
     generation:
-      batch_size: 1
+      # Maximum examples per length-homogeneous AR batch; tune for GPU memory.
+      batch_size: 4
 
 datasets:
   pubmed:

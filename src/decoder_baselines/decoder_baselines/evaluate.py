@@ -108,10 +108,14 @@ def generate_nemotron_ar(
     ``AutoModelForCausalLM.generate``.  Reproducing its small cache loop here
     lets the baseline honor the same temperature/top-k/top-p controls while
     keeping the model in autoregressive mode (no diffusion training objective).
+
+    The caller groups prompts with the same tokenized length before calling
+    this function.  That keeps one shared position sequence per batch while
+    still making ``generation.batch_size`` effective.
     """
 
-    if prompt_ids.shape[0] != 1:
-        raise ValueError("Nemotron AR generation uses batch_size=1 to avoid padding ambiguity")
+    if prompt_ids.ndim != 2 or prompt_ids.shape[0] < 1 or prompt_ids.shape[1] < 1:
+        raise ValueError("Nemotron AR generation expects a non-empty [batch, prompt_length] tensor")
     try:
         from transformers.cache_utils import DynamicCache
     except ImportError as exc:  # pragma: no cover - depends on Transformers version
@@ -121,12 +125,13 @@ def generate_nemotron_ar(
         if hasattr(attention, "diffusion_lm"):
             attention.diffusion_lm = False
     device = prompt_ids.device
+    batch_size = int(prompt_ids.shape[0])
     prompt_length = int(prompt_ids.shape[1])
     cache = DynamicCache()
     positions = torch.arange(prompt_length, device=device)
     encoded = model.encoder(
         input_ids=prompt_ids,
-        position_ids=positions.unsqueeze(0),
+        position_ids=positions.unsqueeze(0).expand(batch_size, -1),
         past_key_values=cache,
         use_cache=True,
         cache_position=positions,
@@ -134,38 +139,42 @@ def generate_nemotron_ar(
     cache = encoded.past_key_values
     logits = model.diffusion_head(encoded.last_hidden_state[:, -1, :])
     eos_token_id = getattr(tokenizer, "eos_token_id", None)
-    generated: list[torch.Tensor] = []
+    pad_token_id = getattr(tokenizer, "pad_token_id", None)
+    if pad_token_id is None:
+        pad_token_id = eos_token_id
+    if pad_token_id is None:
+        raise ValueError("Nemotron AR generation requires tokenizer.pad_token_id or tokenizer.eos_token_id")
+    generated = torch.empty((batch_size, 0), dtype=torch.long, device=device)
+    finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
     for step in range(int(generation["max_new_tokens"])):
-        generated_tensor = (
-            torch.cat(generated, dim=1) if generated else torch.empty((1, 0), dtype=torch.long, device=device)
-        )
         token = _next_token(
             logits,
             generation=generation,
-            generated=generated_tensor,
+            generated=generated,
             eos_token_id=eos_token_id,
             step=step,
         )
-        generated.append(token)
-        if (
-            eos_token_id is not None
-            and step + 1 >= int(generation.get("min_new_tokens", 0))
-            and bool((token == eos_token_id).all())
-        ):
+        was_finished = finished.clone()
+        if was_finished.any():
+            token = token.masked_fill(was_finished.unsqueeze(1), int(pad_token_id))
+        generated = torch.cat([generated, token], dim=1)
+        if eos_token_id is not None and step + 1 >= int(generation.get("min_new_tokens", 0)):
+            finished |= (~was_finished) & (token.squeeze(1) == int(eos_token_id))
+        if eos_token_id is not None and bool(finished.all()):
             break
         if step + 1 >= int(generation["max_new_tokens"]):
             break
         cache_position = torch.tensor([prompt_length + step], device=device)
         encoded = model.encoder(
             input_ids=token,
-            position_ids=cache_position.unsqueeze(0),
+            position_ids=cache_position.unsqueeze(0).expand(batch_size, -1),
             past_key_values=cache,
             use_cache=True,
             cache_position=cache_position,
         )
         cache = encoded.past_key_values
         logits = model.diffusion_head(encoded.last_hidden_state[:, -1, :])
-    return torch.cat([prompt_ids, *generated], dim=1)
+    return torch.cat([prompt_ids, generated], dim=1)
 
 
 def _generation_kwargs(generation: dict[str, Any], tokenizer: Any) -> dict[str, Any]:
@@ -267,6 +276,21 @@ def _write_prediction_batch(handle: Any, records: list[dict[str, str]], predicti
     handle.flush()
 
 
+def _nemotron_batch_indices(prompts: list[list[int]], batch_size: int) -> list[list[int]]:
+    """Build length-homogeneous Nemotron batches without changing dataset order."""
+
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    by_length: dict[int, list[int]] = {}
+    for index, prompt in enumerate(prompts):
+        by_length.setdefault(len(prompt), []).append(index)
+    batches: list[list[int]] = []
+    for indices in by_length.values():
+        for start in range(0, len(indices), batch_size):
+            batches.append(indices[start : start + batch_size])
+    return batches
+
+
 def _log_progress(
     *,
     started: float,
@@ -358,20 +382,37 @@ def _evaluate_local(
     )
     generation = dict(config["generation"])
     batch_size = int(generation["batch_size"])
+    family = str(config["model"].get("family", "causal_lm"))
+    if family == "nemotron_diffusion":
+        batch_indices = _nemotron_batch_indices(prompts, batch_size)
+    else:
+        batch_indices = [
+            list(range(start, min(start + batch_size, len(prompts)))) for start in range(0, len(prompts), batch_size)
+        ]
     predictions: list[str] = []
-    batch_total = (len(prompts) + batch_size - 1) // batch_size if prompts else 0
+    predictions_by_index: list[str | None] = [None] * len(prompts)
+    batch_total = len(batch_indices)
     print(
         f"[eval] START | backend=local | split={split} | examples={len(prompts)} | "
         f"batch_size={batch_size} | started={started_at}",
         flush=True,
     )
     with output_path.open("w", encoding="utf-8") as handle:
-        for batch_index, start in enumerate(range(0, len(prompts), batch_size), start=1):
-            batch_prompts = prompts[start : start + batch_size]
-            input_ids, attention = left_pad_prompts(batch_prompts, tokenizer.pad_token_id)
-            input_ids = input_ids.to(target)
-            attention = attention.to(target)
-            if str(config["model"].get("family", "causal_lm")) == "nemotron_diffusion":
+        written = 0
+        generated_count = 0
+        for batch_index, indices in enumerate(batch_indices, start=1):
+            batch_prompts = [prompts[index] for index in indices]
+            if family == "nemotron_diffusion":
+                # Length-homogeneous batches are required because the custom
+                # AR cache API receives one shared position sequence.  The
+                # batch size in YAML remains the maximum number of examples.
+                input_ids = torch.tensor(batch_prompts, dtype=torch.long, device=target)
+                attention = None
+            else:
+                input_ids, attention = left_pad_prompts(batch_prompts, tokenizer.pad_token_id)
+                input_ids = input_ids.to(target)
+                attention = attention.to(target)
+            if family == "nemotron_diffusion":
                 outputs = generate_nemotron_ar(model, input_ids, tokenizer, generation)
             else:
                 outputs = model.generate(
@@ -381,16 +422,34 @@ def _evaluate_local(
                 )
             width = int(input_ids.shape[1])
             decoded = [value.strip() for value in tokenizer.batch_decode(outputs[:, width:], skip_special_tokens=True)]
-            predictions.extend(decoded)
-            _write_prediction_batch(handle, records[start : start + batch_size], decoded)
+            if len(decoded) != len(indices):
+                raise RuntimeError(f"Prediction count mismatch: indices={len(indices)}, decoded={len(decoded)}")
+            for index, prediction in zip(indices, decoded):
+                predictions_by_index[index] = prediction
+            generated_count += len(indices)
+
+            # Length bucketing can generate examples out of dataset order.
+            # Flush every contiguous prefix that is ready so JSONL remains
+            # ordered and still appears incrementally while evaluation runs.
+            ready_records: list[dict[str, str]] = []
+            ready_predictions: list[str] = []
+            while written < len(records) and predictions_by_index[written] is not None:
+                ready_records.append(records[written])
+                ready_predictions.append(str(predictions_by_index[written]))
+                written += 1
+            if ready_records:
+                _write_prediction_batch(handle, ready_records, ready_predictions)
             _log_progress(
                 started=started,
-                processed=len(predictions),
+                processed=generated_count,
                 total=len(prompts),
                 batch_index=batch_index,
                 batch_total=batch_total,
                 every=progress_every,
             )
+    if any(prediction is None for prediction in predictions_by_index):
+        raise RuntimeError("Nemotron batching did not produce a prediction for every example")
+    predictions = [str(prediction) for prediction in predictions_by_index]
     return _finish_metrics(
         config,
         output_path=output_path,
