@@ -12,7 +12,7 @@ import random
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import numpy as np
 import torch
@@ -27,6 +27,12 @@ from transformers import (
 )
 
 T5GEMMA_ROOT = Path(__file__).resolve().parents[1]
+
+try:
+    from .data_utils import load_summarization_jsonl, resolve_path
+except ImportError:  # Direct execution: python scripts/train_full.py
+    sys.path.insert(0, str(T5GEMMA_ROOT / "scripts"))
+    from data_utils import load_summarization_jsonl, resolve_path
 
 
 def load_env_file() -> None:
@@ -63,16 +69,6 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def load_jsonl(path: Path) -> List[Dict[str, Any]]:
-    examples: List[Dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                examples.append(json.loads(line))
-    return examples
-
-
 class SummarizationDataset(Dataset):
     def __init__(
         self,
@@ -81,10 +77,18 @@ class SummarizationDataset(Dataset):
         source_prefix: str,
         max_source_length: int,
         max_target_length: int,
+        *,
+        data_config: Dict[str, Any] | None = None,
     ) -> None:
-        self.examples = load_jsonl(path)
+        # Keep the old positional arguments for callers outside this script,
+        # but parse rows through the same canonical loader as EviSeq.  This
+        # makes T5Gemma train on ``id/text/summary`` without a conversion step
+        # while still accepting legacy ``source/target`` files.
+        loader_config = dict(data_config or {})
+        loader_config.setdefault("source_prefix", source_prefix)
+        self.examples = load_summarization_jsonl(path, loader_config)
         self.tokenizer = tokenizer
-        self.source_prefix = source_prefix
+        self.source_prefix = str(loader_config.get("source_prefix", source_prefix))
         self.max_source_length = max_source_length
         self.max_target_length = max_target_length
 
@@ -94,12 +98,12 @@ class SummarizationDataset(Dataset):
     def __getitem__(self, index: int) -> Dict[str, Any]:
         row = self.examples[index]
         model_inputs = self.tokenizer(
-            self.source_prefix + row["source"],
+            self.source_prefix + row.source,
             max_length=self.max_source_length,
             truncation=True,
         )
         labels = self.tokenizer(
-            text_target=row["target"],
+            text_target=row.target,
             max_length=self.max_target_length - 1,  # Leave room for EOS
             truncation=True,
         )
@@ -226,7 +230,8 @@ def main() -> None:
     parser.add_argument("--overwrite-output-dir", action="store_true")
     args = parser.parse_args()
 
-    config_path = Path(args.config)
+    project_root = T5GEMMA_ROOT.parent
+    config_path = resolve_path(args.config, base=project_root)
     with config_path.open("r", encoding="utf-8") as f:
         cfg: Dict[str, Any] = yaml.safe_load(f)
     assert_hf_uploads_disabled(cfg)
@@ -243,7 +248,7 @@ def main() -> None:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-    output_dir = Path(cfg["project"]["output_dir"])
+    output_dir = resolve_path(cfg["project"]["output_dir"], base=project_root)
     if output_dir.exists() and any(output_dir.iterdir()):
         if not args.overwrite_output_dir:
             raise FileExistsError(
@@ -268,9 +273,9 @@ def main() -> None:
     trust_remote_code = bool(cfg["model"].get("trust_remote_code", True))
     dtype = torch_dtype_from_config(cfg["model"].get("torch_dtype", "bfloat16"))
 
-    train_file = Path(cfg["data"]["train_file"])
-    eval_file_str = cfg["data"].get("eval_file")
-    eval_file = Path(eval_file_str) if eval_file_str else None
+    train_file = resolve_path(cfg["data"]["train_file"], base=project_root)
+    eval_file_str = cfg["data"].get("eval_file") or cfg["data"].get("validation_file")
+    eval_file = resolve_path(eval_file_str, base=project_root) if eval_file_str else None
     if not train_file.exists():
         raise FileNotFoundError(train_file)
     if eval_file and not eval_file.exists():
@@ -324,6 +329,7 @@ def main() -> None:
         cfg["data"].get("source_prefix", ""),
         int(cfg["data"]["max_source_length"]),
         int(cfg["data"]["max_target_length"]),
+        data_config=cfg["data"],
     )
     eval_dataset = None
     if eval_file:
@@ -333,6 +339,7 @@ def main() -> None:
             cfg["data"].get("source_prefix", ""),
             int(cfg["data"]["max_source_length"]),
             int(cfg["data"]["max_target_length"]),
+            data_config=cfg["data"],
         )
     collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer,

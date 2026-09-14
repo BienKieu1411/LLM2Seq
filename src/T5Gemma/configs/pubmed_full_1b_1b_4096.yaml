@@ -47,9 +47,17 @@ training:
   seed: 42
 
 data:
-  train_file: T5Gemma/data/processed/pubmed/train.jsonl
-  eval_file: T5Gemma/data/processed/pubmed/validation.jsonl
-  test_file: T5Gemma/data/processed/pubmed/test.jsonl
+  # Consume the canonical EviSeq prepared split directly.  The loader also
+  # accepts legacy source/target rows, which keeps old WikiLingua runs usable.
+  train_file: eviseq_new/datasets/pubmed/train.jsonl
+  eval_file: eviseq_new/datasets/pubmed/validation.jsonl
+  validation_file: eviseq_new/datasets/pubmed/validation.jsonl
+  test_file: eviseq_new/datasets/pubmed/test.jsonl
+  source_field: text
+  target_field: summary
+  id_field: id
+  list_separator: "\n"
+  detokenize: true
   source_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
   max_source_length: 4096
   max_target_length: 512

@@ -21,7 +21,7 @@ export TOKENIZERS_PARALLELISM=false
 
 CONFIG="${CONFIG:-T5Gemma/configs/pubmed_full_1b_1b_4096.yaml}"
 CHECKPOINT="${CHECKPOINT:-runs/t5gemma2_1b_1b_full_pubmed_4096/final_model}"
-TEST_FILE="${TEST_FILE:-T5Gemma/data/processed/pubmed/test.jsonl}"
+TEST_FILE="${TEST_FILE:-eviseq_new/datasets/pubmed/test.jsonl}"
 OUTPUT_DIR="${OUTPUT_DIR:-T5Gemma/eval_outputs/pubmed/1b_1b}"
 EVAL_LIMIT="${EVAL_LIMIT:--1}"
 
@@ -52,9 +52,30 @@ echo "Output: ${OUTPUT_DIR}"
   --limit "${EVAL_LIMIT}" \
   "$@"
 
-PREDICTIONS="${OUTPUT_DIR}/predictions.jsonl"
+# ``$@`` is intentionally forwarded so callers can override generation
+# options.  In particular, argparse uses the last ``--output_dir`` value; use
+# that same effective value for the postcondition check instead of always
+# checking the environment/default path.
+EFFECTIVE_OUTPUT_DIR="${OUTPUT_DIR}"
+extra_args=("$@")
+for ((index = 0; index < ${#extra_args[@]}; index++)); do
+  case "${extra_args[index]}" in
+    --output_dir)
+      if ((index + 1 < ${#extra_args[@]})); then
+        EFFECTIVE_OUTPUT_DIR="${extra_args[index + 1]}"
+      fi
+      ;;
+    --output_dir=*)
+      EFFECTIVE_OUTPUT_DIR="${extra_args[index]#--output_dir=}"
+      ;;
+  esac
+done
+
+PREDICTIONS="${EFFECTIVE_OUTPUT_DIR}/predictions.jsonl"
 if [[ ! -f "${PREDICTIONS}" ]]; then
   echo "ERROR: evaluation did not create ${PREDICTIONS}" >&2
+  echo "Current working directory: $(pwd -P)" >&2
+  echo "Effective output directory: ${EFFECTIVE_OUTPUT_DIR}" >&2
   exit 1
 fi
 
@@ -62,7 +83,7 @@ if [[ -n "${PYROUGE_HOME_DIR:-}" ]]; then
   echo "=== Calculate Perl ROUGE-1.5.5 ==="
   "${PYTHON_BIN}" rouge155/evaluate_rouge.py \
     "${PREDICTIONS}" \
-    --output "${OUTPUT_DIR}/predictions.rouge155.json"
+    --output "${EFFECTIVE_OUTPUT_DIR}/predictions.rouge155.json"
 else
   echo "WARNING: PYROUGE_HOME_DIR is not set; Perl ROUGE-1.5.5 was skipped." >&2
 fi

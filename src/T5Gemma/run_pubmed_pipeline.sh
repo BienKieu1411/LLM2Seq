@@ -15,8 +15,10 @@ fi
 if [[ -n "${REQUESTED_OVERWRITE}" ]]; then
   OVERWRITE_OUTPUT_DIR="${REQUESTED_OVERWRITE}"
 fi
-PUBMED_RAW_DIR="${PUBMED_RAW_DIR:-T5Gemma/datasets/pubmed}"
-PUBMED_DATA_DIR="${PUBMED_DATA_DIR:-T5Gemma/data/processed/pubmed}"
+# T5Gemma now reads the canonical EviSeq files directly.  Keep all paths
+# relative to PROJECT_ROOT after load_env.sh has changed into that directory.
+PUBMED_DATA_DIR="${PUBMED_DATA_DIR:-eviseq_new/datasets/pubmed}"
+PUBMED_RAW_DIR="${PUBMED_RAW_DIR:-eviseq_new/datasets/raw/pubmed}"
 PUBMED_LOG_DIR="${PUBMED_LOG_DIR:-T5Gemma/logs/pubmed}"
 mkdir -p "${PUBMED_LOG_DIR}"
 
@@ -34,13 +36,20 @@ prepare_pubmed() {
   if [[ "${PUBMED_SOURCE_DIR}" != /* ]]; then
     PUBMED_SOURCE_DIR="${CALLER_CWD}/${PUBMED_SOURCE_DIR}"
   fi
-  echo "=== Copy and prepare PubMed ==="
+  echo "=== Prepare canonical EviSeq PubMed data ==="
   echo "Source: ${PUBMED_SOURCE_DIR}"
+  echo "Processed: ${PUBMED_DATA_DIR}"
   echo "Raw copy: ${PUBMED_RAW_DIR}"
-  "${PYTHON_BIN}" "${T5GEMMA_ROOT}/scripts/prepare_pubmed_json.py" \
-    --input_dir "${PUBMED_SOURCE_DIR}" \
-    --raw_copy_dir "${PUBMED_RAW_DIR}" \
-    --output_dir "${PUBMED_DATA_DIR}"
+  prepare_args=(
+    --dataset pubmed
+    --input-dir "${PUBMED_SOURCE_DIR}"
+    --output-dir "${PUBMED_DATA_DIR}"
+    --raw-copy-dir "${PUBMED_RAW_DIR}"
+  )
+  if [[ "${ALLOW_CROSS_SPLIT_CONTENT:-false}" =~ ^(true|1|yes)$ ]]; then
+    prepare_args+=(--allow-cross-split-content)
+  fi
+  bash "${PROJECT_ROOT}/eviseq_new/scripts/prepare_afmr.sh" "${prepare_args[@]}"
 }
 
 if [[ "${FORCE_PREPARE_PUBMED:-false}" =~ ^(true|1|yes)$ ]]; then
@@ -120,8 +129,8 @@ case "${MODE}" in
     run_4b
     ;;
   *)
-    echo "Usage: PUBMED_SOURCE_DIR=/path/to/pubmet bash run_pubmed_pipeline.sh {1b|4b|all}" >&2
-    echo "Set FORCE_PREPARE_PUBMED=true to copy/convert the source files again." >&2
+    echo "Usage: PUBMED_SOURCE_DIR=/path/to/pubmed bash run_pubmed_pipeline.sh {1b|4b|all}" >&2
+    echo "Canonical data is read from ${PUBMED_DATA_DIR}; set FORCE_PREPARE_PUBMED=true to prepare it again." >&2
     exit 2
     ;;
 esac

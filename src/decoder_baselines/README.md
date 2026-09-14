@@ -74,6 +74,24 @@ an existing checkpoint without retraining, call `decoder_baselines.evaluate`
 with its resolved config and `final_model/` path; the same decode controls are
 used unless the copied config explicitly enables sampling.
 
+For evaluation only, the generated per-run YAML is optional. Read the model,
+dataset and evaluation parameters directly from `suite.yaml`:
+
+```bash
+cd src/decoder_baselines
+CUDA_VISIBLE_DEVICES=1 python3 evaluate.py \
+  --suite configs/suite.yaml \
+  --model qwen3_4b \
+  --dataset pubmed \
+  --checkpoint /models/Qwen3-4B \
+  --output /runs/decoder_baselines/qwen3_4b__pubmed_base/test_predictions.jsonl \
+  --split test
+```
+
+This mode uses the suite's local model path environment variable, canonical
+EviSeq data files, prompt, context limits and per-model generation batch size;
+it does not write a temporary config.
+
 The seven model IDs in the bundled matrix are `Qwen/Qwen3-0.6B`, `Qwen/Qwen3-8B`,
 `Qwen/Qwen3-4B`, `meta-llama/Llama-3.1-8B`, `meta-llama/Llama-3.2-3B-Instruct`,
 `nvidia/Nemotron-Labs-Diffusion-8B-Base` and

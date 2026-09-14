@@ -9,7 +9,12 @@ import pytest
 import torch
 
 from rouge155.evaluate_bertscore import _patch_tokenizer_max_length, evaluate as evaluate_bertscore
-from rouge155.evaluate_alignscore import _sentence_split, _source_chunks, evaluate as evaluate_alignscore
+from rouge155.evaluate_alignscore import (
+    LocalAlignScore,
+    _sentence_split,
+    _source_chunks,
+    evaluate as evaluate_alignscore,
+)
 from rouge155.metric_io import load_jsonl
 
 
@@ -185,3 +190,26 @@ def test_alignscore_reproduces_source_chunk_and_claim_sentence_shape() -> None:
     assert len(sentences) == 3
     chunks = _source_chunks("First statement. Second statement. Third statement.", chunk_words=100)
     assert chunks == ["First statement. Second statement. Third statement."]
+
+
+def test_alignscore_retries_pair_truncation_when_claim_exhausts_budget() -> None:
+    class FakeTokenizer:
+        def __init__(self) -> None:
+            self.truncation_modes: list[object] = []
+
+        def __call__(self, contexts, claims, **kwargs):
+            self.truncation_modes.append(kwargs["truncation"])
+            if kwargs["truncation"] == "only_first":
+                raise Exception("Sequence to truncate too short to respect the provided max_length")
+            return {
+                "input_ids": torch.ones((len(contexts), 4), dtype=torch.long),
+                "attention_mask": torch.ones((len(contexts), 4), dtype=torch.long),
+            }
+
+    scorer = object.__new__(LocalAlignScore)
+    scorer.tokenizer = FakeTokenizer()
+    scorer.max_length = 512
+    encoded = scorer._encode(["context"], ["very long claim"])
+
+    assert scorer.tokenizer.truncation_modes == ["only_first", True]
+    assert encoded["input_ids"].shape == (1, 4)

@@ -28,6 +28,12 @@ except ImportError:  # Direct execution: python scripts/evaluate_full_test.py
     sys.path.insert(0, str(T5GEMMA_ROOT / "scripts"))
     from rouge_metric import heter_sum_graph_rouge
 
+try:
+    from .data_utils import load_summarization_jsonl, resolve_path
+except ImportError:  # Direct execution: python scripts/evaluate_full_test.py
+    sys.path.insert(0, str(T5GEMMA_ROOT / "scripts"))
+    from data_utils import load_summarization_jsonl, resolve_path
+
 
 def load_env_file() -> None:
     env_file = Path(os.environ.get("ENV_FILE", T5GEMMA_ROOT / "env.txt"))
@@ -45,18 +51,6 @@ def load_env_file() -> None:
             continue
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-def load_jsonl(path: Path, limit: int = -1) -> List[Dict[str, Any]]:
-    examples: List[Dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            if limit > 0 and len(examples) >= limit:
-                break
-            line = line.strip()
-            if line:
-                examples.append(json.loads(line))
-    return examples
 
 
 def torch_dtype_from_config(name: str) -> torch.dtype:
@@ -194,19 +188,28 @@ def generation_value(args: argparse.Namespace, raw_cfg: Dict[str, Any], name: st
     return raw_cfg.get("generation", {}).get(name, default)
 
 
-def resolve_checkpoint_source(raw_cfg: Dict[str, Any], checkpoint: Optional[str]) -> Tuple[str, Optional[str], str]:
+def resolve_checkpoint_source(
+    raw_cfg: Dict[str, Any], checkpoint: Optional[str], *, base: Optional[Path] = None
+) -> Tuple[str, Optional[str], str]:
     local_candidates: List[Path] = []
     if checkpoint:
-        explicit_path = Path(checkpoint)
-        if explicit_path.exists():
-            return str(explicit_path), None, str(explicit_path)
+        explicit_path = Path(checkpoint).expanduser()
+        if explicit_path.is_absolute() and explicit_path.exists():
+            return str(explicit_path.resolve()), None, str(explicit_path.resolve())
+        if not explicit_path.is_absolute():
+            candidates = [(Path.cwd() / explicit_path).resolve()]
+            if base is not None:
+                candidates.append((base / explicit_path).resolve())
+            for candidate in candidates:
+                if candidate.exists():
+                    return str(candidate), None, str(candidate)
         # Only org/repo-shaped values are interpreted as Hub model IDs. A
         # missing local run path should fail clearly instead of being sent to
         # huggingface_hub as a malformed repo ID.
         if checkpoint.count("/") == 1 and not checkpoint.startswith((".", "/", "~")):
             return checkpoint, None, checkpoint
         raise FileNotFoundError(f"Full checkpoint not found: {checkpoint}")
-    output_dir = Path(raw_cfg["project"]["output_dir"])
+    output_dir = resolve_path(raw_cfg["project"]["output_dir"], base=base or T5GEMMA_ROOT.parent)
     local_candidates.append(output_dir / "final_model")
     for path in local_candidates:
         if path.exists():
@@ -254,19 +257,24 @@ def main() -> None:
     parser.add_argument("--bertscore_model_type", default=None)
     args = parser.parse_args()
 
-    config_path = Path(args.config)
+    project_root = T5GEMMA_ROOT.parent
+    config_path = resolve_path(args.config, base=project_root)
     with config_path.open("r", encoding="utf-8") as f:
         raw_cfg: Dict[str, Any] = yaml.safe_load(f)
 
-    test_file = Path(args.test_file or raw_cfg["data"].get("test_file", "T5Gemma/data/processed/test.jsonl"))
+    test_file = resolve_path(
+        args.test_file or raw_cfg["data"].get("test_file", "eviseq_new/datasets/test.jsonl"),
+        base=project_root,
+    )
     if not test_file.exists():
         raise FileNotFoundError(test_file)
 
-    output_dir = Path(args.output_dir)
+    output_dir = resolve_path(args.output_dir, base=project_root)
     output_dir.mkdir(parents=True, exist_ok=True)
     predictions_path = output_dir / "predictions.jsonl"
     metrics_path = output_dir / "metrics.json"
     run_info_path = output_dir / "eval_run_info.json"
+    print(f"Prediction output: {predictions_path.resolve()}", flush=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     token = os.environ.get("HF_TOKEN")
@@ -279,7 +287,9 @@ def main() -> None:
         )
     )
 
-    checkpoint_source, checkpoint_subfolder, checkpoint_label = resolve_checkpoint_source(raw_cfg, args.checkpoint)
+    checkpoint_source, checkpoint_subfolder, checkpoint_label = resolve_checkpoint_source(
+        raw_cfg, args.checkpoint, base=project_root
+    )
     local_checkpoint = Path(checkpoint_source)
     checkpoint_manifest: Dict[str, Any] = {}
     if local_checkpoint.exists():
@@ -324,7 +334,7 @@ def main() -> None:
         else None
     )
 
-    examples = load_jsonl(test_file, limit=args.limit)
+    examples = load_summarization_jsonl(test_file, raw_cfg["data"], limit=args.limit)
     batch_size = int(args.batch_size or raw_cfg.get("generation", {}).get("eval_batch_size", 1))
     generation_settings = {
         "max_new_tokens": int(generation_value(args, raw_cfg, "max_new_tokens", 256)),
@@ -370,8 +380,8 @@ def main() -> None:
     with predictions_path.open("w", encoding="utf-8") as out_f:
         for offset in tqdm(range(0, len(examples), batch_size), desc="Generating"):
             batch = examples[offset : offset + batch_size]
-            batch_sources = [row["source"] for row in batch]
-            batch_refs = [row["target"] for row in batch]
+            batch_sources = [row.source for row in batch]
+            batch_refs = [row.target for row in batch]
             enc = tokenizer(
                 [source_prefix + source for source in batch_sources],
                 return_tensors="pt",
@@ -403,7 +413,7 @@ def main() -> None:
                 out_f.write(
                     json.dumps(
                         {
-                            "id": row.get("id"),
+                            "id": row.identifier,
                             "source": source,
                             "reference": reference,
                             "prediction": prediction,

@@ -9,7 +9,7 @@ import yaml
 
 from decoder_baselines.config import validate_config
 from decoder_baselines.data import CausalCollator, CausalSummarizationDataset, encode_prompt
-from decoder_baselines.evaluate import _filter_logits
+from decoder_baselines.evaluate import _config_from_suite, _filter_logits
 from decoder_baselines.train import _read_distributed_context
 from decoder_baselines.suite import _distributed_train_command, _parse_gpu_ids, build_run_config
 
@@ -163,6 +163,17 @@ def test_all_models_share_t5gemma_decode_controls() -> None:
         assert generation["temperature"] == 0.0
         assert generation["top_k"] == 0
         assert generation["top_p"] == 1.0
+
+
+def test_evaluate_can_materialize_config_directly_from_suite() -> None:
+    suite_path = Path(__file__).parents[1] / "configs" / "suite.yaml"
+    config = _config_from_suite(suite_path, "qwen3_4b", "pubmed")
+    assert config["model"]["model_id"] == "Qwen/Qwen3-4B"
+    assert config["data"]["source_prefix"].startswith("Summarize the following biomedical")
+    assert config["generation"]["batch_size"] == 4
+    assert config["generation"]["temperature"] == 0.0
+    assert config["generation"]["top_k"] == 0
+    assert config["generation"]["top_p"] == 1.0
 
 
 def test_arxiv_context_budget_covers_source_and_target() -> None:

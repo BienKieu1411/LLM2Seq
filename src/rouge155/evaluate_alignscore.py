@@ -313,9 +313,13 @@ class LocalAlignScore:
                 max_length=self.max_length,
                 return_tensors="pt",
             )
-        except (TypeError, ValueError):
-            # Some tokenizer versions do not expose ``only_first``.  Pair
-            # truncation is still source-first in the common local backbones.
+        except Exception:
+            # ``only_first`` cannot satisfy the length contract when a claim
+            # itself is longer than the remaining pair budget.  The released
+            # AlignScore implementation retries with generic pair truncation
+            # in that case (and for tokenizers that do not support the mode).
+            # Generic truncation may trim either side, but it is preferable to
+            # dropping the whole batch with a Rust tokenizer exception.
             encoded = self.tokenizer(
                 list(contexts),
                 list(claims),

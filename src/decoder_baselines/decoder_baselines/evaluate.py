@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import yaml
 
-from .config import load_config
+from .config import load_config, validate_config
 from .data import encode_prompt, left_pad_prompts, read_jsonl, record_texts
 from .metrics import rouge_scores
 from .train import _context_length, _dtype, _load_tokenizer_and_model
@@ -188,8 +189,36 @@ def _generation_kwargs(generation: dict[str, Any], tokenizer: Any) -> dict[str, 
     return values
 
 
+def _config_from_suite(suite_path: str | Path, model_name: str, dataset_name: str) -> dict[str, Any]:
+    """Materialize one evaluation config directly from the suite matrix.
+
+    The suite already owns the model paths, dataset fields and per-model
+    generation batch sizes.  Reusing its merge logic avoids requiring a
+    generated ``runs/.../.configs/*.yaml`` file just to evaluate a checkpoint.
+    """
+
+    from .suite import build_run_config
+
+    path = Path(suite_path).expanduser().resolve()
+    with path.open("r", encoding="utf-8") as handle:
+        suite = yaml.safe_load(handle) or {}
+    if not isinstance(suite, dict):
+        raise ValueError(f"Suite config must be a mapping: {path}")
+    models = suite.get("models")
+    datasets = suite.get("datasets")
+    if not isinstance(models, dict) or not isinstance(datasets, dict):
+        raise ValueError(f"Suite config requires models and datasets mappings: {path}")
+    if model_name not in models:
+        raise ValueError(f"Unknown model {model_name!r}; available={sorted(models)}")
+    if dataset_name not in datasets:
+        raise ValueError(f"Unknown dataset {dataset_name!r}; available={sorted(datasets)}")
+    config, _ = build_run_config(suite, path, model_name, dataset_name)
+    validate_config(config)
+    return config
+
+
 def evaluate(
-    config_path: str | Path,
+    config_path: str | Path | dict[str, Any],
     checkpoint: str | Path,
     output: str | Path,
     *,
@@ -198,7 +227,7 @@ def evaluate(
 ) -> dict[str, Any]:
     if split not in {"train", "validation", "test"}:
         raise ValueError("split must be train, validation, or test")
-    config = load_config(config_path)
+    config = config_path if isinstance(config_path, dict) else load_config(config_path)
     checkpoint_path = Path(checkpoint).expanduser().resolve()
     if not checkpoint_path.is_dir():
         raise FileNotFoundError(f"Missing checkpoint directory: {checkpoint_path}")
@@ -277,15 +306,25 @@ def evaluate(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate one decoder-only baseline checkpoint")
-    parser.add_argument("--config", required=True)
+    config_group = parser.add_mutually_exclusive_group(required=True)
+    config_group.add_argument("--config", help="Materialized per-run YAML config")
+    config_group.add_argument("--suite", help="Decoder baseline suite.yaml")
+    parser.add_argument("--model", help="Model key from --suite, for example qwen3_4b")
+    parser.add_argument("--dataset", help="Dataset key from --suite, for example pubmed")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--split", choices=("train", "validation", "test"), default="test")
     parser.add_argument("--max-examples", type=int, default=0)
     args = parser.parse_args()
+    if args.suite and (not args.model or not args.dataset):
+        parser.error("--suite requires both --model and --dataset")
+    if args.suite:
+        config: str | Path | dict[str, Any] = _config_from_suite(args.suite, args.model, args.dataset)
+    else:
+        config = args.config
     print(
         json.dumps(
-            evaluate(args.config, args.checkpoint, args.output, split=args.split, max_examples=args.max_examples),
+            evaluate(config, args.checkpoint, args.output, split=args.split, max_examples=args.max_examples),
             ensure_ascii=False,
             indent=2,
         )

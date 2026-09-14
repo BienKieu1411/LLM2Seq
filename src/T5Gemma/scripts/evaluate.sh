@@ -10,7 +10,13 @@ ts="$(date +%Y%m%d_%H%M%S)"
 log_file="${LOG_DIR}/${ts}_evaluate_full_test.log"
 
 checkpoint_path="${CHECKPOINT_PATH:-${RUN_DIR}/final_model}"
-test_file="${TEST_FILE:-${DATA_DIR}/test.jsonl}"
+test_args=()
+if [[ -n "${TEST_FILE:-}" ]]; then
+  test_file="${TEST_FILE}"
+  test_args=(--test_file "${test_file}")
+else
+  test_file="<from config data.test_file>"
+fi
 
 echo "=== T5Gemma full-test eval ==="
 echo "Config: ${CONFIG}"
@@ -23,7 +29,7 @@ echo "Log: ${log_file}"
 "${PYTHON_BIN}" "${T5GEMMA_ROOT}/scripts/evaluate_full_test.py" \
   --config "${CONFIG}" \
   --checkpoint "${checkpoint_path}" \
-  --test_file "${test_file}" \
   --output_dir "${EVAL_DIR}" \
   --limit "${EVAL_LIMIT}" \
+  "${test_args[@]}" \
   2>&1 | tee "${log_file}"
