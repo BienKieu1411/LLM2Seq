@@ -226,7 +226,7 @@ def run_suite(args: argparse.Namespace) -> int:
     entries = [(model_name, dataset_name) for model_name in model_names for dataset_name in dataset_names]
     print(
         f"Sequential suite: GPU_ID={','.join(gpu_ids)}; DDP training world_size={world_size}; "
-        f"evaluation=single-process; runs={len(entries)}"
+        f"evaluation_backend={args.eval_backend}; runs={len(entries)}"
     )
     for index, (model_name, dataset_name) in enumerate(entries, start=1):
         config, config_path = build_run_config(
@@ -274,7 +274,22 @@ def run_suite(args: argparse.Namespace) -> int:
                         str(prediction_path),
                         "--split",
                         args.split,
+                        "--backend",
+                        args.eval_backend,
+                        "--vllm-base-url",
+                        args.vllm_base_url,
+                        "--vllm-startup-timeout",
+                        str(args.vllm_startup_timeout),
+                        "--progress-every",
+                        str(args.progress_every),
                     ]
+                    if args.vllm_model:
+                        evaluate_command.extend(["--vllm-model", args.vllm_model])
+                    if args.vllm_batch_size > 0:
+                        evaluate_command.extend(["--vllm-batch-size", str(args.vllm_batch_size)])
+                    evaluate_command.append(
+                        "--start-vllm-service" if args.start_vllm_service else "--no-start-vllm-service"
+                    )
                     if args.max_eval_examples > 0:
                         evaluate_command.extend(["--max-examples", str(args.max_eval_examples)])
                     # Generation is deliberately single-process.  Restrict it
@@ -331,6 +346,32 @@ def main() -> None:
     parser.add_argument("--max-validation-examples", type=int, default=0)
     parser.add_argument("--max-test-examples", type=int, default=0)
     parser.add_argument("--max-eval-examples", type=int, default=0)
+    parser.add_argument(
+        "--eval-backend",
+        "--backend",
+        dest="eval_backend",
+        choices=("auto", "vllm", "local"),
+        default=os.environ.get("DECODER_EVAL_BACKEND", "auto"),
+        help="auto uses vLLM for causal LMs and local Transformers for Nemotron-Labs-Diffusion",
+    )
+    parser.add_argument("--vllm-base-url", default=os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000/v1"))
+    parser.add_argument("--vllm-model", default=os.environ.get("VLLM_MODEL"))
+    parser.add_argument("--vllm-batch-size", type=int, default=int(os.environ.get("VLLM_BATCH_SIZE", "0")))
+    parser.add_argument("--vllm-startup-timeout", type=float, default=900.0)
+    parser.add_argument("--progress-every", type=int, default=10)
+    parser.add_argument(
+        "--start-vllm-service",
+        dest="start_vllm_service",
+        action="store_true",
+        help="Start vllm serve from each evaluation checkpoint",
+    )
+    parser.add_argument(
+        "--no-start-vllm-service",
+        dest="start_vllm_service",
+        action="store_false",
+        help="Use an already running VLLM_BASE_URL service",
+    )
+    parser.set_defaults(start_vllm_service=not bool(os.environ.get("VLLM_BASE_URL")))
     parser.add_argument("--overwrite-output-dir", action="store_true")
     parser.add_argument("--skip-eval", action="store_true")
     parser.add_argument("--continue-on-error", action="store_true")

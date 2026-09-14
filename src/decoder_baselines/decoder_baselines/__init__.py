@@ -6,4 +6,4 @@ from the EviSeq architecture so that the baselines cannot change the AFMR
 training graph.
 """
 
-__all__ = ["config", "data", "evaluate", "metrics", "suite", "train"]
+__all__ = ["config", "data", "evaluate", "metrics", "suite", "train", "vllm_service"]

@@ -17,8 +17,10 @@ evaluation time.
 The runner starts a new process for every model/dataset pair. Pairs remain
 sequential, which releases model and optimizer memory before the next run. A
 single visible GPU runs normal Trainer training; a comma-separated `GPU_ID`
-launches one DDP worker per GPU. Evaluation stays single-process on the first
-GPU because it does not need gradient synchronization.
+launches one DDP worker per GPU. Evaluation uses the vLLM OpenAI-compatible
+service for causal LMs, with progress logs and incremental JSONL writes.
+Nemotron-Labs-Diffusion remains on the local Transformers path because its
+custom diffusion model is not registered as a vLLM causal-LM architecture.
 
 ```bash
 cd src/decoder_baselines
@@ -69,10 +71,19 @@ effective optimizer batch is
 the resolved run manifest records both the world size and this global batch.
 The final evaluation uses `temperature: 0`, `top_k: 0`, `top_p: 1`; candidates
 can be generated later by editing a copied run config and enabling sampling.
-Evaluation runs automatically after training on the `test` split.  To evaluate
-an existing checkpoint without retraining, call `decoder_baselines.evaluate`
-with its resolved config and `final_model/` path; the same decode controls are
-used unless the copied config explicitly enables sampling.
+Evaluation runs automatically after training on the `test` split. By default,
+the suite starts a local `vllm serve` process for each causal-LM checkpoint,
+waits for `/v1/models`, sends batched completion requests, and stops the service
+after that evaluation. Set `VLLM_BASE_URL` to use an already-running service;
+the service model must match the checkpoint being evaluated. Use
+`VLLM_BATCH_SIZE=32` (or another value appropriate for GPU memory) to increase
+the HTTP request batch size independently from the training batch size.
+
+Every evaluation prints `[eval] batch ... ETA=...` and a final
+`[eval] COMPLETE ...` line. It also writes `*.metrics.json` with
+`started_at`, `finished_at`, `elapsed_seconds` and `examples_per_second`, while
+predictions are flushed batch by batch so the output file remains observable
+during a long run.
 
 For evaluation only, the generated per-run YAML is optional. Read the model,
 dataset and evaluation parameters directly from `suite.yaml`:
@@ -85,12 +96,17 @@ CUDA_VISIBLE_DEVICES=1 python3 evaluate.py \
   --dataset pubmed \
   --checkpoint /models/Qwen3-4B \
   --output /runs/decoder_baselines/qwen3_4b__pubmed_base/test_predictions.jsonl \
-  --split test
+  --split test \
+  --backend vllm \
+  --start-vllm-service
 ```
 
 This mode uses the suite's local model path environment variable, canonical
 EviSeq data files, prompt, context limits and per-model generation batch size;
-it does not write a temporary config.
+it does not write a temporary config. For an existing service, replace
+`--start-vllm-service` with `--no-start-vllm-service` and set
+`VLLM_BASE_URL=http://host:8000/v1`. Use `--backend local` only when you need
+the old in-process Transformers evaluator.
 
 The seven model IDs in the bundled matrix are `Qwen/Qwen3-0.6B`, `Qwen/Qwen3-8B`,
 `Qwen/Qwen3-4B`, `meta-llama/Llama-3.1-8B`, `meta-llama/Llama-3.2-3B-Instruct`,
