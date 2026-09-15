@@ -31,6 +31,9 @@ generation:
   top_p: 1.0
 
 model:
+  # A local PPLX path keeps the original recipe reproducible. The runner can
+  # replace this with a local Nemotron-3-Embed-1B-BF16 checkpoint via
+  # ENCODER_MODEL without changing the rest of the architecture.
   encoder_name: /absolute/path/to/pplx-embed-v1-0.6b
   decoder_name: /absolute/path/to/Qwen3-0.6B
 

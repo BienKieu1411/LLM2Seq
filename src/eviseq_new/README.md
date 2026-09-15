@@ -194,7 +194,7 @@ cd src/eviseq_new
 PYTHON=python3 \
 CUDA_VISIBLE_DEVICES=0 \
 ARXIV_SOURCE_DIR=/data/arxiv \
-PPLX_ENCODER=/models/pplx-embed-v1-0.6b \
+ENCODER_MODEL=/models/pplx-embed-v1-0.6b \
 DECODER_MODEL=/models/Qwen3-0.6B \
 TRAIN_BATCH_SIZE=8 \
 GRADIENT_ACCUMULATION_STEPS=12 \
@@ -208,7 +208,8 @@ files go to `ARXIV_DATA_DIR` (default `datasets/arxiv`), the generated config
 is kept under the run directory, and logs are written separately under
 `logs/afmr` so progress output cannot corrupt prediction JSONL. Set
 `ROUGE155_SCRIPT` to the local ROUGE wrapper to run Perl ROUGE after the
-built-in evaluation.
+built-in evaluation. `ENCODER_MODEL` may point to a local Nemotron embedding
+checkpoint; `PPLX_ENCODER` remains a backward-compatible alias.
 
 The runtime loads models only for `train` or `evaluate`; importing AFMR and running tests does not download anything. Checkpoints are structurally guarded: changing batch size, generation batch size, data paths, or model folder location is allowed, while changing AFMR ranks, windows, depth taps, or cross-attention layout is rejected.
 

@@ -26,7 +26,9 @@ ARXIV_SOURCE_DIR="${ARXIV_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/data
 DATA_DIR="${ARXIV_DATA_DIR:-${ROOT}/datasets/arxiv}"
 RAW_DATA_DIR="${ARXIV_RAW_DATA_DIR:-${ROOT}/datasets/raw/arxiv}"
 OUTPUT_DIR="${AFMR_OUTPUT_DIR:-${ROOT}/runs/afmr/arxiv_value_anchor_copy}"
-PPLX_ENCODER="${PPLX_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/pplx-embed-v1-0.6b}"
+# AFMR accepts any local token-level encoder with a fast tokenizer. Keep the
+# old variable as a backward-compatible alias for existing PPLX commands.
+ENCODER_MODEL="${ENCODER_MODEL:-${PPLX_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/pplx-embed-v1-0.6b}}"
 DECODER_MODEL="${DECODER_MODEL:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-0.6B}"
 
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-8}"
@@ -75,7 +77,7 @@ positive_int MAX_TARGET_LENGTH "${MAX_TARGET_LENGTH}"
 positive_int MAX_NEW_TOKENS "${MAX_NEW_TOKENS}"
 positive_int MIN_NEW_TOKENS "${MIN_NEW_TOKENS}"
 [[ -f "${CONFIG_TEMPLATE}" ]] || die "AFMR config not found: ${CONFIG_TEMPLATE}"
-[[ -d "${PPLX_ENCODER}" ]] || die "PPLX encoder not found: ${PPLX_ENCODER}"
+[[ -d "${ENCODER_MODEL}" ]] || die "Encoder not found: ${ENCODER_MODEL}"
 [[ -d "${DECODER_MODEL}" ]] || die "Qwen decoder not found: ${DECODER_MODEL}"
 
 if [[ ! -s "${DATA_DIR}/train.jsonl" || ! -s "${DATA_DIR}/validation.jsonl" || ! -s "${DATA_DIR}/test.jsonl" ]]; then
@@ -103,7 +105,7 @@ GENERATED_CONFIG="${GENERATED_CONFIG_DIR}/afmr_arxiv.yaml"
 mkdir -p "${GENERATED_CONFIG_DIR}"
 
 PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" - \
-  "${CONFIG_TEMPLATE}" "${GENERATED_CONFIG}" "${PPLX_ENCODER}" "${DECODER_MODEL}" \
+  "${CONFIG_TEMPLATE}" "${GENERATED_CONFIG}" "${ENCODER_MODEL}" "${DECODER_MODEL}" \
   "${OUTPUT_DIR}" "${DATA_DIR}" "${TRAIN_BATCH_SIZE}" "${GRADIENT_ACCUMULATION_STEPS}" \
   "${VALIDATION_BATCH_SIZE}" "${NUM_WORKERS}" "${VALIDATION_NUM_WORKERS}" \
   "${INTERFACE_WARMUP_EPOCHS}" "${FULL_FINETUNE_EPOCHS}" "${MAX_SOURCE_LENGTH}" \
@@ -180,7 +182,7 @@ PY
 
 echo "=== EviSeq AFMR ArXiv ==="
 echo "GPU: CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
-echo "Encoder: ${PPLX_ENCODER}"
+echo "Encoder: ${ENCODER_MODEL}"
 echo "Decoder: ${DECODER_MODEL}"
 echo "Source length: ${MAX_SOURCE_LENGTH}; train batch: ${TRAIN_BATCH_SIZE}; accumulation: ${GRADIENT_ACCUMULATION_STEPS}"
 echo "Output: ${OUTPUT_DIR}"
