@@ -167,6 +167,33 @@ Preparation is skipped when the canonical PubMed files already exist. Set
 `EVAL_BATCH_SIZE` to control evaluation memory. Set `ROUGE155_SCRIPT` to the
 local `evaluate_rouge.py` wrapper to append the Perl ROUGE-1.5.5 audit.
 
+To run the same PubMed recipe with a local Nemotron embedding encoder, use the
+dedicated single-GPU wrapper. It defaults to the server folder
+`/workspace/storage-shared/nlp/dungdx4/BERT/Nemotron-3-Embed-1B-BF16`; set
+`ENCODER_MODEL` to the actual local folder when the checkpoint is stored
+elsewhere (the older `llama-nemotron-embed-1b-v2` folder is also accepted):
+
+```bash
+cd src/eviseq_new
+PYTHON=/absolute/path/to/bienkieu_env/bin/python \
+CUDA_VISIBLE_DEVICES=0 \
+ENCODER_MODEL=/path/to/Nemotron-3-Embed-1B-BF16 \
+DECODER_MODEL=/path/to/Qwen3-0.6B \
+PUBMED_SOURCE_DIR=/path/to/pubmed \
+TRAIN_BATCH_SIZE=16 \
+GRADIENT_ACCUMULATION_STEPS=6 \
+EVAL_BATCH_SIZE=16 \
+bash scripts/run_pubmed_nemotron.sh
+```
+
+The wrapper keeps the effective training batch at 96 while using a smaller
+per-GPU micro-batch for the larger encoder, materializes a local-only config,
+trains the configured warm-up/full stages, and evaluates `last.pt` on the
+PubMed test split. It writes to `runs/afmr/pubmed_nemotron_embed` and logs to
+`logs/afmr`; `OVERWRITE_OUTPUT_DIR=true` starts a fresh run and
+`RESUME_CHECKPOINT=/path/to/last.pt` resumes a compatible run. No model is
+downloaded by this wrapper.
+
 For separate candidate generation, enable sampling explicitly with a fresh
 output JSONL. Filtering is applied in the order temperature, top-k, then
 nucleus top-p; this path is never called during training:
