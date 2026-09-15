@@ -250,6 +250,12 @@ def evaluate(
     system_prompt: str | None = None,
 ) -> dict[str, Any]:
     config = load_config(config_path)
+    LOGGER.info(
+        "[model] config=%s | encoder=%s | decoder=%s",
+        config.get("_meta", {}).get("config_path", config_path),
+        config["model"]["encoder_name"],
+        config["model"]["decoder_name"],
+    )
     _configure_precision(config)
     selected_batch_size = int(batch_size if batch_size is not None else config["generation"]["batch_size"])
     if selected_batch_size <= 0:

@@ -124,8 +124,12 @@ run_one() {
   bash "${ROOT}/scripts/run_afmr.sh" "${train_args[@]}"
 
   echo "=== Evaluating ${name}: last.pt on PubMed test ==="
+  local eval_config="${output_dir}/resolved_config.yaml"
+  [[ -s "${eval_config}" ]] || die "Training did not write ${eval_config}; refuse to evaluate with a different config"
+  echo "=== Eval config: ${eval_config} ==="
+  grep -E "^[[:space:]]*(encoder_name|decoder_name):" "${eval_config}"
   bash "${ROOT}/scripts/run_afmr.sh" evaluate \
-    "${config_path}" \
+    "${eval_config}" \
     "${output_dir}/last.pt" \
     "${predictions}" \
     --split test \

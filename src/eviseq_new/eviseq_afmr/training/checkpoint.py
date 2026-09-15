@@ -84,6 +84,36 @@ def save_checkpoint(
         temporary.unlink(missing_ok=True)
 
 
+def _embedding_shape_mismatches(
+    checkpoint_model: dict[str, Any], model: torch.nn.Module
+) -> list[tuple[str, tuple[int, ...], tuple[int, ...]]]:
+    """Return vocabulary-shape mismatches that usually indicate a wrong backbone.
+
+    AFMR checkpoints intentionally do not require model *paths* to stay the same:
+    a local copy can move without invalidating its weights.  Embedding dimensions,
+    however, are part of the trained graph.  Checking these tensors before the
+    generic ``load_state_dict`` call turns a cryptic PyTorch error into an
+    actionable encoder/decoder configuration error.
+    """
+
+    current_model = model.state_dict()
+    mismatches = []
+    for key in (
+        "encoder.model.embed_tokens.weight",
+        "decoder.backbone.embed_tokens.weight",
+        "decoder.lm_head.weight",
+    ):
+        checkpoint_tensor = checkpoint_model.get(key)
+        current_tensor = current_model.get(key)
+        if checkpoint_tensor is None or current_tensor is None:
+            continue
+        checkpoint_shape = tuple(int(value) for value in checkpoint_tensor.shape)
+        current_shape = tuple(int(value) for value in current_tensor.shape)
+        if checkpoint_shape != current_shape:
+            mismatches.append((key, checkpoint_shape, current_shape))
+    return mismatches
+
+
 def load_checkpoint(
     path: str | Path,
     model: torch.nn.Module,
@@ -98,6 +128,19 @@ def load_checkpoint(
     state = torch.load(Path(path), map_location="cpu", weights_only=False)
     if config is not None and state.get("architecture_spec") != architecture_spec(config):
         raise ValueError("Checkpoint architecture_spec does not match the active AFMR configuration")
+    mismatches = _embedding_shape_mismatches(state["model"], model)
+    if mismatches:
+        details = "; ".join(
+            f"{key}: checkpoint={checkpoint_shape}, active_model={current_shape}"
+            for key, checkpoint_shape, current_shape in mismatches
+        )
+        raise ValueError(
+            "Checkpoint/backbone vocabulary mismatch ("
+            f"{details}). The checkpoint and evaluation config use different encoder or decoder tokenizers; "
+            "for example, Qwen3-Embedding-0.6B has 151669 rows while Qwen3-0.6B has 151936. "
+            "Evaluate with the resolved_config.yaml saved beside this checkpoint, and keep its "
+            "model.encoder_name/model.decoder_name pair. Do not use strict=False or resize the embeddings."
+        )
     model.load_state_dict(state["model"], strict=strict)
     if optimizer is not None and state.get("optimizer") is not None:
         optimizer.load_state_dict(state["optimizer"])
