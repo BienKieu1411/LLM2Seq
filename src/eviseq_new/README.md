@@ -225,8 +225,10 @@ when it is missing, materializes a config with local model/data paths, trains
 the PPLX-to-Qwen AFMR model, and evaluates `last.pt` on the test split. It
 uses an 8,192-token source budget, the scientific source instruction used by
 the decoder baseline, greedy decoding (`temperature: 0`, `top_k: 0`,
-`top_p: 1`), and conservative long-context defaults of batch 8 × accumulation
-12. The wrapper is single-GPU; resource settings are environment overrides:
+`top_p: 1`), and conservative long-context defaults of batch 8 per GPU.
+With one visible GPU the default accumulation is 12; with two visible GPUs
+the wrapper launches DDP and uses accumulation 6, preserving global effective
+batch 96. Resource settings are environment overrides:
 
 ```bash
 cd src/eviseq_new
@@ -240,6 +242,10 @@ GRADIENT_ACCUMULATION_STEPS=12 \
 EVAL_BATCH_SIZE=8 \
 bash scripts/run_arxiv.sh
 ```
+
+To use both cards, set `CUDA_VISIBLE_DEVICES=0,1`; training switches to DDP
+automatically. Evaluation runs two independent shards concurrently and
+concatenates them by dataset index.
 
 Set `OVERWRITE_OUTPUT_DIR=true` only for an intentional restart. Set
 `RESUME_CHECKPOINT=/path/to/last.pt` to continue a compatible run. Prepared
@@ -260,7 +266,7 @@ The token-wise graph (`afmr_token_depth_lowrank_v3`) is intentionally incompatib
 
 Training stores parameters, gradients and AdamW moments in FP32; `model.compute_dtype: bfloat16` enables CUDA BF16 autocast for the heavy operations. CPU tests use FP32. This avoids directly accumulating tiny updates into BF16 parameters; see [Mixed Precision Training](https://arxiv.org/abs/1710.03740) for the FP32 accumulated-update principle. It is not all-FP32 matrix computation. CUDA evaluation loads the backbone/cross-attention in `compute_dtype`, keeping BF16 KV caches by default; legacy configs retain their configured inference dtype.
 
-Non-reentrant backbone checkpointing, token-weighted gradient accumulation (including a partial final window), and per-stage linear LR decay remain enabled. Optimizer moments are carried from warm-up to full fine-tuning. LM-head CE is computed in checkpointed token chunks instead of retaining full `[B,T,V]` logits. Encoder KV caching is disabled; only the requested depth taps are captured. The PubMed Nemotron wrapper supports one or two GPUs with DDP; evaluation runs once on the first visible GPU so the prediction JSONL remains ordered. FP32 training storage requires more VRAM than direct BF16 updates; a B200 smoke/profile is necessary before reusing the maximum old batch size.
+Non-reentrant backbone checkpointing, token-weighted gradient accumulation (including a partial final window), and per-stage linear LR decay remain enabled. Optimizer moments are carried from warm-up to full fine-tuning. LM-head CE is computed in checkpointed token chunks instead of retaining full `[B,T,V]` logits. Encoder KV caching is disabled; only the requested depth taps are captured. The PubMed Nemotron and ArXiv wrappers support one or two GPUs with DDP; two-GPU evaluation uses independent shards and merges them by dataset index so the final prediction JSONL remains ordered. FP32 training storage requires more VRAM than direct BF16 updates; a B200 smoke/profile is necessary before reusing the maximum old batch size.
 
 Training prints reusable, machine-readable progress lines with stage, epoch
 percentage, epoch/total optimizer steps, token-weighted CE, gradient norm,

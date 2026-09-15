@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Prepare, train and evaluate the EviSeq AFMR ArXiv recipe on one GPU.
-# The runner itself is intentionally single-process; it rejects torchrun/DDP.
+# Prepare, train and evaluate the EviSeq AFMR ArXiv recipe on one or two GPUs.
+# One visible GPU runs directly; two visible GPUs use torchrun/DDP.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
@@ -18,8 +18,17 @@ fi
 export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONUNBUFFERED=1
 export HF_HUB_DISABLE_TELEMETRY=1
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export TOKENIZERS_PARALLELISM=false
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+
+GPU_COUNT=1
+if [[ "${CUDA_VISIBLE_DEVICES}" == *,* ]]; then
+  IFS=',' read -r -a VISIBLE_GPUS <<< "${CUDA_VISIBLE_DEVICES}"
+  GPU_COUNT="${#VISIBLE_GPUS[@]}"
+fi
+PRIMARY_GPU="${CUDA_VISIBLE_DEVICES%%,*}"
 
 CONFIG_TEMPLATE="${AFMR_CONFIG:-${ROOT}/configs/afmr_arxiv.yaml}"
 ARXIV_SOURCE_DIR="${ARXIV_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/datasets/arxiv}"
@@ -32,7 +41,11 @@ ENCODER_MODEL="${ENCODER_MODEL:-${PPLX_ENCODER:-/workspace/storage-shared/nlp/du
 DECODER_MODEL="${DECODER_MODEL:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-0.6B}"
 
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-8}"
-GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-12}"
+if [[ -n "${GRADIENT_ACCUMULATION_STEPS:-}" ]]; then
+  GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS}"
+else
+  GRADIENT_ACCUMULATION_STEPS="$((12 / GPU_COUNT))"
+fi
 VALIDATION_BATCH_SIZE="${VALIDATION_BATCH_SIZE:-4}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-8}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
@@ -68,6 +81,7 @@ positive_int() {
   [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "$1 must be a positive integer; got $2"
 }
 
+[[ "${GPU_COUNT}" == 1 || "${GPU_COUNT}" == 2 ]] || die "Use exactly one or two visible GPUs: CUDA_VISIBLE_DEVICES=0 or 0,1"
 positive_int TRAIN_BATCH_SIZE "${TRAIN_BATCH_SIZE}"
 positive_int GRADIENT_ACCUMULATION_STEPS "${GRADIENT_ACCUMULATION_STEPS}"
 positive_int VALIDATION_BATCH_SIZE "${VALIDATION_BATCH_SIZE}"
@@ -182,9 +196,10 @@ PY
 
 echo "=== EviSeq AFMR ArXiv ==="
 echo "GPU: CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+echo "Processes: ${GPU_COUNT} (DDP when 2 GPUs are visible)"
 echo "Encoder: ${ENCODER_MODEL}"
 echo "Decoder: ${DECODER_MODEL}"
-echo "Source length: ${MAX_SOURCE_LENGTH}; train batch: ${TRAIN_BATCH_SIZE}; accumulation: ${GRADIENT_ACCUMULATION_STEPS}"
+echo "Source length: ${MAX_SOURCE_LENGTH}; train batch/GPU: ${TRAIN_BATCH_SIZE}; accumulation: ${GRADIENT_ACCUMULATION_STEPS}; global effective batch: $((TRAIN_BATCH_SIZE * GPU_COUNT * GRADIENT_ACCUMULATION_STEPS))"
 echo "Output: ${OUTPUT_DIR}"
 echo "Log: ${LOG_FILE}"
 
@@ -204,7 +219,14 @@ if [[ -n "${DEVICE}" ]]; then
 fi
 
 echo "=== Training ArXiv ==="
-PYTHON="${PYTHON_BIN}" bash "${ROOT}/scripts/run_afmr.sh" "${train_args[@]}"
+if (( GPU_COUNT > 1 )); then
+  "${PYTHON_BIN}" -m torch.distributed.run \
+    --standalone \
+    --nproc_per_node="${GPU_COUNT}" \
+    "${ROOT}/run_afmr.py" "${train_args[@]}"
+else
+  PYTHON="${PYTHON_BIN}" bash "${ROOT}/scripts/run_afmr.sh" "${train_args[@]}"
+fi
 
 CHECKPOINT="${OUTPUT_DIR}/last.pt"
 RESOLVED_CONFIG="${OUTPUT_DIR}/resolved_config.yaml"
@@ -213,12 +235,41 @@ PREDICTIONS="${OUTPUT_DIR}/last_test_predictions.jsonl"
 [[ -f "${RESOLVED_CONFIG}" ]] || die "Training did not produce ${RESOLVED_CONFIG}"
 
 eval_args=(evaluate "${RESOLVED_CONFIG}" "${CHECKPOINT}" "${PREDICTIONS}" --split test --batch-size "${EVAL_BATCH_SIZE}")
-if [[ -n "${DEVICE}" ]]; then
+if [[ -n "${DEVICE}" && "${GPU_COUNT}" == 1 ]]; then
   eval_args+=(--device "${DEVICE}")
 fi
 
 echo "=== Evaluating last.pt on ArXiv test ==="
-PYTHON="${PYTHON_BIN}" bash "${ROOT}/scripts/run_afmr.sh" "${eval_args[@]}"
+if (( GPU_COUNT > 1 )); then
+  # Inference has no gradient synchronization requirement. Run independent
+  # shards concurrently, then merge them by the original dataset index.
+  SHARD_ZERO="${PREDICTIONS}.shard0.jsonl"
+  SHARD_ONE="${PREDICTIONS}.shard1.jsonl"
+  run_eval_shard() {
+    local shard_rank="$1"
+    local gpu="$2"
+    local output="$3"
+    CUDA_VISIBLE_DEVICES="${gpu}" PYTHON="${PYTHON_BIN}" WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 \
+      bash "${ROOT}/scripts/run_afmr.sh" evaluate \
+      "${RESOLVED_CONFIG}" "${CHECKPOINT}" "${output}" \
+      --split test --batch-size "${EVAL_BATCH_SIZE}" \
+      --shard-rank "${shard_rank}" --num-shards "${GPU_COUNT}"
+  }
+  run_eval_shard 0 "${VISIBLE_GPUS[0]}" "${SHARD_ZERO}" &
+  PID_ZERO=$!
+  run_eval_shard 1 "${VISIBLE_GPUS[1]}" "${SHARD_ONE}" &
+  PID_ONE=$!
+  STATUS_ZERO=0
+  STATUS_ONE=0
+  wait "${PID_ZERO}" || STATUS_ZERO=$?
+  wait "${PID_ONE}" || STATUS_ONE=$?
+  (( STATUS_ZERO == 0 && STATUS_ONE == 0 )) || die "One or more ArXiv evaluation shards failed"
+  PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" \
+    "${ROOT}/scripts/merge_eval_shards.py" \
+    --output "${PREDICTIONS}" "${SHARD_ZERO}" "${SHARD_ONE}"
+else
+  PYTHON="${PYTHON_BIN}" bash "${ROOT}/scripts/run_afmr.sh" "${eval_args[@]}"
+fi
 
 if [[ -n "${ROUGE155_SCRIPT}" ]]; then
   [[ -f "${ROUGE155_SCRIPT}" ]] || die "ROUGE155_SCRIPT not found: ${ROUGE155_SCRIPT}"

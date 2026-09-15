@@ -42,6 +42,8 @@ def main(argv: list[str] | None = None) -> None:
     evaluate.add_argument("--temperature", type=float, default=None)
     evaluate.add_argument("--top-k", type=int, default=None)
     evaluate.add_argument("--top-p", type=float, default=None)
+    evaluate.add_argument("--shard-rank", type=int, default=0)
+    evaluate.add_argument("--num-shards", type=int, default=1)
     evaluate.add_argument(
         "--system-prompt",
         default=None,
@@ -108,6 +110,8 @@ def main(argv: list[str] | None = None) -> None:
             top_k=args.top_k,
             top_p=args.top_p,
             system_prompt=args.system_prompt,
+            shard_rank=args.shard_rank,
+            num_shards=args.num_shards,
         )
         print(__import__("json").dumps(result, ensure_ascii=False, indent=2))
         return

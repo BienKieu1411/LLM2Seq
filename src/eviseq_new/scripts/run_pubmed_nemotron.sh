@@ -270,10 +270,32 @@ fi
 
 echo "=== Evaluating last.pt on PubMed test ==="
 if (( GPU_COUNT > 1 )); then
-  # Evaluation writes one ordered JSONL and therefore runs once on the first
-  # visible GPU after the distributed training job has finished.
-  CUDA_VISIBLE_DEVICES="${PRIMARY_GPU}" PYTHON="${PYTHON_BIN}" \
-    bash "${ROOT}/scripts/run_afmr.sh" "${eval_args[@]}"
+  # Inference has no gradient synchronization requirement. Run independent
+  # shards concurrently, then merge them by the original dataset index.
+  SHARD_ZERO="${PREDICTIONS}.shard0.jsonl"
+  SHARD_ONE="${PREDICTIONS}.shard1.jsonl"
+  run_eval_shard() {
+    local shard_rank="$1"
+    local gpu="$2"
+    local output="$3"
+    CUDA_VISIBLE_DEVICES="${gpu}" PYTHON="${PYTHON_BIN}" WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 \
+      bash "${ROOT}/scripts/run_afmr.sh" evaluate \
+      "${RESOLVED_CONFIG}" "${CHECKPOINT}" "${output}" \
+      --split test --batch-size "${EVAL_BATCH_SIZE}" \
+      --shard-rank "${shard_rank}" --num-shards "${GPU_COUNT}"
+  }
+  run_eval_shard 0 "${VISIBLE_GPUS[0]}" "${SHARD_ZERO}" &
+  PID_ZERO=$!
+  run_eval_shard 1 "${VISIBLE_GPUS[1]}" "${SHARD_ONE}" &
+  PID_ONE=$!
+  STATUS_ZERO=0
+  STATUS_ONE=0
+  wait "${PID_ZERO}" || STATUS_ZERO=$?
+  wait "${PID_ONE}" || STATUS_ONE=$?
+  (( STATUS_ZERO == 0 && STATUS_ONE == 0 )) || die "One or more PubMed evaluation shards failed"
+  PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" \
+    "${ROOT}/scripts/merge_eval_shards.py" \
+    --output "${PREDICTIONS}" "${SHARD_ZERO}" "${SHARD_ONE}"
 else
   PYTHON="${PYTHON_BIN}" bash "${ROOT}/scripts/run_afmr.sh" "${eval_args[@]}"
 fi

@@ -3,7 +3,8 @@
 Importing this module does not instantiate or download a model. Checkpoint
 loading happens only when the train/evaluate commands are invoked. Training
 supports one process directly or a torchrun-initialized DDP process group;
-evaluation remains single-process so its JSONL output stays ordered.
+evaluation is single-process per shard; the shell runners can execute shards
+concurrently and merge their indexed JSONL outputs.
 """
 
 from __future__ import annotations
@@ -351,11 +352,15 @@ def evaluate(
     top_k: int | None = None,
     top_p: float | None = None,
     system_prompt: str | None = None,
+    shard_rank: int = 0,
+    num_shards: int = 1,
 ) -> dict[str, Any]:
     if int(os.environ.get("WORLD_SIZE", "1")) > 1:
         raise ValueError(
             "Distributed evaluation is not enabled; run evaluation once on one visible GPU after DDP training"
         )
+    if num_shards <= 0 or not 0 <= shard_rank < num_shards:
+        raise ValueError("shard_rank must lie in [0, num_shards) and num_shards must be positive")
     config = load_config(config_path)
     LOGGER.info(
         "[model] config=%s | encoder=%s | decoder=%s",
@@ -377,6 +382,8 @@ def evaluate(
 
     loader = loaders[split]
     loader.collate_fn.include_targets = False
+    active_indices = list(range(int(shard_rank), len(loader.dataset), int(num_shards)))
+    active_dataset = loader.dataset if num_shards == 1 else Subset(loader.dataset, active_indices)
     seen = set()
     predictions: list[str] = []
     references: list[str] = []
@@ -389,19 +396,21 @@ def evaluate(
                     continue
                 row = json.loads(raw)
                 index = len(predictions)
-                if index >= len(loader.dataset):
+                if index >= len(active_dataset):
                     raise ValueError("Resume file contains more rows than the active split")
-                expected = loader.dataset[index]
+                expected = active_dataset[index]
                 example_id = str(row.get("id", ""))
                 if example_id in seen or example_id != expected.example_id or row.get("reference") != expected.target:
                     raise ValueError(f"Evaluation resume must match the exact ID/reference prefix; mismatch at {index}")
+                if num_shards > 1 and int(row.get("index", -1)) != active_indices[index]:
+                    raise ValueError(f"Evaluation shard index mismatch at local row {index}")
                 if not isinstance(row.get("prediction"), str):
                     raise ValueError(f"Missing prediction at resume row {index}")
                 seen.add(example_id)
                 predictions.append(row["prediction"])
                 references.append(row["reference"])
     resumed_count = len(predictions)
-    total = min(len(loader.dataset), max_examples) if max_examples > 0 else len(loader.dataset)
+    total = min(len(active_dataset), max_examples) if max_examples > 0 else len(active_dataset)
     if resumed_count > total:
         raise ValueError("Resume file exceeds requested max_examples")
     LOGGER.info(
@@ -446,7 +455,7 @@ def evaluate(
     if requested_do_sample:
         generator = torch.Generator(device=device_obj).manual_seed(int(config["training"].get("seed", 42)))
     loader = DataLoader(
-        Subset(loader.dataset, range(resumed_count, total)),
+        Subset(active_dataset, range(resumed_count, total)),
         batch_size=selected_batch_size,
         collate_fn=loader.collate_fn,
         num_workers=loader.num_workers,
@@ -523,11 +532,22 @@ def evaluate(
                 torch.cuda.empty_cache()
                 pending_batches[0:0] = [left, right]
                 continue
+            row_start = resumed_count + generated_this_run
+            row_indices = active_indices[row_start : row_start + len(texts)]
+            if len(row_indices) != len(texts):
+                raise RuntimeError("Evaluation shard produced more rows than its active dataset")
             append_jsonl(
                 output_path,
                 (
-                    {"id": example_id, "prediction": text, "reference": reference}
-                    for example_id, text, reference in zip(narrowed["ids"], texts, narrowed["references"])
+                    {
+                        "id": example_id,
+                        "prediction": text,
+                        "reference": reference,
+                        **({"index": global_index} if num_shards > 1 else {}),
+                    }
+                    for global_index, example_id, text, reference in zip(
+                        row_indices, narrowed["ids"], texts, narrowed["references"]
+                    )
                 ),
             )
             seen.update(str(value) for value in narrowed["ids"])
