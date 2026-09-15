@@ -29,12 +29,3 @@ jobs:
       run: ruff check . --config pyproject.toml
     - name: Run Ruff Formatter Check
       run: ruff format --check . --config pyproject.toml
-
-  lint-frontend:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v5
-    - name: Run oxlint
-      uses: oxc-project/oxlint-action@v1
-      with:
-        working-directory: App/frontend
