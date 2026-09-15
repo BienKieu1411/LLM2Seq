@@ -2,9 +2,10 @@
 set -Eeuo pipefail
 
 # Prepare, train and evaluate the AFMR PubMed recipe with a local Nemotron
-# embedding checkpoint.  The runner is intentionally single-GPU and never
-# asks Hugging Face to resolve a model name: both model paths must be local
-# directories.
+# embedding checkpoint.  Set CUDA_VISIBLE_DEVICES to one or two devices; the
+# wrapper launches one process for one GPU and torchrun/DDP for two GPUs.  It
+# never asks Hugging Face to resolve a model name: both model paths must be
+# local directories.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
@@ -28,6 +29,13 @@ export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export TOKENIZERS_PARALLELISM=false
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
+GPU_COUNT=1
+if [[ "${CUDA_VISIBLE_DEVICES}" == *,* ]]; then
+  IFS=',' read -r -a VISIBLE_GPUS <<< "${CUDA_VISIBLE_DEVICES}"
+  GPU_COUNT="${#VISIBLE_GPUS[@]}"
+fi
+PRIMARY_GPU="${CUDA_VISIBLE_DEVICES%%,*}"
+
 CONFIG_TEMPLATE="${AFMR_CONFIG:-${ROOT}/configs/afmr_pubmed.yaml}"
 PUBMED_SOURCE_DIR="${PUBMED_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/datasets/pubmed}"
 DATA_DIR="${AFMR_DATA_DIR:-${ROOT}/datasets/pubmed}"
@@ -41,10 +49,16 @@ ENCODER_MODEL="${ENCODER_MODEL:-${NEMOTRON_ENCODER:-/workspace/storage-shared/nl
 DECODER_MODEL="${DECODER_MODEL:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-0.6B}"
 
 # The 1B encoder is larger than the former PPLX encoder.  These defaults keep
-# the same effective batch (16 x 6 = 96) while reducing activation memory per
-# micro-batch.  All resource values are environment overrides.
+# the same global effective batch (16 x GPU_COUNT x accumulation = 96) while
+# reducing activation memory per micro-batch.  Set
+# GRADIENT_ACCUMULATION_STEPS explicitly to choose a different effective
+# batch.  All resource values are environment overrides.
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-16}"
-GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-6}"
+if [[ -n "${GRADIENT_ACCUMULATION_STEPS:-}" ]]; then
+  GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS}"
+else
+  GRADIENT_ACCUMULATION_STEPS="$((6 / GPU_COUNT))"
+fi
 VALIDATION_BATCH_SIZE="${VALIDATION_BATCH_SIZE:-4}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
@@ -80,6 +94,7 @@ positive_int() {
   [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "$1 must be a positive integer; got $2"
 }
 
+[[ "${GPU_COUNT}" == 1 || "${GPU_COUNT}" == 2 ]] || die "Use exactly one or two visible GPUs: CUDA_VISIBLE_DEVICES=0 or 0,1"
 [[ -x "${PYTHON_BIN}" || "$(command -v "${PYTHON_BIN}" 2>/dev/null || true)" ]] || die "Python not found: ${PYTHON_BIN}"
 [[ -f "${CONFIG_TEMPLATE}" ]] || die "AFMR config not found: ${CONFIG_TEMPLATE}"
 [[ -d "${PUBMED_SOURCE_DIR}" ]] || die "PubMed source directory not found: ${PUBMED_SOURCE_DIR}"
@@ -210,9 +225,10 @@ PY
 
 echo "=== AFMR PubMed with Nemotron Embed ==="
 echo "GPU: CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+echo "Processes: ${GPU_COUNT} (DDP when 2 GPUs are visible)"
 echo "Encoder (local): ${ENCODER_MODEL}"
 echo "Decoder (local): ${DECODER_MODEL}"
-echo "Train batch: ${TRAIN_BATCH_SIZE}; accumulation: ${GRADIENT_ACCUMULATION_STEPS}; eval batch: ${EVAL_BATCH_SIZE}"
+echo "Train batch/GPU: ${TRAIN_BATCH_SIZE}; accumulation: ${GRADIENT_ACCUMULATION_STEPS}; global effective batch: $((TRAIN_BATCH_SIZE * GPU_COUNT * GRADIENT_ACCUMULATION_STEPS)); eval batch: ${EVAL_BATCH_SIZE}"
 echo "Source length: ${MAX_SOURCE_LENGTH}; output: ${OUTPUT_DIR}"
 echo "Log: ${LOG_FILE}"
 
@@ -232,7 +248,14 @@ if [[ -n "${DEVICE}" ]]; then
 fi
 
 echo "=== Training PubMed with Nemotron Embed ==="
-PYTHON="${PYTHON_BIN}" bash "${ROOT}/scripts/run_afmr.sh" "${train_args[@]}"
+if (( GPU_COUNT > 1 )); then
+  "${PYTHON_BIN}" -m torch.distributed.run \
+    --standalone \
+    --nproc_per_node="${GPU_COUNT}" \
+    "${ROOT}/run_afmr.py" "${train_args[@]}"
+else
+  PYTHON="${PYTHON_BIN}" bash "${ROOT}/scripts/run_afmr.sh" "${train_args[@]}"
+fi
 
 CHECKPOINT="${OUTPUT_DIR}/last.pt"
 RESOLVED_CONFIG="${OUTPUT_DIR}/resolved_config.yaml"
@@ -241,12 +264,19 @@ PREDICTIONS="${OUTPUT_DIR}/last_test_predictions.jsonl"
 [[ -f "${RESOLVED_CONFIG}" ]] || die "Training did not produce ${RESOLVED_CONFIG}"
 
 eval_args=(evaluate "${RESOLVED_CONFIG}" "${CHECKPOINT}" "${PREDICTIONS}" --split test --batch-size "${EVAL_BATCH_SIZE}")
-if [[ -n "${DEVICE}" ]]; then
+if [[ -n "${DEVICE}" && "${GPU_COUNT}" == 1 ]]; then
   eval_args+=(--device "${DEVICE}")
 fi
 
 echo "=== Evaluating last.pt on PubMed test ==="
-PYTHON="${PYTHON_BIN}" bash "${ROOT}/scripts/run_afmr.sh" "${eval_args[@]}"
+if (( GPU_COUNT > 1 )); then
+  # Evaluation writes one ordered JSONL and therefore runs once on the first
+  # visible GPU after the distributed training job has finished.
+  CUDA_VISIBLE_DEVICES="${PRIMARY_GPU}" PYTHON="${PYTHON_BIN}" \
+    bash "${ROOT}/scripts/run_afmr.sh" "${eval_args[@]}"
+else
+  PYTHON="${PYTHON_BIN}" bash "${ROOT}/scripts/run_afmr.sh" "${eval_args[@]}"
+fi
 
 if [[ -n "${ROUGE155_SCRIPT}" ]]; then
   [[ -f "${ROUGE155_SCRIPT}" ]] || die "ROUGE155_SCRIPT not found: ${ROUGE155_SCRIPT}"

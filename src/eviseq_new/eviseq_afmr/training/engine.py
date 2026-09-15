@@ -12,6 +12,7 @@ from typing import Any, Iterable
 
 import numpy as np
 import torch
+import torch.distributed as dist
 
 from ..data.copy_alignment import COPY_INPUT_KEYS
 from .checkpoint import load_checkpoint, save_checkpoint
@@ -66,6 +67,12 @@ class AFMRTrainer:
         self.model = model.to(device=device, dtype=torch.float32)
         self.config = config
         self.device = torch.device(device)
+        self.distributed = dist.is_available() and dist.is_initialized()
+        self.rank = dist.get_rank() if self.distributed else 0
+        self.world_size = dist.get_world_size() if self.distributed else 1
+        self.is_main_process = self.rank == 0
+        if not self.is_main_process:
+            LOGGER.setLevel(logging.WARNING)
         self.use_bf16 = self.device.type == "cuda" and config["model"].get("compute_dtype", "bfloat16") == "bfloat16"
         LOGGER.info(
             "precision | parameters=FP32 | optimizer=FP32 | compute=%s", "BF16 autocast" if self.use_bf16 else "FP32"
@@ -80,6 +87,8 @@ class AFMRTrainer:
         self._elapsed_before_fit = 0.0
 
     def _write_metric(self, record: dict[str, Any]) -> None:
+        if not self.is_main_process:
+            return
         self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
         with self.metrics_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -115,6 +124,10 @@ class AFMRTrainer:
             started = time.monotonic()
             counts = [int(raw["labels"][:, 1:].ne(-100).sum()) for raw in window]
             window_tokens = sum(counts)
+            if self.distributed:
+                token_count = torch.tensor(window_tokens, device=self.device, dtype=torch.long)
+                dist.all_reduce(token_count, op=dist.ReduceOp.SUM)
+                window_tokens = int(token_count.item())
             if train:
                 optimizer.zero_grad(set_to_none=True)
             step_loss = torch.zeros_like(ce_sum)
@@ -136,10 +149,17 @@ class AFMRTrainer:
                         )
                         if output.loss_ce is None:
                             raise RuntimeError("AFMR training requires decoder labels")
-                        loss = output.loss_ce * tokens / max(1, window_tokens)
+                        # DDP averages gradients across ranks.  Multiplying by
+                        # world_size makes this a true global token-weighted
+                        # gradient instead of an average of per-rank means.
+                        log_scale = tokens / max(1, window_tokens)
+                        scale = log_scale
+                        if self.distributed:
+                            scale *= self.world_size
+                        loss = output.loss_ce * scale
                     if train:
                         loss.backward()
-                step_loss += loss.detach()
+                step_loss += output.loss_ce.detach() * log_scale
                 ce_sum += output.loss_ce.detach() * tokens
                 token_total += tokens
                 del output, batch, loss
@@ -159,6 +179,8 @@ class AFMRTrainer:
                 self.global_step += 1
                 self.stage_optimizer_step += 1
                 epoch_step += 1
+                if self.distributed:
+                    dist.all_reduce(step_loss, op=dist.ReduceOp.SUM)
                 if self.global_step % int(self.config["training"]["log_every_steps"]) == 0:
                     window_elapsed = time.monotonic() - started
                     epoch_elapsed = time.monotonic() - epoch_started_at
@@ -222,7 +244,12 @@ class AFMRTrainer:
                         examples / max(window_elapsed, 1e-9),
                         window_tokens / max(window_elapsed, 1e-9),
                     )
-        ce = float(ce_sum) / max(1, token_total)
+        if self.distributed:
+            totals = torch.tensor([float(ce_sum.detach()), float(token_total)], device=self.device, dtype=torch.float64)
+            dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+            ce = float(totals[0].item()) / max(1.0, float(totals[1].item()))
+        else:
+            ce = float(ce_sum) / max(1, token_total)
         return {"loss": ce, "ce": ce}
 
     def fit(self, train_loader, validation_loader=None, resume_checkpoint: str | None = None) -> None:
@@ -335,7 +362,8 @@ class AFMRTrainer:
                     )
                 output_dir = self.config["experiment"]["output_dir"]
                 if (
-                    validation is not None
+                    self.is_main_process
+                    and validation is not None
                     and bool(training.get("save_best", False))
                     and (self.best_metric is None or validation["loss"] < self.best_metric)
                 ):
@@ -353,7 +381,7 @@ class AFMRTrainer:
                         elapsed_train_seconds=self._elapsed_train_seconds(),
                         scheduler=self.scheduler,
                     )
-                if bool(training.get("save_each_epoch", True)):
+                if self.is_main_process and bool(training.get("save_each_epoch", True)):
                     save_checkpoint(
                         f"{output_dir}/epoch_{global_epoch:03d}.pt",
                         self.model,
@@ -367,19 +395,22 @@ class AFMRTrainer:
                         elapsed_train_seconds=self._elapsed_train_seconds(),
                         scheduler=self.scheduler,
                     )
-                save_checkpoint(
-                    f"{output_dir}/last.pt",
-                    self.model,
-                    optimizer,
-                    self.config,
-                    epoch=global_epoch,
-                    step=self.global_step,
-                    best_metric=self.best_metric,
-                    stage=stage,
-                    stage_epoch=epoch,
-                    elapsed_train_seconds=self._elapsed_train_seconds(),
-                    scheduler=self.scheduler,
-                )
+                if self.is_main_process:
+                    save_checkpoint(
+                        f"{output_dir}/last.pt",
+                        self.model,
+                        optimizer,
+                        self.config,
+                        epoch=global_epoch,
+                        step=self.global_step,
+                        best_metric=self.best_metric,
+                        stage=stage,
+                        stage_epoch=epoch,
+                        elapsed_train_seconds=self._elapsed_train_seconds(),
+                        scheduler=self.scheduler,
+                    )
+                if self.distributed:
+                    dist.barrier()
             carried_state = dict(optimizer.state)
         LOGGER.info(
             "[train] complete | epochs=%d/%d | optimizer_steps=%d/%d | total_elapsed=%s",

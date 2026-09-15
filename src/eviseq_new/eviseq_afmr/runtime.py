@@ -1,7 +1,9 @@
 """Runtime assembly for real Transformers checkpoints.
 
 Importing this module does not instantiate or download a model. Checkpoint
-loading happens only when the train/evaluate commands are invoked.
+loading happens only when the train/evaluate commands are invoked. Training
+supports one process directly or a torchrun-initialized DDP process group;
+evaluation remains single-process so its JSONL output stays ordered.
 """
 
 from __future__ import annotations
@@ -16,14 +18,16 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.distributed as dist
 import yaml
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, Subset
 
 from .config import load_config, resolve_path
 from .data.collate import SummarizationCollator
 from .data.copy_alignment import COPY_INPUT_KEYS
 from .data.dataset import JsonlSummarizationDataset
-from .data.sampling import LengthBucketBatchSampler
+from .data.sampling import DistributedBatchSampler, LengthBucketBatchSampler
 from .modeling.model import EviSeqAFMR
 from .training.checkpoint import load_checkpoint
 from .training.engine import AFMRTrainer, seed_everything
@@ -34,6 +38,55 @@ LOGGER = logging.getLogger("eviseq_afmr.runtime")
 def _configure_precision(config: dict[str, Any]) -> None:
     if torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = bool(config["training"].get("tf32", False))
+
+
+def _distributed_active() -> bool:
+    return dist.is_available() and dist.is_initialized()
+
+
+def _distributed_rank() -> int:
+    return dist.get_rank() if _distributed_active() else 0
+
+
+def _distributed_world_size() -> int:
+    return dist.get_world_size() if _distributed_active() else 1
+
+
+def _is_main_process() -> bool:
+    return _distributed_rank() == 0
+
+
+def _barrier() -> None:
+    if _distributed_active():
+        dist.barrier()
+
+
+def _init_distributed(device: str | None) -> tuple[torch.device, bool]:
+    """Initialize torchrun's process group and select the local CUDA device."""
+
+    requested_world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    if requested_world_size <= 1:
+        return torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu")), False
+    if not torch.cuda.is_available():
+        raise RuntimeError("DDP training requires CUDA; launch without torchrun for a CPU run")
+    if device is not None and str(device).startswith("cpu"):
+        raise ValueError("--device=cpu cannot be used with a multi-process CUDA run")
+    local_rank = int(os.environ.get("LOCAL_RANK", _distributed_rank()))
+    if local_rank < 0 or local_rank >= torch.cuda.device_count():
+        raise ValueError(
+            f"LOCAL_RANK={local_rank} is outside the visible CUDA devices (count={torch.cuda.device_count()})"
+        )
+    torch.cuda.set_device(local_rank)
+    initialized_here = False
+    if not _distributed_active():
+        dist.init_process_group(backend="nccl", init_method="env://")
+        initialized_here = True
+    return torch.device("cuda", local_rank), initialized_here
+
+
+def _destroy_distributed(initialized_here: bool) -> None:
+    if initialized_here and _distributed_active():
+        dist.destroy_process_group()
 
 
 class _TinyTokenizer:
@@ -118,6 +171,9 @@ def build_loaders(
     paths = {"train": data["train_file"], "validation": data["validation_file"], "test": data["test_file"]}
     selected = (split,) if split else ("train", "validation")
     loaders = {}
+    distributed = _distributed_active()
+    rank = _distributed_rank()
+    world_size = _distributed_world_size()
     for name in selected:
         split_data = copy.deepcopy(data)
         limit = max_train_examples if name == "train" else max_validation_examples if name == "validation" else 0
@@ -141,16 +197,34 @@ def build_loaders(
             if name == "train"
             else int(config["training"].get("validation_num_workers", 0))
         )
-        sampling = {"batch_size": batch_size, "shuffle": name == "train"}
-        if name == "train" and config["training"].get("length_bucketing", False):
+        if distributed:
+            multiplier = (
+                int(config["training"].get("length_bucket_multiplier", 50))
+                if config["training"].get("length_bucketing", False)
+                else 1
+            )
             sampling = {
-                "batch_sampler": LengthBucketBatchSampler(
+                "batch_sampler": DistributedBatchSampler(
                     dataset.length_estimates,
                     batch_size,
-                    int(config["training"].get("seed", 42)),
-                    int(config["training"].get("length_bucket_multiplier", 50)),
+                    world_size,
+                    rank,
+                    seed=int(config["training"].get("seed", 42)),
+                    multiplier=multiplier,
+                    shuffle=name == "train",
                 )
             }
+        else:
+            sampling = {"batch_size": batch_size, "shuffle": name == "train"}
+            if name == "train" and config["training"].get("length_bucketing", False):
+                sampling = {
+                    "batch_sampler": LengthBucketBatchSampler(
+                        dataset.length_estimates,
+                        batch_size,
+                        int(config["training"].get("seed", 42)),
+                        int(config["training"].get("length_bucket_multiplier", 50)),
+                    )
+                }
         loaders[name] = DataLoader(
             dataset,
             **sampling,
@@ -159,14 +233,17 @@ def build_loaders(
             collate_fn=collator,
             pin_memory=torch.cuda.is_available(),
         )
-        LOGGER.info(
-            "[data] split=%s | examples=%d | batch=%d | workers=%d | length_bucketing=%s",
-            name,
-            len(dataset),
-            batch_size,
-            workers,
-            "batch_sampler" in sampling,
-        )
+        if _is_main_process():
+            LOGGER.info(
+                "[data] split=%s | examples=%d | batch=%d | workers=%d | length_bucketing=%s | rank=%d/%d",
+                name,
+                len(dataset),
+                batch_size,
+                workers,
+                "batch_sampler" in sampling,
+                rank,
+                world_size,
+            )
     return loaders
 
 
@@ -199,39 +276,65 @@ def train(
     overwrite_output_dir: bool = False,
     output_dir_override: str | None = None,
 ) -> None:
-    if int(os.environ.get("WORLD_SIZE", "1")) > 1:
-        raise ValueError("This AFMR runner is single-process; do not launch it with torchrun/DDP")
-    config = load_config(config_path)
-    config["model"]["dtype"] = "float32"
-    config["model"].setdefault("compute_dtype", "bfloat16")
-    _configure_precision(config)
-    if output_dir_override:
-        config["experiment"]["output_dir"] = output_dir_override
-    checkpoint = resume_checkpoint or str(config["training"].get("resume_checkpoint", "")).strip()
-    if overwrite_output_dir and checkpoint:
-        raise ValueError("--overwrite-output-dir cannot be combined with --resume-checkpoint")
-    output_dir = resolve_path(config["experiment"]["output_dir"], config)
-    config["experiment"]["output_dir"] = str(output_dir)
-    if overwrite_output_dir:
-        _clear_run_artifacts(output_dir)
-    elif not checkpoint and output_dir.exists() and any(output_dir.glob("*.pt")):
-        raise FileExistsError(f"Existing checkpoints in {output_dir}; resume or explicitly use --overwrite-output-dir")
-    seed_everything(int(config["training"].get("seed", 42)))
-    _write_resolved_config(config, output_dir)
-    loaders = build_loaders(
-        config, max_train_examples=max_train_examples, max_validation_examples=max_validation_examples
-    )
-    model = EviSeqAFMR(config)
-    counts = {
-        name: sum(p.numel() for p in module.parameters())
-        for name, module in (("encoder", model.encoder), ("bridge", model.bridge), ("decoder", model.decoder))
-    }
-    LOGGER.info("model parameters=%s total=%d", counts, sum(p.numel() for p in model.parameters()))
-    selected_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-    trainer = AFMRTrainer(model, config, selected_device)
-    if checkpoint:
-        LOGGER.info("resumed AFMR checkpoint: %s", checkpoint)
-    trainer.fit(loaders["train"], loaders.get("validation"), resume_checkpoint=checkpoint or None)
+    selected_device, initialized_here = _init_distributed(device)
+    try:
+        config = load_config(config_path)
+        config["model"]["dtype"] = "float32"
+        config["model"].setdefault("compute_dtype", "bfloat16")
+        _configure_precision(config)
+        if output_dir_override:
+            config["experiment"]["output_dir"] = output_dir_override
+        checkpoint = resume_checkpoint or str(config["training"].get("resume_checkpoint", "")).strip()
+        if overwrite_output_dir and checkpoint:
+            raise ValueError("--overwrite-output-dir cannot be combined with --resume-checkpoint")
+        output_dir = resolve_path(config["experiment"]["output_dir"], config)
+        config["experiment"]["output_dir"] = str(output_dir)
+        if not overwrite_output_dir and not checkpoint and output_dir.exists() and any(output_dir.glob("*.pt")):
+            raise FileExistsError(
+                f"Existing checkpoints in {output_dir}; resume or explicitly use --overwrite-output-dir"
+            )
+        if _is_main_process():
+            if overwrite_output_dir:
+                _clear_run_artifacts(output_dir)
+        _barrier()
+        seed_everything(int(config["training"].get("seed", 42)) + _distributed_rank())
+        if _is_main_process():
+            _write_resolved_config(config, output_dir)
+        _barrier()
+        loaders = build_loaders(
+            config, max_train_examples=max_train_examples, max_validation_examples=max_validation_examples
+        )
+        model = EviSeqAFMR(config).to(device=selected_device, dtype=torch.float32)
+        counts = {
+            name: sum(p.numel() for p in module.parameters())
+            for name, module in (("encoder", model.encoder), ("bridge", model.bridge), ("decoder", model.decoder))
+        }
+        if _is_main_process():
+            LOGGER.info(
+                "model parameters=%s total=%d | distributed=%s world_size=%d",
+                counts,
+                sum(p.numel() for p in model.parameters()),
+                _distributed_active(),
+                _distributed_world_size(),
+            )
+        if _distributed_active():
+            model = DistributedDataParallel(
+                model,
+                device_ids=[selected_device.index],
+                output_device=selected_device.index,
+                broadcast_buffers=False,
+                # Warm-up freezes the encoder/decoder and full fine-tuning
+                # unfreezes them again, so the used-parameter set changes
+                # between stages.
+                find_unused_parameters=True,
+            )
+        trainer = AFMRTrainer(model, config, selected_device)
+        if checkpoint and _is_main_process():
+            LOGGER.info("resumed AFMR checkpoint: %s", checkpoint)
+        trainer.fit(loaders["train"], loaders.get("validation"), resume_checkpoint=checkpoint or None)
+        _barrier()
+    finally:
+        _destroy_distributed(initialized_here)
 
 
 def evaluate(
@@ -249,6 +352,10 @@ def evaluate(
     top_p: float | None = None,
     system_prompt: str | None = None,
 ) -> dict[str, Any]:
+    if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+        raise ValueError(
+            "Distributed evaluation is not enabled; run evaluation once on one visible GPU after DDP training"
+        )
     config = load_config(config_path)
     LOGGER.info(
         "[model] config=%s | encoder=%s | decoder=%s",

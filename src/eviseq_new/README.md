@@ -168,7 +168,8 @@ Preparation is skipped when the canonical PubMed files already exist. Set
 local `evaluate_rouge.py` wrapper to append the Perl ROUGE-1.5.5 audit.
 
 To run the same PubMed recipe with a local Nemotron embedding encoder, use the
-dedicated single-GPU wrapper. It defaults to the server folder
+dedicated wrapper. It runs one process on one GPU or launches DDP when two
+GPUs are listed in `CUDA_VISIBLE_DEVICES`. It defaults to the server folder
 `/workspace/storage-shared/nlp/dungdx4/BERT/Nemotron-3-Embed-1B-BF16`; set
 `ENCODER_MODEL` to the actual local folder when the checkpoint is stored
 elsewhere (the older `llama-nemotron-embed-1b-v2` folder is also accepted):
@@ -183,6 +184,17 @@ PUBMED_SOURCE_DIR=/path/to/pubmed \
 TRAIN_BATCH_SIZE=16 \
 GRADIENT_ACCUMULATION_STEPS=6 \
 EVAL_BATCH_SIZE=16 \
+bash scripts/run_pubmed_nemotron.sh
+```
+
+For two GPUs, change only the visible-device list; the wrapper changes the
+default accumulation from 6 to 3 so the global effective batch remains 96:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 \
+ENCODER_MODEL=/path/to/Nemotron-3-Embed-1B-BF16 \
+DECODER_MODEL=/path/to/Qwen3-0.6B \
+PUBMED_SOURCE_DIR=/path/to/pubmed \
 bash scripts/run_pubmed_nemotron.sh
 ```
 
@@ -248,7 +260,7 @@ The token-wise graph (`afmr_token_depth_lowrank_v3`) is intentionally incompatib
 
 Training stores parameters, gradients and AdamW moments in FP32; `model.compute_dtype: bfloat16` enables CUDA BF16 autocast for the heavy operations. CPU tests use FP32. This avoids directly accumulating tiny updates into BF16 parameters; see [Mixed Precision Training](https://arxiv.org/abs/1710.03740) for the FP32 accumulated-update principle. It is not all-FP32 matrix computation. CUDA evaluation loads the backbone/cross-attention in `compute_dtype`, keeping BF16 KV caches by default; legacy configs retain their configured inference dtype.
 
-Non-reentrant backbone checkpointing, token-weighted gradient accumulation (including a partial final window), and per-stage linear LR decay remain enabled. Optimizer moments are carried from warm-up to full fine-tuning. LM-head CE is computed in checkpointed token chunks instead of retaining full `[B,T,V]` logits. Encoder KV caching is disabled; only the requested depth taps are captured. The runner currently supports one GPU/process and rejects multi-process launches. FP32 training storage requires more VRAM than direct BF16 updates; a B200 smoke/profile is necessary before reusing the maximum old batch size.
+Non-reentrant backbone checkpointing, token-weighted gradient accumulation (including a partial final window), and per-stage linear LR decay remain enabled. Optimizer moments are carried from warm-up to full fine-tuning. LM-head CE is computed in checkpointed token chunks instead of retaining full `[B,T,V]` logits. Encoder KV caching is disabled; only the requested depth taps are captured. The PubMed Nemotron wrapper supports one or two GPUs with DDP; evaluation runs once on the first visible GPU so the prediction JSONL remains ordered. FP32 training storage requires more VRAM than direct BF16 updates; a B200 smoke/profile is necessary before reusing the maximum old batch size.
 
 Training prints reusable, machine-readable progress lines with stage, epoch
 percentage, epoch/total optimizer steps, token-weighted CE, gradient norm,

@@ -12,6 +12,14 @@ import numpy as np
 import torch
 
 
+def _unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
+    """Return the underlying module for DDP/DataParallel checkpoints."""
+
+    while isinstance(model, (torch.nn.parallel.DistributedDataParallel, torch.nn.DataParallel)):
+        model = model.module
+    return model
+
+
 def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
     arch = config["architecture"]
     decoder = config["decoder"]
@@ -53,6 +61,7 @@ def save_checkpoint(
     elapsed_train_seconds: float | None = None,
     scheduler: Any = None,
 ) -> None:
+    model = _unwrap_model(model)
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     state = {
@@ -96,7 +105,7 @@ def _embedding_shape_mismatches(
     actionable encoder/decoder configuration error.
     """
 
-    current_model = model.state_dict()
+    current_model = _unwrap_model(model).state_dict()
     mismatches = []
     for key in (
         "encoder.model.embed_tokens.weight",
@@ -126,6 +135,7 @@ def load_checkpoint(
     restore_rng: bool = True,
 ) -> dict[str, Any]:
     state = torch.load(Path(path), map_location="cpu", weights_only=False)
+    model = _unwrap_model(model)
     if config is not None and state.get("architecture_spec") != architecture_spec(config):
         raise ValueError("Checkpoint architecture_spec does not match the active AFMR configuration")
     mismatches = _embedding_shape_mismatches(state["model"], model)

@@ -5,6 +5,12 @@ from typing import Any
 import torch
 
 
+def _unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
+    while isinstance(model, (torch.nn.parallel.DistributedDataParallel, torch.nn.DataParallel)):
+        model = model.module
+    return model
+
+
 def _component(name: str) -> str:
     if ".cross." in name or name.endswith("cross_gate") or ".cross_norm." in name or ".grounded_copy." in name:
         return "cross_attention"
@@ -17,7 +23,7 @@ def _component(name: str) -> str:
 def set_stage_trainability(model: torch.nn.Module, stage: str) -> None:
     if stage not in {"interface_warmup", "full_finetune"}:
         raise ValueError(f"Unknown AFMR training stage: {stage}")
-    for name, parameter in model.named_parameters():
+    for name, parameter in _unwrap_model(model).named_parameters():
         parameter.requires_grad = stage == "full_finetune" or _component(name) in {"bridge", "cross_attention"}
 
 
@@ -26,7 +32,7 @@ def build_optimizer(model: torch.nn.Module, config: dict[str, Any], stage: str) 
     prefix = "warmup" if stage == "interface_warmup" else "full"
     groups = {}
     seen = set()
-    for name, parameter in model.named_parameters():
+    for name, parameter in _unwrap_model(model).named_parameters():
         if not parameter.requires_grad:
             continue
         if id(parameter) in seen:
