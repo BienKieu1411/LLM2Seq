@@ -38,6 +38,22 @@ def test_pubmed_recipe_matches_t5gemma_prompt_and_decode_contract():
     assert config["generation"]["top_p"] == 1.0
 
 
+def test_arxiv_recipe_uses_long_context_and_greedy_decode_contract():
+    config = load_config(Path(__file__).parents[1] / "configs" / "afmr_arxiv.yaml")
+    assert config["data"]["encoder_prefix"] == (
+        "Summarize the following scientific research article into a concise, factual abstract. "
+        "Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
+    )
+    assert config["data"]["max_source_length"] == 8192
+    assert config["data"]["max_target_length"] == 512
+    assert config["data"]["detokenize"] is True
+    assert config["training"]["interface_warmup_epochs"] + config["training"]["full_finetune_epochs"] == 5
+    assert config["generation"]["do_sample"] is False
+    assert config["generation"]["temperature"] == 0.0
+    assert config["generation"]["top_k"] == 0
+    assert config["generation"]["top_p"] == 1.0
+
+
 def test_sampling_config_requires_positive_temperature():
     config = load_config(Path(__file__).parents[1] / "configs" / "afmr_smoke.yaml")
     config["generation"].update(do_sample=True, temperature=0.0)

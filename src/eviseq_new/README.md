@@ -181,6 +181,35 @@ PYTHON=/absolute/path/to/bienkieu_env/bin/python \
 
 The queue now writes to `runs/afmr/pubmed_pair_afmr_value_anchor_copy`, leaving earlier results untouched. Set `AFMR_GROUNDED_COPY=false` for the value-anchor LM-only control in `pubmed_pair_afmr_value_anchor_lm`. Additionally set `AFMR_ARCHITECTURE=afmr_v1` for the shared-memory LM-only control in `pubmed_pair_afmr_v1_lm`. Numerical/text fixes remain enabled. The queue still runs PPLX then Qwen3-Embedding on the same GPU. For a single experiment, use `run_afmr.sh train` with one task config instead.
 
+For ArXiv, `scripts/run_arxiv.sh` prepares the canonical ArXiv JSONL tree
+when it is missing, materializes a config with local model/data paths, trains
+the PPLX-to-Qwen AFMR model, and evaluates `last.pt` on the test split. It
+uses an 8,192-token source budget, the scientific source instruction used by
+the decoder baseline, greedy decoding (`temperature: 0`, `top_k: 0`,
+`top_p: 1`), and conservative long-context defaults of batch 8 × accumulation
+12. The wrapper is single-GPU; resource settings are environment overrides:
+
+```bash
+cd src/eviseq_new
+PYTHON=python3 \
+CUDA_VISIBLE_DEVICES=0 \
+ARXIV_SOURCE_DIR=/data/arxiv \
+PPLX_ENCODER=/models/pplx-embed-v1-0.6b \
+DECODER_MODEL=/models/Qwen3-0.6B \
+TRAIN_BATCH_SIZE=8 \
+GRADIENT_ACCUMULATION_STEPS=12 \
+EVAL_BATCH_SIZE=8 \
+bash scripts/run_arxiv.sh
+```
+
+Set `OVERWRITE_OUTPUT_DIR=true` only for an intentional restart. Set
+`RESUME_CHECKPOINT=/path/to/last.pt` to continue a compatible run. Prepared
+files go to `ARXIV_DATA_DIR` (default `datasets/arxiv`), the generated config
+is kept under the run directory, and logs are written separately under
+`logs/afmr` so progress output cannot corrupt prediction JSONL. Set
+`ROUGE155_SCRIPT` to the local ROUGE wrapper to run Perl ROUGE after the
+built-in evaluation.
+
 The runtime loads models only for `train` or `evaluate`; importing AFMR and running tests does not download anything. Checkpoints are structurally guarded: changing batch size, generation batch size, data paths, or model folder location is allowed, while changing AFMR ranks, windows, depth taps, or cross-attention layout is rejected.
 
 The benchmark recipes retain the exact T5Gemma encoder/source instruction. The Qwen decoder receives a task instruction through its own native chat template with `enable_thinking=False`, an optional system message, an assistant generation prompt, and a short output prefix. That prefix is identical during training and inference and excluded from supervised labels and returned predictions. No reference is used to construct it. For chat prompts, repetition/n-gram constraints apply only to generated summary tokens, not the instruction. Greedy decoding retains the corresponding T5Gemma recipe's penalties and length limits. Report the different decoder conditioning in experiments; do not describe the full input protocol as identical. Legacy configs without `decoder_chat_template` retain their literal prompt/BOS behavior.
