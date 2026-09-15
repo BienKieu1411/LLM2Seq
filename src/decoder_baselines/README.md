@@ -52,6 +52,20 @@ override `data_root` in a copied suite YAML.  Use `--dry-run` to materialize
 and inspect all commands without loading a model.  Use `--continue-on-error`
 only when a failed run should not stop the matrix.
 
+The suite writes results under `runs/decoder_baselines/`. Each model/dataset
+pair has its own directory, for example
+`qwen3_0_6b__pubmed/`, containing `final_model/`, `trainer_state.json`,
+`run_manifest.json`, `test_predictions.jsonl` and
+`test_predictions.metrics.json`. Resolved per-run YAML files are kept in
+`runs/decoder_baselines/.configs/`, and the matrix status is appended to
+`runs/decoder_baselines/suite_status.jsonl`.
+
+Training loads the local directory resolved from the model's `path_env` or
+`MODEL_ROOT/local_dir`. Standard models use `AutoModelForCausalLM`; Nemotron
+uses `AutoModel` with `dlm_paradigm: autoregressive`. Evaluation loads the
+checkpoint saved in that pair's `final_model/`, not the original base
+directory. All tokenizer and weight loads use `local_files_only: true`.
+
 Each JSONL row must contain the configured source and target fields.  An ID
 field is optional: when `id_field` is absent from a row, the loader assigns a
 stable file-local ID such as `row-00000001` for the prediction JSONL.
@@ -90,7 +104,7 @@ stops after evaluation. Nemotron is evaluated in-process. Set `VLLM_BASE_URL`
 to use an already-running service for the standard decoder models;
 the service model must match the checkpoint being evaluated. Use
 `VLLM_BATCH_SIZE=32` (or another value appropriate for GPU memory) to increase
-the HTTP request batch size independently from the training batch size. The
+the HTTP request batch size independently from the training batch size.
 Nemotron does not require a vLLM service for reference evaluation.
 
 Every evaluation prints `[eval] batch ... ETA=...` and a final
@@ -116,7 +130,8 @@ CUDA_VISIBLE_DEVICES=1 python3 evaluate.py \
 ```
 
 This mode uses the suite's local model path environment variable, canonical
-EviSeq data files, prompt, context limits and per-model generation batch size;
+EviSeq data files, prompt, context limits and the resolved model/dataset
+generation batch size;
 it does not write a temporary config. For an existing service, replace
 `--start-vllm-service` with `--no-start-vllm-service` and set
 `VLLM_BASE_URL=http://host:8000/v1`. Use `--backend local` only when you need
