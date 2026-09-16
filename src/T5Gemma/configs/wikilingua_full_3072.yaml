@@ -47,6 +47,9 @@ training:
   logging_steps: 10
   eval_strategy: "no"
   seed: 42
+  # Trainer reuses the torchrun process group when CUDA_VISIBLE_DEVICES=0,1.
+  ddp_find_unused_parameters: false
+  ddp_backend: nccl
 
 data:
   train_file: T5Gemma/data/processed/train.jsonl

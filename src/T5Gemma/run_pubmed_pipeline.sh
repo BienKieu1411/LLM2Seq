@@ -65,21 +65,18 @@ run_one() {
   local config="$2"
   local run_dir="$3"
   local eval_dir="$4"
-  local -a train_args
   local train_log
   local eval_log
-
-  train_args=(--config "${config}")
-  if [[ "${OVERWRITE_OUTPUT_DIR,,}" == "true" || "${OVERWRITE_OUTPUT_DIR}" == "1" || "${OVERWRITE_OUTPUT_DIR,,}" == "yes" ]]; then
-    train_args+=(--overwrite-output-dir)
-  fi
 
   train_log="${PUBMED_LOG_DIR}/$(date +%Y%m%d_%H%M%S)_${scale}_train.log"
   echo "=== Full fine-tune T5Gemma ${scale} on PubMed (4096 source tokens) ==="
   echo "Config: ${config}"
   echo "Log: ${train_log}"
-  "${PYTHON_BIN}" "${T5GEMMA_ROOT}/scripts/train_full.py" \
-    "${train_args[@]}" \
+  # Route training through train.sh so CUDA_VISIBLE_DEVICES=0,1 launches
+  # torchrun/DDP.  The config is passed explicitly because this wrapper runs
+  # two different PubMed recipes in one invocation.
+  bash "${T5GEMMA_ROOT}/scripts/train.sh" \
+    --config "${config}" \
     2>&1 | tee "${train_log}"
 
   eval_log="${PUBMED_LOG_DIR}/$(date +%Y%m%d_%H%M%S)_${scale}_eval.log"

@@ -11,11 +11,13 @@ import os
 import random
 import shutil
 import sys
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import yaml
 from torch.utils.data import Dataset
 from transformers import (
@@ -59,6 +61,80 @@ def setup_logging() -> None:
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
+    # Rank zero owns the human-readable log.  Worker ranks still emit
+    # warnings and errors, but avoid duplicating every progress message.
+    if distributed_world_size() > 1 and not is_main_process():
+        logging.getLogger().setLevel(logging.WARNING)
+
+
+def distributed_world_size() -> int:
+    """Return the world size supplied by torchrun, or one for a local run."""
+
+    try:
+        world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    except ValueError as exc:
+        raise ValueError("WORLD_SIZE must be an integer") from exc
+    if world_size < 1:
+        raise ValueError(f"WORLD_SIZE must be positive, got {world_size}")
+    return world_size
+
+
+def distributed_rank() -> int:
+    """Return the global rank supplied by torchrun."""
+
+    try:
+        rank = int(os.environ.get("RANK", "0"))
+    except ValueError as exc:
+        raise ValueError("RANK must be an integer") from exc
+    if rank < 0:
+        raise ValueError(f"RANK must be non-negative, got {rank}")
+    return rank
+
+
+def is_main_process() -> bool:
+    return distributed_world_size() == 1 or distributed_rank() == 0
+
+
+def initialize_distributed() -> bool:
+    """Initialize the torchrun process group before Trainer is constructed.
+
+    Initializing here lets rank zero perform output-directory setup once and
+    synchronize the other ranks before they load the model.  Transformers'
+    Trainer/Accelerate reuses an already initialized process group.
+    """
+
+    world_size = distributed_world_size()
+    if world_size == 1:
+        return False
+    if not torch.cuda.is_available():
+        raise RuntimeError("Two-GPU T5Gemma fine-tuning requires CUDA")
+    if not dist.is_available():
+        raise RuntimeError("This PyTorch build does not include torch.distributed")
+    local_rank = int(os.environ.get("LOCAL_RANK", distributed_rank()))
+    device_count = torch.cuda.device_count()
+    if local_rank < 0 or local_rank >= device_count:
+        raise RuntimeError(f"LOCAL_RANK={local_rank} is outside the {device_count} visible CUDA devices")
+    torch.cuda.set_device(local_rank)
+    if not dist.is_initialized():
+        timeout_minutes = int(os.environ.get("T5GEMMA_DDP_TIMEOUT_MINUTES", "30"))
+        if timeout_minutes <= 0:
+            raise ValueError("T5GEMMA_DDP_TIMEOUT_MINUTES must be positive")
+        dist.init_process_group(
+            backend=os.environ.get("T5GEMMA_DDP_BACKEND", "nccl"),
+            timeout=timedelta(minutes=timeout_minutes),
+        )
+        return True
+    return False
+
+
+def distributed_barrier() -> None:
+    if distributed_world_size() > 1 and dist.is_available() and dist.is_initialized():
+        dist.barrier()
+
+
+def destroy_distributed(initialized_here: bool) -> None:
+    if initialized_here and dist.is_available() and dist.is_initialized():
+        dist.destroy_process_group()
 
 
 def set_seed(seed: int) -> None:
@@ -129,6 +205,7 @@ def torch_dtype_from_config(name: str) -> torch.dtype:
 
 def make_training_arguments(cfg: Dict[str, Any], output_dir: Path) -> Seq2SeqTrainingArguments:
     train_cfg = cfg["training"]
+    world_size = distributed_world_size()
     kwargs: Dict[str, Any] = {
         "output_dir": str(output_dir / "trainer_state"),
         "num_train_epochs": int(train_cfg["num_train_epochs"]),
@@ -162,6 +239,13 @@ def make_training_arguments(cfg: Dict[str, Any], output_dir: Path) -> Seq2SeqTra
     }
     params = inspect.signature(Seq2SeqTrainingArguments.__init__).parameters
     valid_kwargs = {k: v for k, v in kwargs.items() if k in params}
+    if world_size > 1:
+        if "ddp_find_unused_parameters" in params:
+            valid_kwargs["ddp_find_unused_parameters"] = bool(train_cfg.get("ddp_find_unused_parameters", False))
+        if "ddp_backend" in params and train_cfg.get("ddp_backend"):
+            valid_kwargs["ddp_backend"] = str(train_cfg["ddp_backend"])
+        if "ddp_timeout" in params and train_cfg.get("ddp_timeout") is not None:
+            valid_kwargs["ddp_timeout"] = int(train_cfg["ddp_timeout"])
     # Full checkpoints are large. Evaluation is performed once from final_model
     # by the pipeline, not implicitly at every training epoch.
     eval_strat = str(train_cfg.get("eval_strategy", "no"))
@@ -208,6 +292,13 @@ def log_model_summary(model: torch.nn.Module, cfg: Dict[str, Any], train_size: i
         "Effective batch:  %s",
         int(cfg["training"]["per_device_train_batch_size"]) * int(cfg["training"]["gradient_accumulation_steps"]),
     )
+    logging.info("DDP world size:   %s", distributed_world_size())
+    logging.info(
+        "Global effective batch: %s",
+        int(cfg["training"]["per_device_train_batch_size"])
+        * int(cfg["training"]["gradient_accumulation_steps"])
+        * distributed_world_size(),
+    )
     logging.info("Learning rate:    %s", cfg["training"]["learning_rate"])
     logging.info("Trainable params: %s", f"{trainable:,}")
     logging.info("Total params:     %s", f"{total:,}")
@@ -249,24 +340,37 @@ def main() -> None:
         torch.backends.cudnn.allow_tf32 = True
 
     output_dir = resolve_path(cfg["project"]["output_dir"], base=project_root)
+    # Validate the destination before initializing DDP so every rank fails
+    # consistently instead of leaving another rank blocked at a barrier.
     if output_dir.exists() and any(output_dir.iterdir()):
         if not args.overwrite_output_dir:
             raise FileExistsError(
                 f"Refusing to mix a new T5Gemma run with existing artifacts in {output_dir}. "
                 "Use a fresh project.output_dir or pass --overwrite-output-dir."
             )
-        shutil.rmtree(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    distributed_initialized = initialize_distributed()
+    main_process = is_main_process()
+    if main_process:
+        if args.overwrite_output_dir and output_dir.exists():
+            shutil.rmtree(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+    distributed_barrier()
     running_marker = output_dir / "RUNNING"
-    running_marker.write_text(
-        json.dumps(
-            {"config": str(config_path.resolve()), "status": "running"},
-            ensure_ascii=False,
+    if main_process:
+        running_marker.write_text(
+            json.dumps(
+                {
+                    "config": str(config_path.resolve()),
+                    "status": "running",
+                    "world_size": distributed_world_size(),
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
         )
-        + "\n",
-        encoding="utf-8",
-    )
-    safe_copy_config(config_path, output_dir)
+        safe_copy_config(config_path, output_dir)
+    distributed_barrier()
 
     token = os.environ.get("HF_TOKEN")
     model_name = cfg["model"]["model_name_or_path"]
@@ -348,7 +452,8 @@ def main() -> None:
         pad_to_multiple_of=8,
     )
 
-    log_model_summary(model, cfg, len(train_dataset), len(eval_dataset) if eval_dataset else 0)
+    if main_process:
+        log_model_summary(model, cfg, len(train_dataset), len(eval_dataset) if eval_dataset else 0)
     training_args = make_training_arguments(cfg, output_dir)
     trainer_kwargs = {
         "model": model,
@@ -366,36 +471,41 @@ def main() -> None:
 
     logging.info("Starting full fine-tuning of all T5Gemma parameters...")
     train_result = trainer.train()
-    logging.info("Training complete: %s", train_result.metrics)
+    distributed_barrier()
+    if main_process:
+        logging.info("Training complete: %s", train_result.metrics)
 
-    final_folder = output_dir / "final_model"
-    final_folder.mkdir(parents=True, exist_ok=True)
-    trainer.save_model(str(final_folder))
-    tokenizer.save_pretrained(final_folder)
-    safe_copy_config(config_path, final_folder)
-    write_json(
-        final_folder / "checkpoint_manifest.json",
-        {
-            "tag": "final",
-            "global_step": int(trainer.state.global_step),
-            "epoch": float(trainer.state.epoch or 0.0),
-            "base_model": model_name,
-            "stores_base_model_weights": True,
-            "checkpoint_type": "full_finetuned_seq2seq_model",
-            "trainable_ratio_percent": 100.0,
-            "unique_parameter_elements": unique_parameter_elements,
-            "metrics": train_result.metrics,
-            "data": cfg.get("data", {}),
-            "generation": cfg.get("generation", {}),
-        },
-    )
-    write_json(output_dir / "train_metrics.json", train_result.metrics)
-    running_marker.unlink(missing_ok=True)
+        final_folder = output_dir / "final_model"
+        final_folder.mkdir(parents=True, exist_ok=True)
+        trainer.save_model(str(final_folder))
+        tokenizer.save_pretrained(final_folder)
+        safe_copy_config(config_path, final_folder)
+        write_json(
+            final_folder / "checkpoint_manifest.json",
+            {
+                "tag": "final",
+                "global_step": int(trainer.state.global_step),
+                "epoch": float(trainer.state.epoch or 0.0),
+                "base_model": model_name,
+                "stores_base_model_weights": True,
+                "checkpoint_type": "full_finetuned_seq2seq_model",
+                "trainable_ratio_percent": 100.0,
+                "unique_parameter_elements": unique_parameter_elements,
+                "metrics": train_result.metrics,
+                "data": cfg.get("data", {}),
+                "generation": cfg.get("generation", {}),
+                "world_size": distributed_world_size(),
+            },
+        )
+        write_json(output_dir / "train_metrics.json", train_result.metrics)
+        running_marker.unlink(missing_ok=True)
 
-    epochs_dir = output_dir / "epochs"
-    if epochs_dir.exists():
-        shutil.rmtree(epochs_dir, ignore_errors=True)
-        logging.info("Deleted all epoch checkpoints after phase completion to save disk space.")
+        epochs_dir = output_dir / "epochs"
+        if epochs_dir.exists():
+            shutil.rmtree(epochs_dir, ignore_errors=True)
+            logging.info("Deleted all epoch checkpoints after phase completion to save disk space.")
+    distributed_barrier()
+    destroy_distributed(distributed_initialized)
 
 
 if __name__ == "__main__":
