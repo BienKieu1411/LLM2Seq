@@ -25,6 +25,9 @@ case "${MODE}" in
   t5gemma-pubmed)
     exec bash "${SRC_ROOT}/T5Gemma/run_pubmed_pipeline.sh" "$@"
     ;;
+  t5gemma-arxiv)
+    exec bash "${SRC_ROOT}/T5Gemma/run_arxiv_pipeline.sh" "$@"
+    ;;
   t5gemma-lrsum)
     exec bash "${SRC_ROOT}/T5Gemma/run_lrsum_pipeline.sh" "$@"
     ;;
@@ -37,6 +40,7 @@ Project launcher
   bash run.sh t5gemma-wiki-4b
   bash run.sh t5gemma-cnndm [all|1b|4b]
   bash run.sh t5gemma-pubmed [all|1b|4b]
+  bash run.sh t5gemma-arxiv
   bash run.sh t5gemma-lrsum
 
 The maintained architecture and all task commands are under eviseq_v2.

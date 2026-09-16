@@ -4,18 +4,27 @@ set -euo pipefail
 # Preserve caller overrides while load_env.sh reads the optional env file.
 # This lets the PubMed wrapper select a config without editing env.txt.
 CONFIG_OVERRIDE=""
-if [[ "${1:-}" == "--config" ]]; then
-  if [[ -z "${2:-}" ]]; then
-    echo "Usage: $0 [--config CONFIG]" >&2
-    exit 2
-  fi
-  CONFIG_OVERRIDE="$2"
-  shift 2
-fi
-if [[ $# -gt 0 ]]; then
-  echo "Usage: $0 [--config CONFIG]" >&2
-  exit 2
-fi
+OVERWRITE_OVERRIDE=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --config)
+      if [[ -z "${2:-}" ]]; then
+        echo "Usage: $0 [--config CONFIG] [--overwrite-output-dir]" >&2
+        exit 2
+      fi
+      CONFIG_OVERRIDE="$2"
+      shift 2
+      ;;
+    --overwrite-output-dir)
+      OVERWRITE_OVERRIDE=true
+      shift
+      ;;
+    *)
+      echo "Usage: $0 [--config CONFIG] [--overwrite-output-dir]" >&2
+      exit 2
+      ;;
+  esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/load_env.sh"
@@ -24,6 +33,10 @@ cd "${PROJECT_ROOT}"
 if [[ -n "${CONFIG_OVERRIDE}" ]]; then
   CONFIG="${CONFIG_OVERRIDE}"
   export CONFIG
+fi
+if [[ "${OVERWRITE_OVERRIDE}" == "true" ]]; then
+  OVERWRITE_OUTPUT_DIR=true
+  export OVERWRITE_OUTPUT_DIR
 fi
 
 visible_gpu_count=1
