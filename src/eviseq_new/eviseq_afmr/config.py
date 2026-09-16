@@ -118,6 +118,7 @@ def validate_config(config: dict[str, Any]) -> None:
         architecture,
         {
             "name",
+            "bridge_mode",
             "controller_dim",
             "depth_taps",
             "depth_rank",
@@ -139,6 +140,8 @@ def validate_config(config: dict[str, Any]) -> None:
     )
     if architecture.get("name") not in {"afmr_v1", "afmr_value_anchor"}:
         raise ValueError("architecture.name must be afmr_v1 or afmr_value_anchor")
+    if architecture.get("bridge_mode", "afmr") not in {"afmr", "direct_projection"}:
+        raise ValueError("architecture.bridge_mode must be afmr or direct_projection")
     taps = int(architecture.get("depth_taps", 0))
     if taps < 0:
         raise ValueError("architecture.depth_taps must be non-negative")

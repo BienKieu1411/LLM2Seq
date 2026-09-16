@@ -17,6 +17,8 @@ encoder:
 
 architecture:
   name: afmr_value_anchor
+  # Set to direct_projection only for the controlled w/o-bridge ablation.
+  # The default AFMR path remains unchanged when this key is omitted.
   controller_dim: 256
   depth_taps: 4
   depth_rank: 128

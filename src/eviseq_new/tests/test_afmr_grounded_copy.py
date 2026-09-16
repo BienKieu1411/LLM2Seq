@@ -25,6 +25,21 @@ def setup_model():
     return config, model, next(iter(loader)), loader.collate_fn.decoder_tokenizer
 
 
+def test_grounded_copy_ablation_uses_plain_ce_and_no_alignment_batch_fields():
+    config = load_config(Path(__file__).parents[1] / "configs/afmr_smoke.yaml")
+    config["decoder"]["grounded_copy"]["enabled"] = False
+    model = EviSeqAFMR(config)
+    loader = build_loaders(config, max_train_examples=2)["train"]
+    batch = next(iter(loader))
+    assert model.decoder.grounded_copy is None
+    assert not any(key in batch for key in COPY_INPUT_KEYS)
+    output = model(
+        **{key: value for key, value in batch.items() if isinstance(value, torch.Tensor)},
+        return_logits=True,
+    )
+    assert output.loss is not None and torch.isfinite(output.loss)
+
+
 def forward(model, batch, logits=False):
     return model(
         **{key: value for key, value in batch.items() if isinstance(value, torch.Tensor)}, return_logits=logits

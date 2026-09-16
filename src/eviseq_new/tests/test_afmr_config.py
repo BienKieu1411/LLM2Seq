@@ -61,6 +61,23 @@ def test_sampling_config_requires_positive_temperature():
         validate_config(config)
 
 
+def test_direct_projection_bridge_ablation_is_valid_and_checkpoint_distinguishable():
+    from eviseq_afmr.training.checkpoint import architecture_spec
+
+    config = load_config(Path(__file__).parents[1] / "configs" / "afmr_smoke.yaml")
+    config["architecture"]["bridge_mode"] = "direct_projection"
+    validate_config(config)
+    assert config["architecture"]["bridge_mode"] == "direct_projection"
+    assert architecture_spec(config)["bridge_mode"] == "direct_projection"
+
+
+def test_unknown_bridge_mode_is_rejected():
+    config = load_config(Path(__file__).parents[1] / "configs" / "afmr_smoke.yaml")
+    config["architecture"]["bridge_mode"] = "unknown"
+    with pytest.raises(ValueError, match="bridge_mode"):
+        validate_config(config)
+
+
 @pytest.mark.parametrize(
     ("afmr_name", "t5_name", "total_epochs"),
     (

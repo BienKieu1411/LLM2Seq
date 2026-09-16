@@ -146,6 +146,7 @@ config["data"].update(
         "test_file": str((Path(data_dir) / "test.jsonl").expanduser().resolve()),
     }
 )
+config["data"]["detokenize"] = True
 if model_path:
     config["model"]["model_name_or_path"] = str(Path(model_path).expanduser().resolve())
 config["training"].update(

@@ -50,6 +50,17 @@ The head has **393,473 parameters** at hidden width 1024 and key rank 128. Conte
 
 For an architectural control set `decoder.grounded_copy.enabled: false` and use a separate run directory. The queue exposes `AFMR_GROUNDED_COPY=false`. Keep prompt, preprocessing, FP32 updates, seed, epochs and decoding fixed; legacy resolved configs without this section keep the LM-only graph. The new head does not change random initialization of shared modules at a fixed seed. An old checkpoint cannot be evaluated with copying simply enabled in YAML: the new head must be trained, and architecture checks reject this mismatch. Compare validation results before a final held-out test comparison; repeated test-guided development must be disclosed.
 
+For the bridge ablation, set `architecture.bridge_mode: direct_projection` in a
+fresh config and output directory. This keeps the pretrained encoder and the
+decoder cross-attention path, but maps the final encoder states through only a
+width projection; AFMR's controller, depth/feature residuals, focus prior,
+temperature and value anchor are absent. Grounded copy remains enabled unless
+it is disabled separately, so the bridge contribution is isolated. The
+checkpoint architecture spec records this mode and refuses to load it as a
+full AFMR checkpoint. The ArXiv and PubMed runners expose the same control via
+`AFMR_BRIDGE_MODE=direct_projection`; use `AFMR_GROUNDED_COPY=false` for the
+independent no-copy condition.
+
 ## Offline smoke test
 
 The offline smoke uses the actual AFMR/copy graph with tiny randomly initialized Qwen backbones and no model downloads. It enables grounded copy explicitly and checks CE gradients, warm-up/full optimizer updates, dense/chunked CE parity, checkpoint round-trip, greedy evaluation and prediction resume. The legacy `afmr_smoke.yaml` fixture disables copy for backward-compatibility tests; the smoke command enables it:

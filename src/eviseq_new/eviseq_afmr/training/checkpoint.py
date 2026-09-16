@@ -41,6 +41,11 @@ def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
         "cross_attention_every": int(decoder.get("cross_attention_every", 1)),
         "cross_gate_max": float(decoder.get("cross_gate_max", 0.0)),
     }
+    # Keep legacy AFMR checkpoint specs byte-for-byte compatible when the
+    # default bridge is used. Ablation configs opt in explicitly so a direct
+    # projection checkpoint cannot be loaded as a full AFMR bridge.
+    if "bridge_mode" in arch:
+        spec["bridge_mode"] = str(arch["bridge_mode"])
     copy_config = decoder.get("grounded_copy", {})
     if copy_config.get("enabled", False):
         spec["grounded_copy"] = {"alignment": "char_overlap_v1", "key_dim": int(copy_config.get("key_dim", 128))}

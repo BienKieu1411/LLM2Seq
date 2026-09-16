@@ -84,6 +84,37 @@ def test_depth_rank_is_actual_bottleneck():
     assert bridge.feature_up.weight.shape == (32, 8)
 
 
+def test_direct_projection_is_controlled_without_bridge_variant():
+    architecture = copy.deepcopy(config()["architecture"])
+    architecture["bridge_mode"] = "direct_projection"
+    bridge = AdaptiveFullMemoryResidualBridge(24, 32, architecture)
+    assert bridge.bridge_mode == "direct_projection"
+    assert not hasattr(bridge, "controller")
+
+    final = torch.randn(2, 7, 24, requires_grad=True)
+    taps = (torch.randn_like(final), final.detach().clone())
+    attention_mask = torch.tensor(
+        [[True, True, True, True, True, False, False], [True, True, True, True, True, True, True]]
+    )
+    content_mask = attention_mask.clone()
+    content_mask[:, 0] = False
+    output = bridge(
+        EncoderState(final, taps, attention_mask, content_mask),
+        torch.randn(2, 3, 32),
+        torch.ones(2, 3, dtype=torch.bool),
+        torch.full((2,), 32.0),
+    )
+    assert output.value_memory is None
+    assert output.memory.shape == (2, 7, 32)
+    assert output.source_bias.shape == (2, 7)
+    assert output.source_bias.eq(0).all()
+    assert output.controller.shape == (2, architecture["controller_dim"])
+    loss = output.memory.square().sum()
+    loss.backward()
+    assert bridge.direct_projection.weight.grad is not None
+    assert bridge.direct_projection.weight.grad.abs().sum() > 0
+
+
 def test_depth_readout_is_tokenwise_and_reads_each_candidate():
     bridge = AdaptiveFullMemoryResidualBridge(24, 24, config()["architecture"])
     controller = torch.zeros(1, bridge.controller_dim)

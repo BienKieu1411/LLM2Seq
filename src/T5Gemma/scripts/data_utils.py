@@ -23,6 +23,30 @@ class SummarizationRecord:
     target: str
 
 
+_DETOKENIZE_SLOW_RE = re.compile(
+    r"(?:``|''|[^\S \n]|\s{2,}|^\s|\s$|\n\s|\s\n|"
+    r"\s+[,.;:!?%]|\s+n['’]t\b|\s+['’](?:s|re|ve|ll|d|m)\b|"
+    r"[\(\[\{]\s+|\s+[\)\]\}])",
+    flags=re.IGNORECASE,
+)
+_WHITESPACE_RE = re.compile(r"\s+")
+_PUNCT_SPACE_RE = re.compile(r"\s+([,.;:!?%])")
+_OPEN_BRACKET_SPACE_RE = re.compile(r"([\(\[\{])\s+")
+_CLOSE_BRACKET_SPACE_RE = re.compile(r"\s+([\)\]\}])")
+_CONTRACTION_NT_RE = re.compile(r"\s+n['’]t\b", flags=re.IGNORECASE)
+_CONTRACTION_SUFFIX_RE = re.compile(r"\s+(['’](?:s|re|ve|ll|d|m))\b", flags=re.IGNORECASE)
+
+
+def _detokenize_fast_path_is_safe(text: str) -> bool:
+    """Return whether ``detokenize(text)`` is provably an identity operation."""
+
+    if not text or _DETOKENIZE_SLOW_RE.search(text):
+        return False
+    # ASCII is already NFKC-normalized by definition. For Unicode input, avoid
+    # a normalization pass only when it is known to be canonical.
+    return text.isascii() or unicodedata.is_normalized("NFKC", text)
+
+
 def _as_text(value: Any, separator: str) -> str:
     if isinstance(value, list):
         if not all(isinstance(item, str) for item in value):
@@ -36,17 +60,22 @@ def _as_text(value: Any, separator: str) -> str:
 def detokenize(text: str) -> str:
     """Match ``eviseq_new.eviseq_afmr.data.normalization.detokenize``."""
 
+    if _detokenize_fast_path_is_safe(text):
+        return text
+
+    # NFKC and quote-marker replacement are independent of line boundaries;
+    # doing them once avoids repeating a full-string scan for every paragraph.
+    text = unicodedata.normalize("NFKC", text).replace("``", '"').replace("''", '"')
     lines = []
     for line in text.splitlines():
-        line = unicodedata.normalize("NFKC", line).replace("``", '"').replace("''", '"')
-        line = re.sub(r"\s+", " ", line).strip()
-        line = re.sub(r"\s+([,.;:!?%])", r"\1", line)
-        line = re.sub(r"([\(\[\{])\s+", r"\1", line)
-        line = re.sub(r"\s+([\)\]\}])", r"\1", line)
-        line = re.sub(r"\s+n['’]t\b", "n't", line, flags=re.IGNORECASE)
-        line = re.sub(r"\s+(['’](?:s|re|ve|ll|d|m))\b", r"\1", line, flags=re.IGNORECASE)
-        if line.strip():
-            lines.append(line.strip())
+        line = _WHITESPACE_RE.sub(" ", line).strip()
+        line = _PUNCT_SPACE_RE.sub(r"\1", line)
+        line = _OPEN_BRACKET_SPACE_RE.sub(r"\1", line)
+        line = _CLOSE_BRACKET_SPACE_RE.sub(r"\1", line)
+        line = _CONTRACTION_NT_RE.sub("n't", line)
+        line = _CONTRACTION_SUFFIX_RE.sub(r"\1", line)
+        if line:
+            lines.append(line)
     return "\n".join(lines)
 
 

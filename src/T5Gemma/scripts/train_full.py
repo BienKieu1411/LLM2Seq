@@ -119,17 +119,26 @@ def initialize_distributed() -> bool:
         timeout_minutes = int(os.environ.get("T5GEMMA_DDP_TIMEOUT_MINUTES", "30"))
         if timeout_minutes <= 0:
             raise ValueError("T5GEMMA_DDP_TIMEOUT_MINUTES must be positive")
-        dist.init_process_group(
-            backend=os.environ.get("T5GEMMA_DDP_BACKEND", "nccl"),
-            timeout=timedelta(minutes=timeout_minutes),
-        )
+        init_kwargs: Dict[str, Any] = {
+            "backend": os.environ.get("T5GEMMA_DDP_BACKEND", "nccl"),
+            "timeout": timedelta(minutes=timeout_minutes),
+        }
+        # PyTorch versions with NCCL device-aware initialization avoid the
+        # ambiguous global-rank-to-GPU guess that can otherwise stall barrier.
+        if "device_id" in inspect.signature(dist.init_process_group).parameters:
+            init_kwargs["device_id"] = torch.device("cuda", local_rank)
+        dist.init_process_group(**init_kwargs)
         return True
     return False
 
 
 def distributed_barrier() -> None:
     if distributed_world_size() > 1 and dist.is_available() and dist.is_initialized():
-        dist.barrier()
+        local_rank = int(os.environ.get("LOCAL_RANK", distributed_rank()))
+        barrier_kwargs: Dict[str, Any] = {}
+        if "device_ids" in inspect.signature(dist.barrier).parameters:
+            barrier_kwargs["device_ids"] = [local_rank]
+        dist.barrier(**barrier_kwargs)
 
 
 def destroy_distributed(initialized_here: bool) -> None:
@@ -241,11 +250,20 @@ def make_training_arguments(cfg: Dict[str, Any], output_dir: Path) -> Seq2SeqTra
     valid_kwargs = {k: v for k, v in kwargs.items() if k in params}
     if world_size > 1:
         if "ddp_find_unused_parameters" in params:
-            valid_kwargs["ddp_find_unused_parameters"] = bool(train_cfg.get("ddp_find_unused_parameters", False))
+            # T5Gemma contains conditional/optional branches. Discovering
+            # unused tensors is required for correct multi-GPU reduction;
+            # recipes can still opt out explicitly when a model is known to
+            # use every parameter on every forward pass.
+            valid_kwargs["ddp_find_unused_parameters"] = bool(train_cfg.get("ddp_find_unused_parameters", True))
         if "ddp_backend" in params and train_cfg.get("ddp_backend"):
             valid_kwargs["ddp_backend"] = str(train_cfg["ddp_backend"])
         if "ddp_timeout" in params and train_cfg.get("ddp_timeout") is not None:
             valid_kwargs["ddp_timeout"] = int(train_cfg["ddp_timeout"])
+        if "gradient_checkpointing_kwargs" in params and bool(train_cfg.get("gradient_checkpointing", False)):
+            # The non-reentrant implementation is compatible with DDP's
+            # unused-parameter discovery, unlike the legacy reentrant mode.
+            checkpointing_kwargs = train_cfg.get("gradient_checkpointing_kwargs", {"use_reentrant": False})
+            valid_kwargs["gradient_checkpointing_kwargs"] = dict(checkpointing_kwargs)
     # Full checkpoints are large. Evaluation is performed once from final_model
     # by the pipeline, not implicitly at every training epoch.
     eval_strat = str(train_cfg.get("eval_strategy", "no"))
@@ -384,6 +402,7 @@ def main() -> None:
         raise FileNotFoundError(train_file)
     if eval_file and not eval_file.exists():
         raise FileNotFoundError(eval_file)
+    logging.info("Loading train split: %s", train_file)
     logging.info("Loading tokenizer: %s", model_name)
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
@@ -427,6 +446,7 @@ def main() -> None:
                 "model.torch_dtype=float32. Low-precision tensors: " + ", ".join(low_precision[:20])
             )
 
+    logging.info("Parsing train examples (detokenize=%s)...", bool(cfg["data"].get("detokenize", False)))
     train_dataset = SummarizationDataset(
         train_file,
         tokenizer,
@@ -435,8 +455,10 @@ def main() -> None:
         int(cfg["data"]["max_target_length"]),
         data_config=cfg["data"],
     )
+    logging.info("Train examples loaded: %d", len(train_dataset))
     eval_dataset = None
     if eval_file:
+        logging.info("Parsing validation examples: %s", eval_file)
         eval_dataset = SummarizationDataset(
             eval_file,
             tokenizer,
@@ -445,6 +467,11 @@ def main() -> None:
             int(cfg["data"]["max_target_length"]),
             data_config=cfg["data"],
         )
+        logging.info("Validation examples loaded: %d", len(eval_dataset))
+    # Dataset parsing is performed independently by every rank.  Synchronize
+    # before rank zero constructs the Trainer and can enter the first DDP
+    # collective while another rank is still reading the large ArXiv files.
+    distributed_barrier()
     collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
         model=model,
@@ -454,6 +481,7 @@ def main() -> None:
 
     if main_process:
         log_model_summary(model, cfg, len(train_dataset), len(eval_dataset) if eval_dataset else 0)
+    logging.info("Building Seq2SeqTrainingArguments and Trainer...")
     training_args = make_training_arguments(cfg, output_dir)
     trainer_kwargs = {
         "model": model,
@@ -469,6 +497,10 @@ def main() -> None:
         trainer_kwargs["tokenizer"] = tokenizer
     trainer = Seq2SeqTrainer(**trainer_kwargs)
 
+    # Trainer/Accelerate moves the model to its rank-local CUDA device.  Do
+    # not let a fast rank start forward/backward before all ranks are ready.
+    distributed_barrier()
+    logging.info("Trainer ready; entering training loop...")
     logging.info("Starting full fine-tuning of all T5Gemma parameters...")
     train_result = trainer.train()
     distributed_barrier()

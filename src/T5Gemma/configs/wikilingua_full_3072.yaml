@@ -42,13 +42,15 @@ training:
   require_fp32_master_weights: true
   tf32: true
   gradient_checkpointing: true
+  gradient_checkpointing_kwargs:
+    use_reentrant: false
   group_by_length: true
   dataloader_num_workers: 2
   logging_steps: 10
   eval_strategy: "no"
   seed: 42
   # Trainer reuses the torchrun process group when CUDA_VISIBLE_DEVICES=0,1.
-  ddp_find_unused_parameters: false
+  ddp_find_unused_parameters: true
   ddp_backend: nccl
 
 data:

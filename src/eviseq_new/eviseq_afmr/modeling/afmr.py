@@ -19,7 +19,9 @@ def _bounded_gate(raw: torch.Tensor, maximum: float) -> torch.Tensor:
 class AdaptiveFullMemoryResidualBridge(nn.Module):
     def __init__(self, encoder_hidden: int, decoder_hidden: int, config: dict):
         super().__init__()
-        self.value_anchored = config.get("name", "afmr_v1") == "afmr_value_anchor"
+        self.bridge_mode = str(config.get("bridge_mode", "afmr"))
+        if self.bridge_mode not in {"afmr", "direct_projection"}:
+            raise ValueError("architecture.bridge_mode must be afmr or direct_projection")
         self.encoder_hidden = int(encoder_hidden)
         self.decoder_hidden = int(decoder_hidden)
         self.controller_dim = int(config.get("controller_dim", 256))
@@ -32,12 +34,27 @@ class AdaptiveFullMemoryResidualBridge(nn.Module):
         self.focus_strength_max = float(config.get("focus_strength_max", 1.0))
         self.temperature_min = float(config.get("temperature_min", 0.5))
         self.temperature_max = float(config.get("temperature_max", 2.0))
+
+        self.value_anchored = config.get("name", "afmr_v1") == "afmr_value_anchor"
         if self.depth_taps < 0 or self.depth_rank <= 0 or self.feature_rank <= 0:
             raise ValueError("AFMR ranks and depth_taps must be non-negative/positive")
         if not self.focus_windows or any(width <= 0 for width in self.focus_windows):
             raise ValueError("AFMR focus_windows must be positive")
         if not 0.0 <= self.focus_overlap < 1.0:
             raise ValueError("AFMR focus_overlap must be in [0, 1)")
+
+        # The direct projection is the controlled ``w/o bridge`` variant. It
+        # keeps the encoder and decoder cross-attention path, while removing
+        # AFMR's controller, depth/feature residuals and focus prior. A
+        # projection is still required when encoder and decoder widths differ.
+        if self.bridge_mode == "direct_projection":
+            if self.encoder_hidden == self.decoder_hidden:
+                self.direct_projection: nn.Module = nn.Identity()
+            else:
+                self.direct_projection = nn.Linear(self.encoder_hidden, self.decoder_hidden, bias=False)
+                nn.init.orthogonal_(self.direct_projection.weight)
+            self.value_anchored = False
+            return
 
         self.controller = FocusController(self.encoder_hidden, self.decoder_hidden, self.controller_dim)
         if self.encoder_hidden == self.decoder_hidden:
@@ -220,6 +237,17 @@ class AdaptiveFullMemoryResidualBridge(nn.Module):
         if len(encoder_state.taps) != self.depth_taps:
             raise ValueError(f"expected {self.depth_taps} encoder taps, got {len(encoder_state.taps)}")
         content = encoder_state.content_mask.bool() & encoder_state.attention_mask.bool()
+
+        if self.bridge_mode == "direct_projection":
+            memory_mask = encoder_state.attention_mask.bool()
+            memory = self.direct_projection(final.float())
+            memory = memory.masked_fill(~memory_mask.unsqueeze(-1), 0)
+            source_bias = torch.zeros(final.shape[:2], device=final.device, dtype=torch.float32).masked_fill(
+                ~content, 0.0
+            )
+            controller = torch.zeros(final.shape[0], self.controller_dim, device=final.device, dtype=torch.float32)
+            return BridgeState(memory, memory_mask, content, source_bias, controller, None)
+
         controller = self.controller(final, content, prompt_embeddings, prompt_mask.bool(), output_budget)
         refined = final.float()
 

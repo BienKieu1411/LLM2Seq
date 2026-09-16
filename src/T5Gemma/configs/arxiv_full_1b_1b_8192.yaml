@@ -44,12 +44,17 @@ training:
   require_fp32_master_weights: true
   tf32: true
   gradient_checkpointing: true
+  gradient_checkpointing_kwargs:
+    use_reentrant: false
   group_by_length: true
   dataloader_num_workers: 8
   logging_steps: 10
   eval_strategy: "no"
   seed: 42
-  ddp_find_unused_parameters: false
+  # T5Gemma has conditional branches with parameters that are unused by some
+  # forward paths; DDP must discover those tensors instead of failing after
+  # the first reduction.
+  ddp_find_unused_parameters: true
   ddp_backend: nccl
 
 data:
