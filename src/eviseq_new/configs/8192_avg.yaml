@@ -2,7 +2,7 @@ _base_: afmr_base.yaml
 
 experiment:
   name: afmr_8192_avg
-  output_dir: runs/afmr/8192_avg
+  output_dir: runs/afmr/8192_avg_contextual_value
 
 model:
   # Replace these with the local encoder and decoder directories on the server.

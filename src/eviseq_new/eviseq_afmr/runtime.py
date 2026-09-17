@@ -312,9 +312,11 @@ def train(
         }
         if _is_main_process():
             LOGGER.info(
-                "model parameters=%s total=%d | distributed=%s world_size=%d",
+                "model parameters=%s total=%d | bridge=%s contextual_value=%s | distributed=%s world_size=%d",
                 counts,
                 sum(p.numel() for p in model.parameters()),
+                model.bridge.bridge_mode,
+                getattr(model.bridge, "contextual_value", None) is not None,
                 _distributed_active(),
                 _distributed_world_size(),
             )

@@ -7,6 +7,7 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 
+from ..config import contextual_value_settings
 from .afmr import AdaptiveFullMemoryResidualBridge
 from .decoder import QwenCrossDecoder
 from .encoder import build_encoder, resolve_dtype
@@ -19,6 +20,7 @@ class EviSeqAFMR(nn.Module):
         self.config = config
         self.encoder = build_encoder(config)
         decoder_cfg = config["model"]
+        context = contextual_value_settings(config["architecture"])
         self.decoder = QwenCrossDecoder(
             str(decoder_cfg["decoder_name"]),
             config["decoder"],
@@ -26,9 +28,13 @@ class EviSeqAFMR(nn.Module):
             bool(decoder_cfg.get("gradient_checkpointing", True)),
             bool(decoder_cfg.get("trust_remote_code", True)),
             str(decoder_cfg.get("attention_implementation", "sdpa")),
+            value_residual_max_relative_rms=context["max_relative_rms"] if context["enabled"] else 0.0,
         )
         self.bridge = AdaptiveFullMemoryResidualBridge(
-            self.encoder.hidden_size, int(self.decoder.config.hidden_size), config["architecture"]
+            self.encoder.hidden_size,
+            int(self.decoder.config.hidden_size),
+            config["architecture"],
+            gradient_checkpointing=bool(decoder_cfg.get("gradient_checkpointing", True)),
         )
 
     def encode_source(
@@ -53,6 +59,7 @@ class EviSeqAFMR(nn.Module):
                 bridge.source_bias,
                 bridge.controller,
                 None if bridge.value_memory is None else bridge.value_memory.to(decoder_dtype),
+                value_residual=None if bridge.value_residual is None else bridge.value_residual.to(decoder_dtype),
             )
         if self.decoder.grounded_copy is not None:
             if not copy_inputs:
@@ -108,5 +115,6 @@ class EviSeqAFMR(nn.Module):
             return_logits=return_logits,
             value_memory=bridge.value_memory,
             copy_state=bridge.copy_state,
+            value_residual=bridge.value_residual,
         )
         return AFMROutput(logits, loss_ce, loss_ce, bridge)

@@ -24,12 +24,21 @@ RAW_DATA_DIR="${ROOT}/datasets/raw/pubmed"
 AFMR_ARCHITECTURE="${AFMR_ARCHITECTURE:-afmr_value_anchor}"
 AFMR_BRIDGE_MODE="${AFMR_BRIDGE_MODE:-afmr}"
 AFMR_GROUNDED_COPY="${AFMR_GROUNDED_COPY:-true}"
+AFMR_CONTEXTUAL_VALUE="${AFMR_CONTEXTUAL_VALUE:-true}"
 [[ "${AFMR_GROUNDED_COPY}" == true || "${AFMR_GROUNDED_COPY}" == false ]] || { echo "AFMR_GROUNDED_COPY must be true or false" >&2; exit 1; }
+[[ "${AFMR_CONTEXTUAL_VALUE}" == true || "${AFMR_CONTEXTUAL_VALUE}" == false ]] || { echo "AFMR_CONTEXTUAL_VALUE must be true or false" >&2; exit 1; }
+if [[ "${AFMR_BRIDGE_MODE}" == direct_projection || "${AFMR_ARCHITECTURE}" != afmr_value_anchor ]]; then
+  AFMR_CONTEXTUAL_VALUE=false
+fi
 COPY_VARIANT=lm
 [[ "${AFMR_GROUNDED_COPY}" == false ]] || COPY_VARIANT=copy
 BRIDGE_VARIANT=afmr
 [[ "${AFMR_BRIDGE_MODE}" == direct_projection ]] && BRIDGE_VARIANT=direct_projection
-if [[ "${BRIDGE_VARIANT}" == afmr ]]; then
+if [[ -n "${AFMR_OUTPUT_DIR:-}" ]]; then
+  RUN_ROOT="${AFMR_OUTPUT_DIR}"
+elif [[ "${AFMR_CONTEXTUAL_VALUE}" == true ]]; then
+  RUN_ROOT="${ROOT}/runs/afmr/pubmed_pair_${AFMR_ARCHITECTURE}_contextual_value_${COPY_VARIANT}"
+elif [[ "${BRIDGE_VARIANT}" == afmr ]]; then
   RUN_ROOT="${ROOT}/runs/afmr/pubmed_pair_${AFMR_ARCHITECTURE}_${COPY_VARIANT}"
 else
   RUN_ROOT="${ROOT}/runs/afmr/pubmed_pair_${AFMR_ARCHITECTURE}_${BRIDGE_VARIANT}_${COPY_VARIANT}"
@@ -65,6 +74,7 @@ echo "=== GPU: CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ==="
 echo "=== Architecture: ${AFMR_ARCHITECTURE}; FP32 updates, BF16 compute ==="
 echo "=== Bridge mode: ${AFMR_BRIDGE_MODE} ==="
 echo "=== Grounded copy: ${AFMR_GROUNDED_COPY} ==="
+echo "=== Contextual value bridge: ${AFMR_CONTEXTUAL_VALUE} ==="
 echo "=== Python: ${PYTHON_BIN} ==="
 echo "=== Log: ${LOG_FILE} ==="
 echo "=== Main run: PPLX encoder -> Qwen3 decoder ==="
@@ -94,19 +104,22 @@ make_config() {
   local output_config="$2"
   local encoder_name="$3"
   local output_dir="$4"
-  "${PYTHON_BIN}" - "${base_config}" "${output_config}" "${encoder_name}" "${DECODER_MODEL}" "${output_dir}" "${PROCESSED_DATA_DIR}" "${AFMR_ARCHITECTURE}" "${AFMR_BRIDGE_MODE}" "${AFMR_GROUNDED_COPY}" <<'PY'
+  "${PYTHON_BIN}" - "${base_config}" "${output_config}" "${encoder_name}" "${DECODER_MODEL}" "${output_dir}" "${PROCESSED_DATA_DIR}" "${AFMR_ARCHITECTURE}" "${AFMR_BRIDGE_MODE}" "${AFMR_GROUNDED_COPY}" "${AFMR_CONTEXTUAL_VALUE}" <<'PY'
 import sys
 from pathlib import Path
 
 import yaml
 
-from eviseq_afmr.config import load_config
+from eviseq_afmr.config import load_config, validate_config
 
-base, destination, encoder, decoder, output_dir, data_dir, architecture, bridge_mode, grounded_copy = sys.argv[1:]
+base, destination, encoder, decoder, output_dir, data_dir, architecture, bridge_mode, grounded_copy, context = sys.argv[1:]
 config = load_config(base)
 config["architecture"]["name"] = architecture
 if bridge_mode == "direct_projection":
     config["architecture"]["bridge_mode"] = bridge_mode
+else:
+    config["architecture"].pop("bridge_mode", None)
+config["architecture"].setdefault("contextual_value", {})["enabled"] = context == "true"
 config["decoder"]["grounded_copy"]["enabled"] = grounded_copy == "true"
 config.pop("_meta", None)
 config["model"]["encoder_name"] = encoder
@@ -115,6 +128,7 @@ config["experiment"]["output_dir"] = output_dir
 config["data"]["train_file"] = str(Path(data_dir) / "train.jsonl")
 config["data"]["validation_file"] = str(Path(data_dir) / "validation.jsonl")
 config["data"]["test_file"] = str(Path(data_dir) / "test.jsonl")
+validate_config(config)
 Path(destination).write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8")
 PY
 }

@@ -8,6 +8,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..config import contextual_value_settings
+from .contextual_value import ContextualValueBridge
 from .controller import FocusController
 from .outputs import BridgeState, EncoderState
 
@@ -17,7 +19,7 @@ def _bounded_gate(raw: torch.Tensor, maximum: float) -> torch.Tensor:
 
 
 class AdaptiveFullMemoryResidualBridge(nn.Module):
-    def __init__(self, encoder_hidden: int, decoder_hidden: int, config: dict):
+    def __init__(self, encoder_hidden: int, decoder_hidden: int, config: dict, gradient_checkpointing: bool = False):
         super().__init__()
         self.bridge_mode = str(config.get("bridge_mode", "afmr"))
         if self.bridge_mode not in {"afmr", "direct_projection"}:
@@ -116,6 +118,13 @@ class AdaptiveFullMemoryResidualBridge(nn.Module):
             self.temperature_raw.bias,
             self._inverse_unit_interval(temperature, self.temperature_min, self.temperature_max),
         )
+        context = contextual_value_settings(config)
+        self.contextual_value = None
+        if context["enabled"]:
+            # Adding this branch must not change existing parameter initialization
+            # or the data-loader RNG sequence in a controlled comparison.
+            with torch.random.fork_rng(devices=[]):
+                self.contextual_value = ContextualValueBridge(self.decoder_hidden, context, gradient_checkpointing)
 
     @staticmethod
     def _inverse_bounded_init(value: float, maximum: float) -> torch.Tensor:
@@ -269,4 +278,13 @@ class AdaptiveFullMemoryResidualBridge(nn.Module):
             value_memory = self.base_projection(final.float()).masked_fill(
                 ~encoder_state.attention_mask.bool().unsqueeze(-1), 0
             )
-        return BridgeState(memory, encoder_state.attention_mask.bool(), content, source_bias, controller, value_memory)
+        value_residual = self.contextual_value(value_memory, content) if self.contextual_value is not None else None
+        return BridgeState(
+            memory,
+            encoder_state.attention_mask.bool(),
+            content,
+            source_bias,
+            controller,
+            value_memory,
+            value_residual=value_residual,
+        )

@@ -2,7 +2,7 @@ _base_: afmr_base.yaml
 
 experiment:
   name: afmr_arxiv
-  output_dir: runs/afmr/arxiv_value_anchor_copy
+  output_dir: runs/afmr/arxiv_contextual_value_copy
 
 data:
   train_file: datasets/arxiv/train.jsonl

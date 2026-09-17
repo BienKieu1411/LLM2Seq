@@ -2,7 +2,7 @@ _base_: afmr_base.yaml
 
 experiment:
   name: afmr_pubmed
-  output_dir: runs/afmr/pubmed_value_anchor_copy
+  output_dir: runs/afmr/pubmed_contextual_value_copy
 
 data:
   train_file: datasets/pubmed/train.jsonl

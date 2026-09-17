@@ -27,6 +27,7 @@ class BridgeState:
     controller: torch.Tensor
     value_memory: Optional[torch.Tensor] = None
     copy_state: Optional[CopyState] = None
+    value_residual: Optional[torch.Tensor] = None
 
 
 @dataclass

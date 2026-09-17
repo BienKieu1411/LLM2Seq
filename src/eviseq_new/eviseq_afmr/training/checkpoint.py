@@ -11,6 +11,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from ..config import contextual_value_settings
+
 
 def _unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
     """Return the underlying module for DDP/DataParallel checkpoints."""
@@ -46,6 +48,9 @@ def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
     # projection checkpoint cannot be loaded as a full AFMR bridge.
     if "bridge_mode" in arch:
         spec["bridge_mode"] = str(arch["bridge_mode"])
+    context = contextual_value_settings(arch)
+    if context["enabled"]:
+        spec["contextual_value"] = {"mechanism": "region_attention_bounded_values", **context}
     copy_config = decoder.get("grounded_copy", {})
     if copy_config.get("enabled", False):
         spec["grounded_copy"] = {"alignment": "char_overlap_v1", "key_dim": int(copy_config.get("key_dim", 128))}

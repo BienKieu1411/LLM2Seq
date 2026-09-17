@@ -56,7 +56,14 @@ def _load_decoder(
 
 
 class CopiedCrossAttention(nn.Module):
-    def __init__(self, self_attention: nn.Module, input_norm: nn.Module, config: Any, dropout: float):
+    def __init__(
+        self,
+        self_attention: nn.Module,
+        input_norm: nn.Module,
+        config: Any,
+        dropout: float,
+        value_residual_max_relative_rms: float = 0.0,
+    ):
         super().__init__()
         self.hidden_size = int(config.hidden_size)
         self.num_heads = int(config.num_attention_heads)
@@ -70,10 +77,14 @@ class CopiedCrossAttention(nn.Module):
         self.k_norm = copy.deepcopy(getattr(self_attention, "k_norm", nn.Identity()))
         self.memory_norm = copy.deepcopy(input_norm)
         self.dropout = float(dropout)
+        self.value_residual_max_relative_rms = float(value_residual_max_relative_rms)
         self._cache: Optional[tuple[torch.Tensor, torch.Tensor]] = None
 
     def _memory_kv(
-        self, memory: torch.Tensor, value_memory: Optional[torch.Tensor] = None
+        self,
+        memory: torch.Tensor,
+        value_memory: Optional[torch.Tensor] = None,
+        value_residual: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         batch, length, _ = memory.shape
         if value_memory is not None and value_memory.shape != memory.shape:
@@ -82,6 +93,21 @@ class CopiedCrossAttention(nn.Module):
         key = self.k_norm(self.k_proj(hidden).view(batch, length, self.num_kv_heads, self.head_dim)).transpose(1, 2)
         value_hidden = hidden if value_memory is None else self.memory_norm(value_memory)
         value = self.v_proj(value_hidden).view(batch, length, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        if value_residual is not None:
+            if value_memory is None or value_residual.shape != memory.shape:
+                raise ValueError("Value residual requires a matching token-aligned value anchor")
+            if not 0 < self.value_residual_max_relative_rms <= 1:
+                raise ValueError("Value residual requires a configured relative RMS bound in (0, 1]")
+            # The residual lives after memory normalization. Exclude projection
+            # bias so a zero bridge output exactly recovers the original values.
+            delta = F.linear(value_residual, self.v_proj.weight, bias=None)
+            delta = delta.view(batch, length, self.num_kv_heads, self.head_dim).transpose(1, 2).float()
+            base = value.float()
+            # Bound actual projected values per source token / KV head in FP32.
+            # Detach only the radius, not the anchor or delta gradient routes.
+            radius = self.value_residual_max_relative_rms * base.detach().square().mean(-1, keepdim=True).sqrt()
+            scale = radius / (radius.square() + delta.square().mean(-1, keepdim=True) + 1.0e-12).sqrt()
+            value = (base + scale * delta).to(value.dtype)
         return key, value
 
     def forward(
@@ -91,13 +117,16 @@ class CopiedCrossAttention(nn.Module):
         memory_mask: Optional[torch.Tensor],
         source_bias: Optional[torch.Tensor],
         value_memory: Optional[torch.Tensor] = None,
+        value_residual: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         batch, query_length, _ = query_states.shape
         query = self.q_norm(
             self.q_proj(query_states).view(batch, query_length, self.num_heads, self.head_dim)
         ).transpose(1, 2)
         key, value = (
-            self._cache if self._cache is not None and not self.training else self._memory_kv(memory, value_memory)
+            self._cache
+            if self._cache is not None and not self.training
+            else self._memory_kv(memory, value_memory, value_residual)
         )
         mask: Optional[torch.Tensor]
         if source_bias is not None:
@@ -147,21 +176,37 @@ class CopiedCrossAttention(nn.Module):
         return self.o_proj(attended.transpose(1, 2).reshape(batch, query_length, self.num_heads * self.head_dim))
 
     @torch.no_grad()
-    def prepare_cache(self, memory: torch.Tensor, value_memory: Optional[torch.Tensor] = None) -> None:
-        self._cache = tuple(value.contiguous() for value in self._memory_kv(memory, value_memory))
+    def prepare_cache(
+        self,
+        memory: torch.Tensor,
+        value_memory: Optional[torch.Tensor] = None,
+        value_residual: Optional[torch.Tensor] = None,
+    ) -> None:
+        self._cache = tuple(value.contiguous() for value in self._memory_kv(memory, value_memory, value_residual))
 
     def clear_cache(self) -> None:
         self._cache = None
 
 
 class DecoderLayerWithCross(GradientCheckpointingLayer):
-    def __init__(self, base: nn.Module, config: Any, dropout: float, gate_init: float, gate_max: float, index: int):
+    def __init__(
+        self,
+        base: nn.Module,
+        config: Any,
+        dropout: float,
+        gate_init: float,
+        gate_max: float,
+        index: int,
+        value_residual_max_relative_rms: float = 0.0,
+    ):
         super().__init__()
         if not 0.0 < gate_init < gate_max <= 1.0:
             raise ValueError("cross gate must satisfy 0 < init < max <= 1")
         self.base = base
         self.cross_norm = copy.deepcopy(base.input_layernorm)
-        self.cross = CopiedCrossAttention(base.self_attn, base.input_layernorm, config, dropout)
+        self.cross = CopiedCrossAttention(
+            base.self_attn, base.input_layernorm, config, dropout, value_residual_max_relative_rms
+        )
         self.cross_gate = nn.Parameter(torch.tensor(math.log(gate_init / (gate_max - gate_init)), dtype=torch.float32))
         self.cross_gate_max = float(gate_max)
         self.index = int(index)
@@ -177,6 +222,7 @@ class DecoderLayerWithCross(GradientCheckpointingLayer):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         encoder_attention_bias: Optional[torch.Tensor] = None,
         encoder_value_states: Optional[torch.Tensor] = None,
+        encoder_value_residual: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> torch.Tensor:
         residual = hidden_states
@@ -197,6 +243,7 @@ class DecoderLayerWithCross(GradientCheckpointingLayer):
                 encoder_attention_mask,
                 encoder_attention_bias,
                 value_memory=encoder_value_states,
+                value_residual=encoder_value_residual,
             )
             hidden_states = (
                 hidden_states + self.cross_gate_max * torch.sigmoid(self.cross_gate).to(hidden_states.dtype) * cross
@@ -206,8 +253,13 @@ class DecoderLayerWithCross(GradientCheckpointingLayer):
         return residual + self.base.mlp(hidden_states)
 
     @torch.no_grad()
-    def prepare_cache(self, memory: torch.Tensor, value_memory: Optional[torch.Tensor] = None) -> None:
-        self.cross.prepare_cache(memory, value_memory)
+    def prepare_cache(
+        self,
+        memory: torch.Tensor,
+        value_memory: Optional[torch.Tensor] = None,
+        value_residual: Optional[torch.Tensor] = None,
+    ) -> None:
+        self.cross.prepare_cache(memory, value_memory, value_residual)
 
     def clear_cache(self) -> None:
         self.cross.clear_cache()
@@ -222,6 +274,7 @@ class QwenCrossDecoder(nn.Module):
         gradient_checkpointing: bool = True,
         trust_remote_code: bool = True,
         attention_implementation: str = "sdpa",
+        value_residual_max_relative_rms: float = 0.0,
     ):
         super().__init__()
         causal_lm, model_config = _load_decoder(name, dtype, trust_remote_code, attention_implementation)
@@ -253,7 +306,13 @@ class QwenCrossDecoder(nn.Module):
                 layer.self_attn.layer_idx = index
             wrapped.append(
                 DecoderLayerWithCross(
-                    layer, model_config, float(config.get("attention_dropout", 0.0)), gate_init, gate_max, index
+                    layer,
+                    model_config,
+                    float(config.get("attention_dropout", 0.0)),
+                    gate_init,
+                    gate_max,
+                    index,
+                    value_residual_max_relative_rms,
                 )
             )
         self.backbone.layers = nn.ModuleList(wrapped)
@@ -279,6 +338,7 @@ class QwenCrossDecoder(nn.Module):
         return_logits: bool = True,
         value_memory: Optional[torch.Tensor] = None,
         copy_state: Optional[CopyState] = None,
+        value_residual: Optional[torch.Tensor] = None,
     ) -> tuple[Optional[torch.Tensor], Optional[Any], Optional[torch.Tensor]]:
         if (self.grounded_copy is None) != (copy_state is None):
             raise ValueError("Decoder grounded-copy configuration and source state disagree")
@@ -297,6 +357,7 @@ class QwenCrossDecoder(nn.Module):
             encoder_attention_mask=memory_mask,
             encoder_attention_bias=source_bias,
             encoder_value_states=value_memory,
+            encoder_value_residual=value_residual,
         )
         hidden = outputs.last_hidden_state
         output_hidden = hidden[:, -1:] if use_cache else hidden
@@ -344,10 +405,15 @@ class QwenCrossDecoder(nn.Module):
         return logits, getattr(outputs, "past_key_values", None) if use_cache else None, loss
 
     @torch.no_grad()
-    def prepare_cross_cache(self, memory: torch.Tensor, value_memory: Optional[torch.Tensor] = None) -> None:
+    def prepare_cross_cache(
+        self,
+        memory: torch.Tensor,
+        value_memory: Optional[torch.Tensor] = None,
+        value_residual: Optional[torch.Tensor] = None,
+    ) -> None:
         for layer in self.backbone.layers:
             if isinstance(layer, DecoderLayerWithCross):
-                layer.prepare_cache(memory, value_memory)
+                layer.prepare_cache(memory, value_memory, value_residual)
 
     def clear_cross_cache(self) -> None:
         for layer in self.backbone.layers:

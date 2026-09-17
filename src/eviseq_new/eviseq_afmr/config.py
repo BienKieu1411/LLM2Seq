@@ -84,6 +84,41 @@ def _check_keys(mapping: dict[str, Any], allowed: set[str], section: str) -> Non
         raise ValueError(f"Unknown AFMR {section} key(s): {sorted(unknown)}")
 
 
+def contextual_value_settings(architecture: dict[str, Any]) -> dict[str, Any]:
+    """Resolve optional value context without changing legacy configurations."""
+    defaults = {
+        "enabled": False,
+        "dim": 256,
+        "num_heads": 4,
+        "window_size": 128,
+        "stride": 64,
+        "max_relative_rms": 0.20,
+    }
+    supplied = architecture.get("contextual_value", {})
+    if not isinstance(supplied, dict):
+        raise ValueError("architecture.contextual_value must be a mapping")
+    _check_keys(supplied, set(defaults), "architecture.contextual_value")
+    settings = {**defaults, **supplied}
+    if not isinstance(settings["enabled"], bool):
+        raise ValueError("architecture.contextual_value.enabled must be a boolean")
+    for key in ("dim", "num_heads", "window_size", "stride"):
+        value = settings[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"architecture.contextual_value.{key} must be a positive integer")
+    if settings["dim"] % 2 or settings["dim"] % settings["num_heads"]:
+        raise ValueError("contextual_value.dim must be even and divisible by num_heads")
+    if settings["stride"] > settings["window_size"]:
+        raise ValueError("contextual_value.stride must not exceed window_size")
+    settings["max_relative_rms"] = float(settings["max_relative_rms"])
+    if not 0 < settings["max_relative_rms"] <= 1:
+        raise ValueError("contextual_value.max_relative_rms must lie in (0, 1]")
+    if architecture.get("bridge_mode", "afmr") == "direct_projection":
+        settings["enabled"] = False
+    if settings["enabled"] and architecture.get("name") != "afmr_value_anchor":
+        raise ValueError("contextual_value requires architecture.name=afmr_value_anchor")
+    return settings
+
+
 def validate_config(config: dict[str, Any]) -> None:
     _check_keys(config, _TOP_LEVEL | {"_meta"}, "top-level")
     required_sections = ("model", "encoder", "architecture", "decoder", "training", "data", "generation")
@@ -135,6 +170,7 @@ def validate_config(config: dict[str, Any]) -> None:
             "temperature_init",
             "temperature_min",
             "temperature_max",
+            "contextual_value",
         },
         "architecture",
     )
@@ -142,6 +178,7 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("architecture.name must be afmr_v1 or afmr_value_anchor")
     if architecture.get("bridge_mode", "afmr") not in {"afmr", "direct_projection"}:
         raise ValueError("architecture.bridge_mode must be afmr or direct_projection")
+    contextual_value_settings(architecture)
     taps = int(architecture.get("depth_taps", 0))
     if taps < 0:
         raise ValueError("architecture.depth_taps must be non-negative")

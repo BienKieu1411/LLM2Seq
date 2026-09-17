@@ -3,29 +3,38 @@
 AFMR (Adaptive Full-Memory Residual) is a full-source encoder–decoder architecture for general text summarization:
 
 ```text
-pretrained encoder → value-anchored AFMR interface → cross-attention Qwen decoder → contextual copy/LM mixture → greedy
+pretrained encoder → AFMR with contextual values → cross-attention Qwen decoder → grounded copy/LM mixture → greedy
 ```
 
 The bridge preserves every valid source token. A document/prompt/requested-budget controller conditions a low-rank depth residual in encoder space, a low-rank encoder-to-decoder feature residual, and one multi-scale source prior. Depth weights have shape `[batch, source_tokens, depth_taps]`: a shared learned scorer reads each normalized candidate token representation, plus a document-conditioned depth preference. Softmax is over depth, not tokens; selection runs once after the encoder. Residual output factors and the depth/focus scorers start at zero; gates and prior strength are bounded, but learned residual vector norms are not mathematically bounded. The prior is additive `[batch, source_tokens]` and is consumed by every decoder cross-attention layer. There are no banks, hard top-k pruning, per-layer routers, rerankers, beam search, KD, or test-time evidence labels.
 
 Focus regions are overlapping **token windows**, not selected sentences. Decoder memory contains the entire source. The only objective is token-level cross-entropy (CE): depth, feature and focus routes all learn through it. There is no positive-sentence mining, allocation loss, or contrastive head. External evidence labels are ignored.
 
-## Value-anchored retrieval adaptation
+## Retrieval adaptation and contextual values
 
 The current recipe uses `architecture.name: afmr_value_anchor`. Let `H0` be the final encoder state projected to decoder width, and `M` the existing AFMR-adapted states. For each decoder layer:
 
 ```text
 K = key_norm(W_K memory_norm(M))
-V = W_V memory_norm(H0)
+V0 = W_V memory_norm(H0)
+delta_V = W_V value_residual                  # no projection bias
+radius = 0.20 * RMS(stop_gradient(V0))        # per token and KV head
+V = V0 + delta_V * radius / sqrt(radius^2 + RMS(delta_V)^2 + 1e-12)
 attention = softmax(Q K^T / sqrt(head_dim) + source_bias + padding_mask)
 output = W_O (attention V)
 ```
 
-The previous `afmr_v1` uses `M` for both K and V. The new interface separates retrieval adaptation from the value content: depth/feature residuals and the focus prior learn where to retrieve, while the final encoder states supply the values. The encoder, value projection and shared width projection remain trainable in full fine-tuning. Nothing is detached. Gradients from CE reach both paths; for retrieval-only residual parameters, the direct derivative of V is zero. This restriction does not guarantee factuality or ROUGE improvement, and normalization of keys can still change addressing.
+The base recipe enables `architecture.contextual_value`: dimension 256, 4 heads, window 128, stride 64, and `max_relative_rms: 0.20`. This branch projects `H0` to a bottleneck, pools overlapping content-token windows, adds sinusoidal region positions, and applies one region self-attention/FFN block. Each original token then reads those regions through bottleneck cross-attention. A zero-initialized output projection produces `value_residual` at the original token positions. No source tokens are removed. Padding, encoder instruction and special tokens are excluded from the region pool; source-only context also works with a causal encoder because the whole source is available before summarization.
 
-The residual outputs start at zero, so the two variants have identical initial outputs with identical weights and inputs. The new variant introduces no trainable parameters, candidate generation, extra Transformer pass or auxiliary loss. It retains another full-source hidden tensor and performs value-side normalization separately; therefore memory/latency are not claimed to be identical. Both variants use one cross-attention operation per layer and the same once-per-document K/V cache and finished-row compaction.
+The value correction is bounded **after** each decoder layer's value projection, in FP32, before conversion to the compute dtype. BF16 rounding can slightly perturb the bound. This is a bound on value residuals, not on logits, factuality or ROUGE. Only the radius is detached; CE gradients still reach `H0`, the encoder, all context modules and the value projection. At initialization the new graph matches the previous value-anchor graph exactly. The output projection learns on the first update and the upstream context modules receive nonzero gradients on subsequent updates. Context initialization preserves the RNG state and existing shared weights at a fixed seed.
 
-The conceptual precedent is [Key-Value Memory Networks](https://aclanthology.org/D16-1147/), which separates addressing and reading. That work is not evidence of a summarization gain for this model. The hypothesis here is that task-specific routing need not rewrite the value stream of an already pretrained encoder. Run the shared-memory control with the same FP32 updates, prompt, preprocessing, seed, epochs and decoding settings before attributing any gain to this interface.
+Grounded copy continues to prepare its keys from the unmodified `H0` and existing source bias. It never reads `value_residual`; the copy gate and query can still change indirectly as decoder states change. Region context is computed once per source and the corrected K/V tensors are cached for generation, including finished-row compaction. Training uses the same CE objective and one encoder/decoder pass, with optional activation checkpointing of the context block. The extra source attention and value projections add training cost; GPU throughput has to be measured.
+
+At decoder width 1024, the default context block adds 1,574,912 parameters. The training startup message reports the effective `bridge` mode and `contextual_value` flag so the full and ablated graphs can be identified from the log.
+
+Set `architecture.contextual_value.enabled: false` to recover the previous value-anchor architecture; resolved configs that omit the section also retain that graph and checkpoint compatibility. The historical `afmr_v1` graph uses `M` for both K and V and requires context disabled. New checkpoints record the context dimensions, pooling settings, head count and value bound. Train a fresh run for the new architecture; an old checkpoint cannot be resumed merely by enabling the block in YAML.
+
+The context mechanism draws on [Top-down and Bottom-up Inference for Long Document Summarization](https://aclanthology.org/2023.findings-eacl.94/). Its published results do not establish a gain for this architecture. Compare the full model, the previous bridge and a separately trained `direct_projection` control under the same recipe. The working PubMed target is R2 at least 22.453 while preserving R1/RL relative to 49.686/45.939; an offline correctness test is not evidence of that gain.
 
 ## Contextual grounded output
 
@@ -54,7 +63,7 @@ For the bridge ablation, set `architecture.bridge_mode: direct_projection` in a
 fresh config and output directory. This keeps the pretrained encoder and the
 decoder cross-attention path, but maps the final encoder states through only a
 width projection; AFMR's controller, depth/feature residuals, focus prior,
-temperature and value anchor are absent. Grounded copy remains enabled unless
+temperature, contextual-value branch and value anchor are absent. Grounded copy remains enabled unless
 it is disabled separately, so the bridge contribution is isolated. The
 checkpoint architecture spec records this mode and refuses to load it as a
 full AFMR checkpoint. The ArXiv and PubMed runners expose the same control via
@@ -63,7 +72,7 @@ independent no-copy condition.
 
 ## Offline smoke test
 
-The offline smoke uses the actual AFMR/copy graph with tiny randomly initialized Qwen backbones and no model downloads. It enables grounded copy explicitly and checks CE gradients, warm-up/full optimizer updates, dense/chunked CE parity, checkpoint round-trip, greedy evaluation and prediction resume. The legacy `afmr_smoke.yaml` fixture disables copy for backward-compatibility tests; the smoke command enables it:
+The offline smoke uses the actual AFMR/copy graph with tiny randomly initialized Qwen backbones and no model downloads. It enables grounded copy and contextual values explicitly and checks CE gradients, warm-up/full optimizer updates, dense/chunked CE parity, checkpoint round-trip, greedy evaluation and prediction resume. The legacy `afmr_smoke.yaml` fixture disables both additions for backward-compatibility tests; the smoke command enables them with small context dimensions:
 
 ```bash
 cd /absolute/path/to/LLM2Seq
@@ -101,7 +110,7 @@ The decoder can render a true system/user chat prefix. Set `data.system_prompt` 
 ```bash
 PYTHON=/absolute/path/to/bienkieu_env/bin/python \
   bash scripts/run_afmr.sh evaluate configs/8192_avg.yaml \
-  runs/afmr/8192_avg/last.pt runs/afmr/8192_avg/test_predictions.jsonl \
+  runs/afmr/8192_avg_contextual_value/last.pt runs/afmr/8192_avg_contextual_value/test_predictions.jsonl \
   --split test --system-prompt "Bạn là trợ lý chuyên tóm tắt văn bản tiếng Việt. Chỉ trả về nội dung tóm tắt."
 ```
 
@@ -155,8 +164,8 @@ PYTHON=/absolute/path/to/bienkieu_env/bin/python \
 
 PYTHON=/absolute/path/to/bienkieu_env/bin/python \
   CUDA_VISIBLE_DEVICES=0 bash scripts/run_afmr.sh evaluate \
-  configs/afmr_pubmed.yaml runs/afmr/pubmed_value_anchor_copy/last.pt \
-runs/afmr/pubmed_value_anchor_copy/test_predictions.jsonl --split test
+  configs/afmr_pubmed.yaml runs/afmr/pubmed_contextual_value_copy/last.pt \
+  runs/afmr/pubmed_contextual_value_copy/test_predictions.jsonl --split test
 ```
 
 For a one-GPU PubMed queue that prepares data, trains the PPLX
@@ -212,7 +221,7 @@ bash scripts/run_pubmed_nemotron.sh
 The wrapper keeps the effective training batch at 96 while using a smaller
 per-GPU micro-batch for the larger encoder, materializes a local-only config,
 trains the configured warm-up/full stages, and evaluates `last.pt` on the
-PubMed test split. It writes to `runs/afmr/pubmed_nemotron_embed` and logs to
+PubMed test split. It writes to `runs/afmr/pubmed_nemotron_contextual_value` and logs to
 `logs/afmr`; `OVERWRITE_OUTPUT_DIR=true` starts a fresh run and
 `RESUME_CHECKPOINT=/path/to/last.pt` resumes a compatible run. No model is
 downloaded by this wrapper.
@@ -224,12 +233,12 @@ nucleus top-p; this path is never called during training:
 ```bash
 PYTHON=/absolute/path/to/bienkieu_env/bin/python \
   bash scripts/run_afmr.sh evaluate configs/afmr_pubmed.yaml \
-  runs/afmr/pubmed_value_anchor_wide/last.pt \
-  runs/afmr/pubmed_value_anchor_wide/test_candidates.jsonl \
+  runs/afmr/pubmed_contextual_value_copy/last.pt \
+  runs/afmr/pubmed_contextual_value_copy/test_candidates.jsonl \
   --split test --do-sample --temperature 0.7 --top-k 50 --top-p 0.9
 ```
 
-The queue now writes to `runs/afmr/pubmed_pair_afmr_value_anchor_copy`, leaving earlier results untouched. Set `AFMR_GROUNDED_COPY=false` for the value-anchor LM-only control in `pubmed_pair_afmr_value_anchor_lm`. Additionally set `AFMR_ARCHITECTURE=afmr_v1` for the shared-memory LM-only control in `pubmed_pair_afmr_v1_lm`. Numerical/text fixes remain enabled. The queue still runs PPLX then Qwen3-Embedding on the same GPU. For a single experiment, use `run_afmr.sh train` with one task config instead.
+The queue now writes to `runs/afmr/pubmed_pair_afmr_value_anchor_contextual_value_copy`, leaving earlier full results untouched. `AFMR_CONTEXTUAL_VALUE=false` selects the previous bridge, `AFMR_BRIDGE_MODE=direct_projection` removes the entire bridge, and `AFMR_GROUNDED_COPY=false` selects the independent no-copy condition. Use `AFMR_OUTPUT_DIR` to choose a fresh destination explicitly. ArXiv exposes the same three controls and defaults to `runs/afmr/arxiv_contextual_value_copy`. The PubMed queue still runs PPLX then Qwen3-Embedding on the same GPU. For a single experiment, use `run_afmr.sh train` with one task config instead.
 
 For ArXiv, `scripts/run_arxiv.sh` prepares the canonical ArXiv JSONL tree
 when it is missing, materializes a config with local model/data paths, trains

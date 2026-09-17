@@ -40,7 +40,7 @@ CONFIG_TEMPLATE="${AFMR_CONFIG:-${ROOT}/configs/afmr_pubmed.yaml}"
 PUBMED_SOURCE_DIR="${PUBMED_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/datasets/pubmed}"
 DATA_DIR="${AFMR_DATA_DIR:-${ROOT}/datasets/pubmed}"
 RAW_DATA_DIR="${AFMR_RAW_DATA_DIR:-${ROOT}/datasets/raw/pubmed}"
-OUTPUT_DIR="${AFMR_OUTPUT_DIR:-${ROOT}/runs/afmr/pubmed_nemotron_embed}"
+OUTPUT_DIR="${AFMR_OUTPUT_DIR:-${ROOT}/runs/afmr/pubmed_nemotron_contextual_value}"
 
 # Nemotron-3-Embed-1B-BF16 is the default server-side folder used by the
 # project.  Override ENCODER_MODEL for llama-nemotron-embed-1b-v2 or another

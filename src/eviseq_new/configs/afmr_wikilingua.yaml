@@ -2,7 +2,7 @@ _base_: afmr_base.yaml
 
 experiment:
   name: afmr_wikilingua
-  output_dir: runs/afmr/wikilingua_value_anchor_copy
+  output_dir: runs/afmr/wikilingua_contextual_value_copy
 
 data:
   train_file: datasets/wikilingua/train.jsonl

@@ -1,6 +1,6 @@
 experiment:
   name: afmr
-  output_dir: runs/afmr
+  output_dir: runs/afmr/contextual_value
 
 model:
   encoder_name: Qwen/Qwen3-Embedding-0.6B
@@ -18,7 +18,7 @@ encoder:
 architecture:
   name: afmr_value_anchor
   # Set to direct_projection only for the controlled w/o-bridge ablation.
-  # The default AFMR path remains unchanged when this key is omitted.
+  # direct_projection also removes contextual_value for w/o bridge.
   controller_dim: 256
   depth_taps: 4
   depth_rank: 128
@@ -35,6 +35,13 @@ architecture:
   temperature_init: 1.0
   temperature_min: 0.5
   temperature_max: 2.0
+  contextual_value:
+    enabled: true
+    dim: 256
+    num_heads: 4
+    window_size: 128
+    stride: 64
+    max_relative_rms: 0.20
 
 decoder:
   cross_attention_every: 1

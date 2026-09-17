@@ -2,7 +2,7 @@ _base_: afmr_base.yaml
 
 experiment:
   name: afmr_cnndm
-  output_dir: runs/afmr/cnndm_value_anchor_copy
+  output_dir: runs/afmr/cnndm_contextual_value_copy
 
 data:
   train_file: datasets/cnndm/train.jsonl
