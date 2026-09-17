@@ -79,3 +79,45 @@ sentence splitter for reproducibility. Cite:
 
 Paper: <https://aclanthology.org/2023.acl-long.634/>. Reference implementation:
 <https://github.com/yuh-zha/AlignScore>.
+
+## SCALE source-support score
+
+`evaluate_scale.py` implements the released SCALE inference path from Lattimer
+et al. (EMNLP 2023). It splits each prediction into sentences, scores each
+sentence against overlapping source windows with the Flan-T5 `Yes`/`No` NLI
+prompt, keeps the best supporting window, and averages over sentences. The
+reported `scale_consistency` is high-is-better. The accompanying
+`unsupported_content_proxy = 1 - scale_consistency` is only a monotonic
+diagnostic, not a calibrated hallucination probability.
+
+The script loads a local Flan-T5 Hugging Face directory and performs batched
+one-token generation; it does not download a model. The `scale-score` package
+is not required, but can be installed for comparison with the released API:
+
+```bash
+python3 -m pip install scale-score
+```
+
+```bash
+PYTHONPATH=src \
+  /Users/kieugiangbien/bienkieu_env/bin/python \
+  src/rouge155/evaluate_scale.py \
+  runs/model/last_test_predictions.jsonl \
+  --model-path /models/flan-t5-large \
+  --size large \
+  --source-file datasets/pubmed/test.jsonl \
+  --batch-size 8 \
+  --chunk-size 1000 \
+  --window-size 0.25 \
+  --device cuda:0 \
+  --progress-every 100 \
+  --details
+```
+
+Prediction rows may contain `source` directly. Otherwise, pass the original
+test JSONL through `--source-file`; sources are joined by `id`, just as in the
+AlignScore evaluator. Keep the same local checkpoint, tokenizer, chunk size,
+overlap, sentence splitter, and aggregation rule for every model comparison.
+
+Paper: <https://aclanthology.org/2023.emnlp-main.105/>. Reference
+implementation: <https://github.com/asappresearch/scale-score>.
