@@ -2,7 +2,7 @@ _base_: afmr_base.yaml
 
 experiment:
   name: afmr_pubmed
-  output_dir: runs/afmr/pubmed_contextual_value_copy
+  output_dir: runs/afmr/pubmed_value_anchor_copy
 
 data:
   train_file: datasets/pubmed/train.jsonl
@@ -30,4 +30,5 @@ training:
   gradient_accumulation_steps: 2
   validation_batch_size: 4
   max_grad_norm: 1.0
+  salience_loss_weight: 0.0
   save_best: false

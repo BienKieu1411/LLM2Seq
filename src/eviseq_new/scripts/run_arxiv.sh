@@ -36,7 +36,7 @@ DATA_DIR="${ARXIV_DATA_DIR:-${ROOT}/datasets/arxiv}"
 RAW_DATA_DIR="${ARXIV_RAW_DATA_DIR:-${ROOT}/datasets/raw/arxiv}"
 AFMR_BRIDGE_MODE="${AFMR_BRIDGE_MODE:-afmr}"
 AFMR_GROUNDED_COPY="${AFMR_GROUNDED_COPY:-true}"
-AFMR_CONTEXTUAL_VALUE="${AFMR_CONTEXTUAL_VALUE:-true}"
+AFMR_CONTEXTUAL_VALUE="${AFMR_CONTEXTUAL_VALUE:-false}"
 [[ "${AFMR_BRIDGE_MODE}" != direct_projection ]] || AFMR_CONTEXTUAL_VALUE=false
 COPY_VARIANT=copy
 [[ "${AFMR_GROUNDED_COPY}" == false ]] && COPY_VARIANT=lm
@@ -45,7 +45,7 @@ if [[ -n "${AFMR_OUTPUT_DIR:-}" ]]; then
 elif [[ "${AFMR_BRIDGE_MODE}" == direct_projection ]]; then
   OUTPUT_DIR="${ROOT}/runs/afmr/arxiv_direct_projection_${COPY_VARIANT}"
 elif [[ "${AFMR_CONTEXTUAL_VALUE}" == true ]]; then
-  OUTPUT_DIR="${ROOT}/runs/afmr/arxiv_contextual_value_${COPY_VARIANT}"
+  OUTPUT_DIR="${ROOT}/runs/afmr/arxiv_local_topdown_value_${COPY_VARIANT}"
 else
   OUTPUT_DIR="${ROOT}/runs/afmr/arxiv_value_anchor_${COPY_VARIANT}"
 fi
@@ -227,7 +227,7 @@ echo "Processes: ${GPU_COUNT} (DDP when 2 GPUs are visible)"
 echo "Encoder: ${ENCODER_MODEL}"
 echo "Decoder: ${DECODER_MODEL}"
 echo "Bridge mode: ${AFMR_BRIDGE_MODE}"
-echo "Contextual value bridge: ${AFMR_CONTEXTUAL_VALUE}"
+echo "Local top-down value bridge: ${AFMR_CONTEXTUAL_VALUE}"
 echo "Grounded copy: ${AFMR_GROUNDED_COPY}"
 echo "Source length: ${MAX_SOURCE_LENGTH}; train batch/GPU: ${TRAIN_BATCH_SIZE}; accumulation: ${GRADIENT_ACCUMULATION_STEPS}; global effective batch: $((TRAIN_BATCH_SIZE * GPU_COUNT * GRADIENT_ACCUMULATION_STEPS))"
 echo "Output: ${OUTPUT_DIR}"

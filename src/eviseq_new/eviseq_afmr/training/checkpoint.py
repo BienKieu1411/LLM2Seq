@@ -50,7 +50,15 @@ def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
         spec["bridge_mode"] = str(arch["bridge_mode"])
     context = contextual_value_settings(arch)
     if context["enabled"]:
-        spec["contextual_value"] = {"mechanism": "region_attention_bounded_values", **context}
+        spec["contextual_value"] = {"mechanism": "local_topdown_centered_values", **context}
+    salience_weight = float(config.get("training", {}).get("salience_loss_weight", 0.0))
+    if salience_weight > 0 and arch.get("bridge_mode", "afmr") == "afmr":
+        spec["evidence_prior_training"] = {
+            "labels": "visible_source_sentence_bounded_phrase_length_weight",
+            "loss": "valid_token_weighted_pairwise_rank",
+            "weight": salience_weight,
+            "margin": float(config.get("training", {}).get("salience_margin", 0.5)),
+        }
     copy_config = decoder.get("grounded_copy", {})
     if copy_config.get("enabled", False):
         spec["grounded_copy"] = {"alignment": "char_overlap_v1", "key_dim": int(copy_config.get("key_dim", 128))}

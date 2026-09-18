@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -268,6 +269,8 @@ def validate_config(config: dict[str, Any]) -> None:
             "full_cross_attention_lr",
             "weight_decay",
             "max_grad_norm",
+            "salience_loss_weight",
+            "salience_margin",
             "seed",
             "log_every_steps",
             "save_each_epoch",
@@ -288,6 +291,14 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("batch_size and gradient_accumulation_steps must be positive")
     if int(training.get("interface_warmup_epochs", 0)) + int(training.get("full_finetune_epochs", 0)) == 0:
         raise ValueError("At least one AFMR training epoch is required")
+    salience_weight = float(training.get("salience_loss_weight", 0.0))
+    salience_margin = float(training.get("salience_margin", 0.5))
+    if not math.isfinite(salience_weight) or salience_weight < 0:
+        raise ValueError("training.salience_loss_weight must be non-negative")
+    if not math.isfinite(salience_margin) or salience_margin < 0:
+        raise ValueError("training.salience_margin must be non-negative")
+    if salience_weight > 0 and architecture.get("bridge_mode", "afmr") == "direct_projection":
+        raise ValueError("training.salience_loss_weight requires architecture.bridge_mode=afmr")
     data = config["data"]
     if int(decoder.get("ce_chunk_size", 1024)) <= 0:
         raise ValueError("decoder.ce_chunk_size must be positive")

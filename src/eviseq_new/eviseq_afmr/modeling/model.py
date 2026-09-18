@@ -6,12 +6,32 @@ from typing import Any, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from ..config import contextual_value_settings
 from .afmr import AdaptiveFullMemoryResidualBridge
 from .decoder import QwenCrossDecoder
 from .encoder import build_encoder, resolve_dtype
 from .outputs import AFMROutput, BridgeState
+
+
+def salience_valid_rows(
+    source_content_mask: torch.Tensor,
+    salience_labels: torch.Tensor,
+    salience_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Return rows that contribute to the evidence objective.
+
+    The collator normally precomputes ``salience_mask``.  Rechecking the
+    positive/negative support here keeps the loss denominator and the trainer
+    accumulation denominator identical even if a hand-built batch supplies an
+    inconsistent mask.
+    """
+
+    content = source_content_mask.bool()
+    positive = salience_labels.gt(0) & content
+    negative = (~positive) & content
+    return salience_mask.bool() & positive.any(-1) & negative.any(-1)
 
 
 class EviSeqAFMR(nn.Module):
@@ -36,6 +56,40 @@ class EviSeqAFMR(nn.Module):
             config["architecture"],
             gradient_checkpointing=bool(decoder_cfg.get("gradient_checkpointing", True)),
         )
+        self.salience_loss_weight = float(config["training"].get("salience_loss_weight", 0.0))
+        self.salience_margin = float(config["training"].get("salience_margin", 0.5))
+
+    @staticmethod
+    def _salience_ranking_loss(
+        source_bias: torch.Tensor,
+        source_content_mask: torch.Tensor,
+        salience_labels: torch.Tensor,
+        salience_mask: torch.Tensor,
+        labels: torch.Tensor,
+        margin: float,
+    ) -> torch.Tensor:
+        """Token-weighted positive-vs-negative ranking on the predicted source prior.
+
+        The reference-derived labels only supervise this loss. They never enter
+        source encoding or decoding, so inference uses the same predicted prior.
+        """
+        content = source_content_mask.bool()
+        positive = (salience_labels > 0) & content
+        negative = (~positive) & content
+        valid = salience_valid_rows(content, salience_labels, salience_mask)
+        scores = source_bias.float()
+        positive_weights = salience_labels.float().clamp_min(0) * content
+        pos_mean = (scores * positive_weights).sum(-1) / positive_weights.sum(-1).clamp_min(1)
+        neg_mean = (scores * negative).sum(-1) / negative.sum(-1).clamp_min(1)
+        row_loss = F.softplus(float(margin) - pos_mean + neg_mean)
+        # The trainer weights microbatches by their number of target tokens.
+        # The same weighting here makes accumulation and DDP globally exact.
+        token_counts = labels[:, 1:].ne(-100).sum(-1).float()
+        # Invalid rows must not dilute the auxiliary objective.  The trainer
+        # uses the same valid-token count to combine microbatches and DDP
+        # ranks, so this is a true mean over supervised target tokens.
+        valid_token_counts = token_counts * valid
+        return (row_loss * valid_token_counts).sum() / valid_token_counts.sum().clamp_min(1)
 
     def encode_source(
         self,
@@ -87,6 +141,8 @@ class EviSeqAFMR(nn.Module):
         labels: Optional[torch.Tensor] = None,
         output_budget: Optional[torch.Tensor] = None,
         return_logits: bool = True,
+        source_salience_labels: Optional[torch.Tensor] = None,
+        source_salience_mask: Optional[torch.Tensor] = None,
         **copy_inputs: torch.Tensor,
     ) -> AFMROutput:
         if output_budget is None:
@@ -117,4 +173,18 @@ class EviSeqAFMR(nn.Module):
             copy_state=bridge.copy_state,
             value_residual=bridge.value_residual,
         )
-        return AFMROutput(logits, loss_ce, loss_ce, bridge)
+        loss_salience = None
+        total_loss = loss_ce
+        if labels is not None and self.salience_loss_weight > 0 and self.bridge.bridge_mode == "afmr":
+            if source_salience_labels is None or source_salience_mask is None:
+                raise ValueError("Salience supervision is enabled but source salience labels are missing")
+            loss_salience = self._salience_ranking_loss(
+                bridge.source_bias,
+                bridge.content_mask,
+                source_salience_labels,
+                source_salience_mask,
+                labels,
+                self.salience_margin,
+            )
+            total_loss = loss_ce + self.salience_loss_weight * loss_salience
+        return AFMROutput(logits, loss_ce, total_loss, bridge, loss_salience)

@@ -1,6 +1,6 @@
 experiment:
   name: afmr
-  output_dir: runs/afmr/contextual_value
+  output_dir: runs/afmr/value_anchor_copy
 
 model:
   encoder_name: Qwen/Qwen3-Embedding-0.6B
@@ -36,7 +36,7 @@ architecture:
   temperature_min: 0.5
   temperature_max: 2.0
   contextual_value:
-    enabled: true
+    enabled: false
     dim: 256
     num_heads: 4
     window_size: 128
@@ -76,6 +76,8 @@ training:
   full_cross_attention_lr: 5.0e-5
   weight_decay: 0.01
   max_grad_norm: 1.0
+  salience_loss_weight: 0.0
+  salience_margin: 0.5
   seed: 42
   log_every_steps: 10
   save_each_epoch: true

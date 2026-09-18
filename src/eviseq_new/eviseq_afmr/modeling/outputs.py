@@ -36,3 +36,4 @@ class AFMROutput:
     loss_ce: Optional[torch.Tensor]
     loss: Optional[torch.Tensor]
     bridge: BridgeState
+    loss_salience: Optional[torch.Tensor] = None

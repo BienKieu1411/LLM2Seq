@@ -89,6 +89,34 @@ def test_region_context_is_content_only_padding_invariant_and_global():
     assert torch.isfinite(anchor.grad).all() and anchor.grad[~mask].count_nonzero() == 0
 
 
+def test_region_mapping_is_local_and_overlap_is_averaged():
+    content = torch.tensor([[False, True, True, False, True, True, True, True, False]])
+    regions = torch.tensor([[[2.0, 2.0], [6.0, 6.0]]], requires_grad=True)
+    mapped = ContextualValueBridge._map_regions_to_tokens(
+        regions, torch.tensor([[True, True]]), torch.tensor([[0, 2]]), torch.tensor([[4, 6]]), content
+    )
+    expected = torch.tensor([0.0, 2.0, 2.0, 0.0, 4.0, 4.0, 6.0, 6.0, 0.0])
+    torch.testing.assert_close(mapped[0, :, 0], expected)
+    torch.testing.assert_close(mapped[0, :, 1], expected)
+    mapped[0, 1].sum().backward()
+    assert regions.grad[0, 0].abs().sum() > 0
+    assert regions.grad[0, 1].count_nonzero() == 0
+
+
+def test_context_residual_has_no_common_content_offset():
+    torch.manual_seed(21)
+    settings = contextual_value_settings(_config()["architecture"])
+    module = ContextualValueBridge(24, settings).eval()
+    torch.nn.init.normal_(module.output.weight, std=0.1)
+    anchor = torch.randn(2, 9, 24)
+    content = torch.tensor([[False, True, True, True, False, True, True, False, False], [False] * 9])
+    residual = module(anchor, content)
+    torch.testing.assert_close(residual[0, content[0]].mean(0), torch.zeros(24), atol=1e-6, rtol=0)
+    assert residual[0, ~content[0]].count_nonzero() == 0
+    assert residual[1].count_nonzero() == 0
+    assert torch.isfinite(residual).all()
+
+
 @pytest.mark.parametrize("bf16", [False, True])
 def test_projected_value_bound_and_gradients_at_zero_large_and_zero_anchor(bf16):
     _, model, _, _ = _setup()
@@ -227,6 +255,17 @@ def test_context_checkpoint_rejects_graph_or_semantic_changes(change, tmp_path):
         load_checkpoint(tmp_path / "last.pt", EviSeqAFMR(changed), config=changed)
 
 
+def test_context_checkpoint_rejects_previous_global_value_mechanism(tmp_path):
+    config, model, _, _ = _setup()
+    path = tmp_path / "old_global.pt"
+    save_checkpoint(path, model, None, config, epoch=1, step=1)
+    state = torch.load(path, weights_only=False)
+    state["architecture_spec"]["contextual_value"]["mechanism"] = "region_attention_bounded_values"
+    torch.save(state, path)
+    with pytest.raises(ValueError, match="architecture_spec"):
+        load_checkpoint(path, EviSeqAFMR(config), config=config)
+
+
 @pytest.mark.parametrize(
     "change", [{"stride": 5}, {"dim": 15}, {"num_heads": 3}, {"max_relative_rms": 0}, {"enabled": "true"}]
 )
@@ -287,6 +326,7 @@ def test_runner_materialization_selects_full_and_ablation_graphs(script, mode, c
     config = load_config(template)
     # A previously edited ablation template must not silently override full mode.
     config["architecture"]["bridge_mode"] = "direct_projection"
+    config["training"]["salience_loss_weight"] = 0.0
     config.pop("_meta")
     import yaml
 
@@ -295,7 +335,7 @@ def test_runner_materialization_selects_full_and_ablation_graphs(script, mode, c
     destination = tmp_path / "resolved.yaml"
     args = [str(template), str(destination), "/local/encoder", "/local/decoder", str(tmp_path), "/local/data"]
     if script == "run_pubmed_pair.sh":
-        args += ["afmr_value_anchor", mode, "true", context]
+        args += ["afmr_value_anchor", mode, "true", context, "0.002"]
     else:
         args += ["8", "6", "4", "0", "0", "1", "4", "8192", "512", "8", "512", "32", mode, "true", context]
     subprocess.run([sys.executable, "-c", body, *args], check=True, capture_output=True, text=True)
