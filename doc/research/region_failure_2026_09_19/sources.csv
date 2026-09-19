@@ -1,0 +1,10 @@
+id,type,title,url,role
+S1,primary paper,TopDownFormer,https://aclanthology.org/2023.findings-eacl.94.pdf,coarse representation and token detail
+S2,primary paper,Coarse-to-Fine Attention Models for Document Summarization,https://aclanthology.org/W17-4505.pdf,coarse selection and negative hard-attention result
+S3,primary paper,SEASON,https://aclanthology.org/2022.emnlp-main.409.pdf,key-only guidance and train-test caveat
+S4,primary paper,HEPOS,https://aclanthology.org/2021.naacl-main.112.pdf,head-dependent source selection
+S5,primary paper,LQSUM,https://aclanthology.org/2022.tacl-1.36.pdf,original-token view preserved with query-focused view
+S6,local code,AFMR q-space region read,src/afmr_query_qspace/eviseq_afmr/modeling/region_query.py,mechanism under test
+S7,user results,PubMed ROUGE results,user message 2026-09-19,observed outcomes
+S8,primary paper,Perceiver IO,https://openreview.net/pdf?id=fILj7WpI-g,latent read-process-write precedent
+S9,primary paper,Set Transformer,https://proceedings.mlr.press/v97/lee19d.html,inducing-point read-write precedent
