@@ -1,0 +1,4 @@
+{"id":"train-0","text":["Cats eat fish.","The sky is blue."],"summary":["Cats eat fish."],"label":[0],"preparation":"afmr_unicode_greedy_v1"}
+{"id":"train-1","text":["Rain filled the streets.","The train arrived on time."],"summary":["Rain filled the streets."],"label":[0],"preparation":"afmr_unicode_greedy_v1"}
+{"id":"train-2","text":["The study measured blood pressure.","The treatment reduced symptoms."],"summary":["The treatment reduced symptoms."],"label":[1],"preparation":"afmr_unicode_greedy_v1"}
+{"id":"train-3","text":["A team built a prototype.","The prototype passed testing."],"summary":["The prototype passed testing."],"label":[1],"preparation":"afmr_unicode_greedy_v1"}

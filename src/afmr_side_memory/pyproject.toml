@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "afmr-side-memory"
+version = "1.0.0"
+description = "Adaptive Full-Memory Residual bridge for pretrained summarization"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.6",
+  "transformers>=5.2,<6",
+  "accelerate>=1.2",
+  "safetensors>=0.4",
+  "pyyaml>=6.0",
+  "numpy>=1.24",
+  "rouge==1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff==0.15.20"]
+
+[project.scripts]
+afmr-side-memory = "afmr_side_memory.cli:main"
+
+[tool.setuptools]
+packages = ["afmr_side_memory", "afmr_side_memory.data", "afmr_side_memory.evaluation", "afmr_side_memory.modeling", "afmr_side_memory.training"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"

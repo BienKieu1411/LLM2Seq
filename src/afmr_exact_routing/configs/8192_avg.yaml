@@ -1,0 +1,44 @@
+_base_: afmr_base.yaml
+
+experiment:
+  name: afmr_exact_routing_8192_avg
+  output_dir: runs/afmr_exact_routing/8192_avg
+
+model:
+  # Replace these with the local encoder and decoder directories on the server.
+  encoder_name: /absolute/path/to/pplx-embed-v1-0.6b
+  decoder_name: /absolute/path/to/Qwen3-0.6B
+
+data:
+  # Prepared JSONL is expected to contain text, summary and optionally
+  # system_prompt. Change system_prompt in this file for training, or pass
+  # --system-prompt to evaluate for an evaluation-only override.
+  train_file: datasets/8192_avg/train.jsonl
+  validation_file: datasets/8192_avg/validation.jsonl
+  test_file: datasets/8192_avg/test.jsonl
+  source_field: text
+  target_field: summary
+  id_field: id
+  system_prompt_field: system_prompt
+  system_prompt: >-
+    Bạn là trợ lý chuyên tóm tắt văn bản tiếng Việt. Hãy tạo bản tóm tắt chính
+    xác, mạch lạc, chỉ giữ các thông tin quan trọng và không thêm thông tin
+    không có trong văn bản nguồn. Chỉ trả về nội dung tóm tắt.
+  encoder_prefix: "Hãy tóm tắt văn bản sau:\n\n"
+  decoder_prompt: "Hãy tóm tắt văn bản đã được mã hóa. Chỉ trả về nội dung tóm tắt."
+  decoder_chat_template: true
+  decoder_prefix: ""
+  max_source_length: 8192
+  max_target_length: 512
+
+generation:
+  batch_size: 4
+  max_new_tokens: 512
+  min_new_tokens: 16
+  repetition_penalty: 1.05
+  no_repeat_ngram_size: 3
+  num_beams: 1
+  do_sample: false
+  temperature: 0.0
+  top_k: 0
+  top_p: 1.0
