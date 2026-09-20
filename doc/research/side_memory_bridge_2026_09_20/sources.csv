@@ -1,0 +1,9 @@
+id,type,title,year,venue,url,mechanism,location
+S01,primary,Flamingo: a Visual Language Model for Few-Shot Learning,2022,NeurIPS,https://arxiv.org/abs/2204.14198,Perceiver resampler plus gated side cross-attention,Sections 2.1-2.2; Appendix A.1
+S02,primary,LongT5: Efficient Text-To-Text Transformer for Long Sequences,2022,Findings NAACL,https://aclanthology.org/2022.findings-naacl.55.pdf,Transient global tokens with local token attention,Sections 1 and 3.1.2; PubMed/arXiv results
+S03,primary,Gated Tree Cross-Attention for Checkpoint-Compatible Syntax Injection in Decoder-Only LLMs,2026,ACL,https://aclanthology.org/2026.acl-long.1629.pdf,Checkpoint-compatible gated side path and staged integration,Sections 1 and 3.4; Table 4
+S04,primary,Landmark Attention: Random-Access Infinite Context Length for Transformers,2023,NeurIPS,https://arxiv.org/abs/2305.16300,Block landmarks route to exact retrieved context,Abstract and Section 1
+S05,primary,Recurrent Memory Transformer,2022,arXiv,https://arxiv.org/abs/2207.06881,Memory tokens passed between segments,Abstract and Figure 1 description
+S06,primary,Compressive Transformers for Long-Range Sequence Modelling,2020,ICLR,https://arxiv.org/abs/1911.05507,Granular memory plus compressed memory,Sections 3 and 6
+S07,primary,HMT: Hierarchical Memory Transformer for Efficient Long Context Language Processing,2025,NAACL,https://arxiv.org/abs/2405.06067,Hierarchical recurrent memory and recall for long context,Abstract and Section 1
+
