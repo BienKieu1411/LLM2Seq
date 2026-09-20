@@ -1,0 +1,106 @@
+experiment:
+  name: afmr
+  output_dir: runs/afmr/value_anchor_copy
+
+model:
+  encoder_name: Qwen/Qwen3-Embedding-0.6B
+  decoder_name: Qwen/Qwen3-0.6B
+  dtype: float32
+  compute_dtype: bfloat16
+  tokenizer_use_fast: true
+  gradient_checkpointing: true
+  attention_implementation: sdpa
+  trust_remote_code: true
+
+encoder:
+  backend: pretrained_native
+
+architecture:
+  name: source_conditioned_adaptive_norm
+  # Set bridge_mode=direct_projection for the controlled w/o-bridge ablation.
+  bridge_mode: source_film
+  controller_dim: 256
+  film_rank: 128
+  film_gate_init: 0.05
+  film_gate_max: 0.20
+  film_max_relative_rms: 0.10
+
+decoder:
+  cross_attention_every: 1
+  initialize_cross_from_self: true
+  cross_gate_init: 0.10
+  cross_gate_max: 1.0
+  attention_dropout: 0.0
+  ce_chunk_size: 1024
+  source_film:
+    enabled: true
+    rank: 128
+    gate_init: 0.05
+    gate_max: 0.20
+    max_relative_rms: 0.10
+  grounded_copy:
+    enabled: true
+    key_dim: 128
+    gate_init: 0.05
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 4
+  batch_size: 4
+  gradient_accumulation_steps: 8
+  validation_batch_size: 4
+  num_workers: 8
+  persistent_workers: true
+  length_bucketing: true
+  length_bucket_multiplier: 50
+  fused_optimizer: true
+  tf32: true
+  validation_num_workers: 1
+  warmup_bridge_lr: 1.0e-4
+  warmup_cross_attention_lr: 1.0e-4
+  full_encoder_lr: 3.0e-5
+  full_decoder_lr: 3.0e-5
+  full_bridge_lr: 5.0e-5
+  full_cross_attention_lr: 5.0e-5
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  salience_loss_weight: 0.0
+  salience_margin: 0.5
+  seed: 42
+  log_every_steps: 10
+  save_each_epoch: true
+  save_best: false
+  resume_checkpoint: ""
+
+data:
+  train_file: datasets/pubmed/train.jsonl
+  validation_file: datasets/pubmed/validation.jsonl
+  test_file: datasets/pubmed/test.jsonl
+  source_field: text
+  target_field: summary
+  id_field: id
+  list_separator: "\n"
+  encoder_prefix: "Summarize the following document faithfully and concisely.\nDocument:\n"
+  # Optional row-level system prompt. Non-empty dataset values override this
+  # default; --system-prompt can override both during evaluation.
+  system_prompt: ""
+  system_prompt_field: system_prompt
+  decoder_prompt: "Summarize the encoded source concisely and faithfully. Preserve the essential facts and relationships. Do not add unsupported information. Output only the summary."
+  decoder_chat_template: true
+  decoder_prefix: "Summary:\n"
+  detokenize: false
+  max_source_length: 4096
+  max_target_length: 512
+
+generation:
+  compact_finished: true
+  batch_size: 96
+  max_new_tokens: 512
+  min_new_tokens: 16
+  repetition_penalty: 1.05
+  no_repeat_ngram_size: 3
+  num_beams: 1
+  do_sample: false
+  temperature: 0.0
+  top_k: 0
+  top_p: 1.0
