@@ -151,6 +151,28 @@ PYTHON=/absolute/path/to/bienkieu_env/bin/python \
 runs/afmr/pubmed_value_anchor_copy/test_predictions.jsonl --split test
 ```
 
+To continue a completed train-only run on WikiLingua, use a fresh output
+directory. The wrapper reads the checkpoint stage and extends that stage by
+five WikiLingua epochs, then evaluates `last.pt` on the WikiLingua test split:
+
+```bash
+cd src/eviseq_new
+PYTHON=/absolute/path/to/bienkieu_env/bin/python \
+CUDA_VISIBLE_DEVICES=0 \
+bash scripts/continue_wikilingua.sh \
+  --config configs/afmr_wikilingua.yaml \
+  --checkpoint runs/afmr/train_only/last.pt \
+  --output-dir runs/afmr/wikilingua_from_train_only \
+  --additional-epochs 5 \
+  --device cuda:0 \
+  --eval-batch-size 16 \
+  --overwrite-output-dir
+```
+
+The active WikiLingua config must point to the same local encoder and decoder
+backbones used to create the checkpoint. The wrapper rejects a missing
+checkpoint or dataset split and never overwrites the checkpoint directory.
+
 For a one-GPU PubMed queue that prepares data, trains the PPLX
 encoder recipe, then trains a Qwen3-Embedding control and evaluates both
 `last.pt` checkpoints, run:
