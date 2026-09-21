@@ -149,13 +149,10 @@ def generate_greedy(
     active_rows = torch.arange(token_ids.shape[0], device=token_ids.device)
     memory, memory_mask, source_bias = bridge.memory, bridge.memory_mask, bridge.source_bias
     value_memory = getattr(bridge, "value_memory", None)
-    value_residual = getattr(bridge, "value_residual", None)
     copy_state = getattr(bridge, "copy_state", None)
     try:
         model.decoder.prepare_cross_cache(
-            memory,
-            **({"value_memory": value_memory} if value_memory is not None else {}),
-            **({"value_residual": value_residual} if value_residual is not None else {}),
+            memory, **({"value_memory": value_memory} if value_memory is not None else {})
         )
         for step in range(max_new_tokens):
             history = token_ids.index_select(0, active_rows)
@@ -169,7 +166,6 @@ def generate_greedy(
                 past_key_values=past,
                 use_cache=True,
                 **({"value_memory": value_memory} if value_memory is not None else {}),
-                **({"value_residual": value_residual} if value_residual is not None else {}),
                 **({"copy_state": copy_state} if copy_state is not None else {}),
             )
             scores = logits[:, -1].float()
@@ -220,8 +216,6 @@ def generate_greedy(
                     source_bias = source_bias.index_select(0, surviving)
                     if value_memory is not None:
                         value_memory = value_memory.index_select(0, surviving)
-                    if value_residual is not None:
-                        value_residual = value_residual.index_select(0, surviving)
                     if copy_state is not None:
                         copy_state = copy_state.index_select(surviving)
     finally:

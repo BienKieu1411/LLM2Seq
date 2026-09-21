@@ -25,7 +25,6 @@ def main() -> None:
     seed_everything(7)
     config = load_config(ROOT / "configs/afmr_smoke.yaml")
     config["decoder"]["grounded_copy"]["enabled"] = True
-    config["architecture"]["contextual_value"].update(enabled=True, dim=16, num_heads=4, window_size=4, stride=2)
     config["generation"]["max_new_tokens"] = 4
     loaders = build_loaders(config, max_train_examples=4, max_validation_examples=2)
     model = EviSeqAFMR(config)
@@ -64,7 +63,6 @@ def main() -> None:
             "status": "ok",
             "architecture": config["architecture"]["name"],
             "grounded_copy": True,
-            "contextual_value": True,
             "initial_loss": initial_loss,
             "final_loss": float(final.loss),
             "checkpoint_epoch": metadata["epoch"],

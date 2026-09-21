@@ -17,9 +17,6 @@ architecture:
   feature_rank: 8
   focus_hidden: 16
   focus_windows: [4, 8, 16]
-  contextual_value:
-    # Legacy smoke coverage; contextual-value tests opt in with tiny dimensions.
-    enabled: false
 
 decoder:
   grounded_copy:

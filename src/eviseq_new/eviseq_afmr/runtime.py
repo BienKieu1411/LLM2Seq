@@ -184,11 +184,6 @@ def build_loaders(
             decoder_tokenizer,
             split_data,
             grounded_copy=bool(config["decoder"].get("grounded_copy", {}).get("enabled", False)),
-            salience_supervision=(
-                name in {"train", "validation"}
-                and config["architecture"].get("bridge_mode", "afmr") == "afmr"
-                and float(config["training"].get("salience_loss_weight", 0.0)) > 0
-            ),
             system_prompt_override=system_prompt_override,
         )
         batch_size = (
@@ -317,11 +312,9 @@ def train(
         }
         if _is_main_process():
             LOGGER.info(
-                "model parameters=%s total=%d | bridge=%s contextual_value=%s | distributed=%s world_size=%d",
+                "model parameters=%s total=%d | distributed=%s world_size=%d",
                 counts,
                 sum(p.numel() for p in model.parameters()),
-                model.bridge.bridge_mode,
-                getattr(model.bridge, "contextual_value", None) is not None,
                 _distributed_active(),
                 _distributed_world_size(),
             )

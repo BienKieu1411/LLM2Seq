@@ -15,7 +15,6 @@ import torch
 import torch.distributed as dist
 
 from ..data.copy_alignment import COPY_INPUT_KEYS
-from ..modeling.model import salience_valid_rows
 from .checkpoint import load_checkpoint, save_checkpoint
 from .optimizer import build_optimizer, set_stage_trainability
 
@@ -34,27 +33,6 @@ def _move(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
         key: value.to(device, non_blocking=True) if isinstance(value, torch.Tensor) else value
         for key, value in batch.items()
     }
-
-
-def _salience_batch_stats(batch: dict[str, Any]) -> tuple[int, int]:
-    """Return (valid rows, valid target tokens) for one collated batch.
-
-    The second value is the exact denominator used by the model's evidence
-    loss.  Keeping this calculation next to the trainer's scaling logic makes
-    gradient accumulation and DDP combine the valid-row mean exactly rather
-    than diluting it with unsupervised rows.
-    """
-
-    required = ("source_salience_labels", "source_salience_mask")
-    if any(key not in batch for key in required):
-        return 0, 0
-    valid = salience_valid_rows(
-        batch["source_content_mask"],
-        batch["source_salience_labels"],
-        batch["source_salience_mask"],
-    )
-    target_tokens = batch["labels"][:, 1:].ne(-100).sum(dim=-1)
-    return int(valid.sum().item()), int(target_tokens[valid].sum().item())
 
 
 def _format_duration(seconds: float) -> str:
@@ -132,10 +110,6 @@ class AFMRTrainer:
         self.model.train(train)
         accum = int(self.config["training"]["gradient_accumulation_steps"])
         ce_sum = torch.zeros((), device=self.device)
-        salience_sum = torch.zeros((), device=self.device)
-        salience_valid = 0
-        salience_rows = 0
-        salience_token_total = 0
         token_total = 0
         iterator = iter(loader)
         epoch_step = 0
@@ -150,26 +124,14 @@ class AFMRTrainer:
             started = time.monotonic()
             counts = [int(raw["labels"][:, 1:].ne(-100).sum()) for raw in window]
             window_tokens = sum(counts)
-            salience_stats = [_salience_batch_stats(raw) for raw in window]
-            window_salience_tokens = sum(tokens for _, tokens in salience_stats)
             if self.distributed:
                 token_count = torch.tensor(window_tokens, device=self.device, dtype=torch.long)
                 dist.all_reduce(token_count, op=dist.ReduceOp.SUM)
                 window_tokens = int(token_count.item())
-                if train:
-                    salience_count = torch.tensor(window_salience_tokens, device=self.device, dtype=torch.long)
-                    dist.all_reduce(salience_count, op=dist.ReduceOp.SUM)
-                    window_salience_tokens = int(salience_count.item())
             if train:
                 optimizer.zero_grad(set_to_none=True)
             step_loss = torch.zeros_like(ce_sum)
-            step_salience = torch.zeros_like(ce_sum)
-            salience_weight = float(self.config["training"].get("salience_loss_weight", 0.0))
-            for raw_batch, tokens, (valid_rows, valid_tokens) in zip(window, counts, salience_stats):
-                if "source_salience_mask" in raw_batch:
-                    salience_valid += valid_rows
-                    salience_rows += int(raw_batch["source_salience_mask"].numel())
-                    salience_token_total += valid_tokens
+            for raw_batch, tokens in zip(window, counts):
                 batch = _move(raw_batch, self.device)
                 with torch.set_grad_enabled(train):
                     with torch.autocast("cuda", dtype=torch.bfloat16) if self.use_bf16 else nullcontext():
@@ -183,37 +145,22 @@ class AFMRTrainer:
                             batch.get("decoder_attention_mask"),
                             batch.get("labels"),
                             return_logits=False,
-                            **{
-                                key: batch[key]
-                                for key in ("source_salience_labels", "source_salience_mask")
-                                if key in batch
-                            },
                             **{key: batch[key] for key in COPY_INPUT_KEYS if key in batch},
                         )
                         if output.loss_ce is None:
                             raise RuntimeError("AFMR training requires decoder labels")
-                        if output.loss is None:
-                            raise RuntimeError("AFMR training requires a total loss")
-                        # DDP averages gradients across ranks.  Scale CE and
-                        # evidence separately because they now have different
-                        # denominators: all target tokens for CE, and only
-                        # target tokens in valid evidence rows for salience.
-                        ce_scale = tokens / max(1, window_tokens)
-                        salience_scale = valid_tokens / max(1, window_salience_tokens)
-                        loss = output.loss_ce * ce_scale
-                        if output.loss_salience is not None:
-                            loss = loss + salience_weight * output.loss_salience * salience_scale
+                        # DDP averages gradients across ranks.  Multiplying by
+                        # world_size makes this a true global token-weighted
+                        # gradient instead of an average of per-rank means.
+                        log_scale = tokens / max(1, window_tokens)
+                        scale = log_scale
                         if self.distributed:
-                            loss = loss * self.world_size
+                            scale *= self.world_size
+                        loss = output.loss_ce * scale
                     if train:
                         loss.backward()
-                ce_log_scale = tokens / max(1, window_tokens)
-                salience_log_scale = valid_tokens / max(1, window_salience_tokens)
-                step_loss += output.loss_ce.detach() * ce_log_scale
+                step_loss += output.loss_ce.detach() * log_scale
                 ce_sum += output.loss_ce.detach() * tokens
-                if output.loss_salience is not None:
-                    step_salience += output.loss_salience.detach() * salience_log_scale
-                    salience_sum += output.loss_salience.detach() * valid_tokens
                 token_total += tokens
                 del output, batch, loss
             if train:
@@ -234,7 +181,6 @@ class AFMRTrainer:
                 epoch_step += 1
                 if self.distributed:
                     dist.all_reduce(step_loss, op=dist.ReduceOp.SUM)
-                    dist.all_reduce(step_salience, op=dist.ReduceOp.SUM)
                 if self.global_step % int(self.config["training"]["log_every_steps"]) == 0:
                     window_elapsed = time.monotonic() - started
                     epoch_elapsed = time.monotonic() - epoch_started_at
@@ -276,12 +222,9 @@ class AFMRTrainer:
                         "examples_per_second": round(examples / max(window_elapsed, 1e-9), 4),
                         "tokens_per_second": round(window_tokens / max(window_elapsed, 1e-9), 4),
                     }
-                    if salience_weight > 0:
-                        record["salience"] = round(float(step_salience), 6)
-                        record["salience_valid_target_tokens"] = window_salience_tokens
                     self._write_metric(record)
                     LOGGER.info(
-                        "[train] stage=%s | epoch=%d/%d | epoch_progress=%s %5.1f%% | step=%d/%d | total_step=%d/%d | CE=%.5f%s | grad=%.4f | lr=%s | elapsed=%s | epoch_eta=%s | total_eta=%s | vram=%s | ex/s=%.2f | tok/s=%.0f",
+                        "[train] stage=%s | epoch=%d/%d | epoch_progress=%s %5.1f%% | step=%d/%d | total_step=%d/%d | CE=%.5f | grad=%.4f | lr=%s | elapsed=%s | epoch_eta=%s | total_eta=%s | vram=%s | ex/s=%.2f | tok/s=%.0f",
                         _stage_label(stage),
                         global_epoch,
                         total_epochs,
@@ -292,9 +235,6 @@ class AFMRTrainer:
                         self.global_step,
                         total_training_steps,
                         float(step_loss),
-                        f" | salience={float(step_salience):.5f} (valid_target_tokens={window_salience_tokens})"
-                        if salience_weight > 0
-                        else "",
                         float(grad),
                         learning_rates,
                         _format_duration(total_elapsed),
@@ -305,37 +245,12 @@ class AFMRTrainer:
                         window_tokens / max(window_elapsed, 1e-9),
                     )
         if self.distributed:
-            totals = torch.tensor(
-                [
-                    float(ce_sum.detach()),
-                    float(salience_sum.detach()),
-                    float(token_total),
-                    float(salience_valid),
-                    float(salience_rows),
-                    float(salience_token_total),
-                ],
-                device=self.device,
-                dtype=torch.float64,
-            )
+            totals = torch.tensor([float(ce_sum.detach()), float(token_total)], device=self.device, dtype=torch.float64)
             dist.all_reduce(totals, op=dist.ReduceOp.SUM)
-            ce = float(totals[0].item()) / max(1.0, float(totals[2].item()))
-            salience = float(totals[1].item()) / max(1.0, float(totals[5].item()))
-            coverage = float(totals[3].item()) / max(1.0, float(totals[4].item()))
-            salience_token_coverage = float(totals[5].item()) / max(1.0, float(totals[2].item()))
-            salience_token_total = int(totals[5].item())
+            ce = float(totals[0].item()) / max(1.0, float(totals[1].item()))
         else:
             ce = float(ce_sum) / max(1, token_total)
-            salience = float(salience_sum) / max(1, salience_token_total)
-            coverage = salience_valid / max(1, salience_rows)
-            salience_token_coverage = salience_token_total / max(1, token_total)
-        return {
-            "loss": ce + float(self.config["training"].get("salience_loss_weight", 0.0)) * salience,
-            "ce": ce,
-            "salience": salience,
-            "salience_coverage": coverage,
-            "salience_token_coverage": salience_token_coverage,
-            "salience_valid_target_tokens": float(salience_token_total),
-        }
+        return {"loss": ce, "ce": ce}
 
     def fit(self, train_loader, validation_loader=None, resume_checkpoint: str | None = None) -> None:
         resume_info = None
@@ -396,34 +311,26 @@ class AFMRTrainer:
                     total_training_steps,
                 )
                 LOGGER.info(
-                    "[train] epoch %d/%d complete | stage=%s | CE=%.5f%s | elapsed=%s",
+                    "[train] epoch %d/%d complete | stage=%s | CE=%.5f | elapsed=%s",
                     global_epoch,
                     total_epochs,
                     _stage_label(stage),
                     metrics["ce"],
-                    f" | salience={metrics['salience']:.5f} | evidence_coverage={metrics['salience_coverage']:.3f}"
-                    f" | evidence_token_coverage={metrics['salience_token_coverage']:.3f}"
-                    if float(training.get("salience_loss_weight", 0.0)) > 0
-                    else "",
                     _format_duration(self._elapsed_train_seconds()),
                 )
-                epoch_record = {
-                    "type": "epoch",
-                    "split": "train",
-                    "stage": stage,
-                    "epoch": global_epoch,
-                    "total_epochs": total_epochs,
-                    "epoch_percent": 100.0,
-                    "total_percent": round(100.0 * global_epoch / max(1, total_epochs), 3),
-                    "ce": metrics["ce"],
-                    "total_elapsed_seconds": round(self._elapsed_train_seconds(), 4),
-                }
-                if float(training.get("salience_loss_weight", 0.0)) > 0:
-                    epoch_record["salience"] = metrics["salience"]
-                    epoch_record["salience_coverage"] = metrics["salience_coverage"]
-                    epoch_record["salience_token_coverage"] = metrics["salience_token_coverage"]
-                    epoch_record["salience_valid_target_tokens"] = metrics["salience_valid_target_tokens"]
-                self._write_metric(epoch_record)
+                self._write_metric(
+                    {
+                        "type": "epoch",
+                        "split": "train",
+                        "stage": stage,
+                        "epoch": global_epoch,
+                        "total_epochs": total_epochs,
+                        "epoch_percent": 100.0,
+                        "total_percent": round(100.0 * global_epoch / max(1, total_epochs), 3),
+                        "ce": metrics["ce"],
+                        "total_elapsed_seconds": round(self._elapsed_train_seconds(), 4),
+                    }
+                )
                 validation = None
                 if validation_loader is not None:
                     validation = self._run_epoch(
@@ -442,21 +349,17 @@ class AFMRTrainer:
                         validation["ce"],
                         _format_duration(self._elapsed_train_seconds()),
                     )
-                    validation_record = {
-                        "type": "epoch",
-                        "split": "validation",
-                        "stage": stage,
-                        "epoch": global_epoch,
-                        "total_epochs": total_epochs,
-                        "total_elapsed_seconds": round(self._elapsed_train_seconds(), 4),
-                        "ce": validation["ce"],
-                    }
-                    if float(training.get("salience_loss_weight", 0.0)) > 0:
-                        validation_record["salience"] = validation["salience"]
-                        validation_record["salience_coverage"] = validation["salience_coverage"]
-                        validation_record["salience_token_coverage"] = validation["salience_token_coverage"]
-                        validation_record["salience_valid_target_tokens"] = validation["salience_valid_target_tokens"]
-                    self._write_metric(validation_record)
+                    self._write_metric(
+                        {
+                            "type": "epoch",
+                            "split": "validation",
+                            "stage": stage,
+                            "epoch": global_epoch,
+                            "total_epochs": total_epochs,
+                            "total_elapsed_seconds": round(self._elapsed_train_seconds(), 4),
+                            "ce": validation["ce"],
+                        }
+                    )
                 output_dir = self.config["experiment"]["output_dir"]
                 if (
                     self.is_main_process

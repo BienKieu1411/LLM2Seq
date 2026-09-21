@@ -20,7 +20,6 @@ def test_8192_avg_config_exposes_system_prompt_and_context_budget():
 
 def test_pubmed_recipe_matches_t5gemma_prompt_and_decode_contract():
     config = load_config(Path(__file__).parents[1] / "configs" / "afmr_pubmed.yaml")
-    assert config["training"]["salience_loss_weight"] == 0.0
     assert config["data"]["encoder_prefix"] == (
         "Summarize the following biomedical research article into a concise, factual abstract. "
         "Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"

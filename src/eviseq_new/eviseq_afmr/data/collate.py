@@ -9,7 +9,6 @@ from typing import Any, Sequence
 import torch
 
 from .copy_alignment import align_copy_tokens, pad_copy_alignments
-from .salience import lexical_source_salience
 from .schema import CanonicalRecord
 
 
@@ -44,7 +43,6 @@ class SummarizationCollator:
         data_config: dict[str, Any],
         *,
         grounded_copy: bool = False,
-        salience_supervision: bool = False,
         system_prompt_override: str | None = None,
     ):
         self.encoder_tokenizer = encoder_tokenizer
@@ -52,7 +50,6 @@ class SummarizationCollator:
         self.data = data_config
         self.include_targets = True
         self.grounded_copy = grounded_copy
-        self.salience_supervision = salience_supervision
         decoder_prompt = data_config.get("decoder_prompt", "")
         system_prompt = data_config.get("system_prompt", "")
         self.decoder_prompt = "" if decoder_prompt is None else str(decoder_prompt)
@@ -165,36 +162,8 @@ class SummarizationCollator:
         decoder_rows: list[list[int]] = []
         label_rows: list[list[int]] = []
         copy_rows = []
-        salience_rows: list[list[float]] = []
-        salience_masks: list[bool] = []
         for record in records:
             source, content, offsets = self._encode_source(record, return_offsets=True)
-            prompt = self._prompt_ids_for(record.system_prompt)
-            if self.salience_supervision and self.include_targets:
-                target_encoded = self.decoder_tokenizer(
-                    record.target, add_special_tokens=False, return_offsets_mapping=True
-                )
-                target = _token_ids(target_encoded)[: max(1, self.max_target_length - 1)]
-                target_offsets = target_encoded.get("offset_mapping")
-                if target_offsets is None:
-                    raise ValueError("Salience supervision requires decoder token offset mapping")
-                target_visible_end = int(target_offsets[len(target) - 1][1]) if target else 0
-                salience, valid = lexical_source_salience(
-                    record.source,
-                    record.target,
-                    offsets,
-                    content,
-                    prefix_length=len(self.encoder_prefix),
-                    target_visible_end=target_visible_end,
-                )
-                salience_rows.append(salience)
-                salience_masks.append(valid)
-            else:
-                target = (
-                    _ids(self.decoder_tokenizer, record.target)[: max(1, self.max_target_length - 1)]
-                    if self.include_targets
-                    else []
-                )
             if self.grounded_copy:
                 copy_rows.append(
                     align_copy_tokens(record.source, len(self.encoder_prefix), offsets, self.decoder_tokenizer)
@@ -202,6 +171,12 @@ class SummarizationCollator:
             encoder_rows.append(source)
             content_rows.append(content)
 
+            prompt = self._prompt_ids_for(record.system_prompt)
+            target = (
+                _ids(self.decoder_tokenizer, record.target)[: max(1, self.max_target_length - 1)]
+                if self.include_targets
+                else []
+            )
             eos_target = getattr(self.decoder_tokenizer, "eos_token_id", None)
             if eos_target is not None and self.include_targets:
                 target = target + [int(eos_target)]
@@ -230,10 +205,4 @@ class SummarizationCollator:
         }
         if self.grounded_copy:
             result.update(pad_copy_alignments(copy_rows))
-        if self.salience_supervision and self.include_targets:
-            source_salience_labels = torch.zeros(input_ids.shape, dtype=torch.float32)
-            for row, labels_row in enumerate(salience_rows):
-                source_salience_labels[row, : len(labels_row)] = torch.tensor(labels_row, dtype=torch.float32)
-            result["source_salience_labels"] = source_salience_labels
-            result["source_salience_mask"] = torch.tensor(salience_masks, dtype=torch.bool)
         return result

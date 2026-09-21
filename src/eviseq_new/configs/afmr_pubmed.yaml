@@ -30,5 +30,4 @@ training:
   gradient_accumulation_steps: 2
   validation_batch_size: 4
   max_grad_norm: 1.0
-  salience_loss_weight: 0.0
   save_best: false

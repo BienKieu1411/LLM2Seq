@@ -36,16 +36,12 @@ DATA_DIR="${ARXIV_DATA_DIR:-${ROOT}/datasets/arxiv}"
 RAW_DATA_DIR="${ARXIV_RAW_DATA_DIR:-${ROOT}/datasets/raw/arxiv}"
 AFMR_BRIDGE_MODE="${AFMR_BRIDGE_MODE:-afmr}"
 AFMR_GROUNDED_COPY="${AFMR_GROUNDED_COPY:-true}"
-AFMR_CONTEXTUAL_VALUE="${AFMR_CONTEXTUAL_VALUE:-false}"
-[[ "${AFMR_BRIDGE_MODE}" != direct_projection ]] || AFMR_CONTEXTUAL_VALUE=false
 COPY_VARIANT=copy
 [[ "${AFMR_GROUNDED_COPY}" == false ]] && COPY_VARIANT=lm
 if [[ -n "${AFMR_OUTPUT_DIR:-}" ]]; then
   OUTPUT_DIR="${AFMR_OUTPUT_DIR}"
 elif [[ "${AFMR_BRIDGE_MODE}" == direct_projection ]]; then
   OUTPUT_DIR="${ROOT}/runs/afmr/arxiv_direct_projection_${COPY_VARIANT}"
-elif [[ "${AFMR_CONTEXTUAL_VALUE}" == true ]]; then
-  OUTPUT_DIR="${ROOT}/runs/afmr/arxiv_local_topdown_value_${COPY_VARIANT}"
 else
   OUTPUT_DIR="${ROOT}/runs/afmr/arxiv_value_anchor_${COPY_VARIANT}"
 fi
@@ -109,7 +105,6 @@ positive_int MIN_NEW_TOKENS "${MIN_NEW_TOKENS}"
 [[ -d "${DECODER_MODEL}" ]] || die "Qwen decoder not found: ${DECODER_MODEL}"
 [[ "${AFMR_BRIDGE_MODE}" == afmr || "${AFMR_BRIDGE_MODE}" == direct_projection ]] || die "AFMR_BRIDGE_MODE must be afmr or direct_projection"
 [[ "${AFMR_GROUNDED_COPY}" == true || "${AFMR_GROUNDED_COPY}" == false ]] || die "AFMR_GROUNDED_COPY must be true or false"
-[[ "${AFMR_CONTEXTUAL_VALUE}" == true || "${AFMR_CONTEXTUAL_VALUE}" == false ]] || die "AFMR_CONTEXTUAL_VALUE must be true or false"
 
 if [[ ! -s "${DATA_DIR}/train.jsonl" || ! -s "${DATA_DIR}/validation.jsonl" || ! -s "${DATA_DIR}/test.jsonl" ]]; then
   [[ -d "${ARXIV_SOURCE_DIR}" ]] || die "ArXiv raw directory not found: ${ARXIV_SOURCE_DIR}; set ARXIV_SOURCE_DIR"
@@ -141,7 +136,7 @@ PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" - \
   "${VALIDATION_BATCH_SIZE}" "${NUM_WORKERS}" "${VALIDATION_NUM_WORKERS}" \
   "${INTERFACE_WARMUP_EPOCHS}" "${FULL_FINETUNE_EPOCHS}" "${MAX_SOURCE_LENGTH}" \
   "${MAX_TARGET_LENGTH}" "${EVAL_BATCH_SIZE}" "${MAX_NEW_TOKENS}" "${MIN_NEW_TOKENS}" \
-  "${AFMR_BRIDGE_MODE}" "${AFMR_GROUNDED_COPY}" "${AFMR_CONTEXTUAL_VALUE}" <<'PY'
+  "${AFMR_BRIDGE_MODE}" "${AFMR_GROUNDED_COPY}" <<'PY'
 import sys
 from pathlib import Path
 
@@ -170,7 +165,6 @@ from eviseq_afmr.config import load_config, validate_config
     min_new,
     bridge_mode,
     grounded_copy,
-    contextual_value,
 ) = sys.argv[1:]
 
 config = load_config(template)
@@ -180,9 +174,6 @@ config["model"]["decoder_name"] = str(Path(decoder).expanduser().resolve())
 config["experiment"]["output_dir"] = str(Path(output_dir).expanduser().resolve())
 if bridge_mode == "direct_projection":
     config["architecture"]["bridge_mode"] = bridge_mode
-else:
-    config["architecture"].pop("bridge_mode", None)
-config["architecture"].setdefault("contextual_value", {})["enabled"] = contextual_value == "true"
 config["decoder"]["grounded_copy"]["enabled"] = grounded_copy == "true"
 config["data"].update(
     {
@@ -227,7 +218,6 @@ echo "Processes: ${GPU_COUNT} (DDP when 2 GPUs are visible)"
 echo "Encoder: ${ENCODER_MODEL}"
 echo "Decoder: ${DECODER_MODEL}"
 echo "Bridge mode: ${AFMR_BRIDGE_MODE}"
-echo "Local top-down value bridge: ${AFMR_CONTEXTUAL_VALUE}"
 echo "Grounded copy: ${AFMR_GROUNDED_COPY}"
 echo "Source length: ${MAX_SOURCE_LENGTH}; train batch/GPU: ${TRAIN_BATCH_SIZE}; accumulation: ${GRADIENT_ACCUMULATION_STEPS}; global effective batch: $((TRAIN_BATCH_SIZE * GPU_COUNT * GRADIENT_ACCUMULATION_STEPS))"
 echo "Output: ${OUTPUT_DIR}"

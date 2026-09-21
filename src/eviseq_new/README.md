@@ -3,40 +3,29 @@
 AFMR (Adaptive Full-Memory Residual) is a full-source encoder–decoder architecture for general text summarization:
 
 ```text
-pretrained encoder → AFMR with H0 value anchor → cross-attention Qwen decoder → grounded copy/LM mixture → greedy
+pretrained encoder → value-anchored AFMR interface → cross-attention Qwen decoder → contextual copy/LM mixture → greedy
 ```
 
 The bridge preserves every valid source token. A document/prompt/requested-budget controller conditions a low-rank depth residual in encoder space, a low-rank encoder-to-decoder feature residual, and one multi-scale source prior. Depth weights have shape `[batch, source_tokens, depth_taps]`: a shared learned scorer reads each normalized candidate token representation, plus a document-conditioned depth preference. Softmax is over depth, not tokens; selection runs once after the encoder. Residual output factors and the depth/focus scorers start at zero; gates and prior strength are bounded, but learned residual vector norms are not mathematically bounded. The prior is additive `[batch, source_tokens]` and is consumed by every decoder cross-attention layer. There are no banks, hard top-k pruning, per-layer routers, rerankers, beam search, KD, or test-time evidence labels.
 
-Focus regions are overlapping **token windows**, not selected sentences. Decoder memory contains the entire visible source. The base recipe uses token-level cross-entropy (CE). The PubMed experiment additionally supports a train-only, reference-derived evidence ranking loss on the predicted source prior. No candidate summaries are generated during training; inference uses the same predicted prior without reference labels. The auxiliary is off when `training.salience_loss_weight: 0`.
+Focus regions are overlapping **token windows**, not selected sentences. Decoder memory contains the entire source. The only objective is token-level cross-entropy (CE): depth, feature and focus routes all learn through it. There is no positive-sentence mining, allocation loss, or contrastive head. External evidence labels are ignored.
 
-The evidence labels are a lexical proxy, not verified supporting facts: repeated phrase occurrences and paraphrased evidence remain ambiguous. The ranking loss averages over valid evidence-row target tokens across accumulation/DDP. Treat `salience_loss_weight: 0.002` as an experimental setting to tune on validation, not a proven ROUGE gain; see the [bridge audit](../../doc/research/bridge_contribution_2026_09_18/second_pass.md).
-
-## Retrieval adaptation and contextual values
+## Value-anchored retrieval adaptation
 
 The current recipe uses `architecture.name: afmr_value_anchor`. Let `H0` be the final encoder state projected to decoder width, and `M` the existing AFMR-adapted states. For each decoder layer:
 
 ```text
 K = key_norm(W_K memory_norm(M))
-V0 = W_V memory_norm(H0)
-delta_V = W_V value_residual                  # no projection bias
-radius = 0.20 * RMS(stop_gradient(V0))        # per token and KV head
-V = V0 + delta_V * radius / sqrt(radius^2 + RMS(delta_V)^2 + 1e-12)
+V = W_V memory_norm(H0)
 attention = softmax(Q K^T / sqrt(head_dim) + source_bias + padding_mask)
 output = W_O (attention V)
 ```
 
-The base and PubMed recipes now disable `architecture.contextual_value` after the measured variant lowered all three ROUGE metrics. When explicitly enabled, this optional branch uses dimension 256, 4 heads, window 128, stride 64, and `max_relative_rms: 0.20`. It projects `H0` to a bottleneck, pools overlapping content-token windows, models those regions and produces a bounded `value_residual` at original token positions. No source tokens are removed. With the branch disabled, `delta_V=0` and `V=V0`.
+The previous `afmr_v1` uses `M` for both K and V. The new interface separates retrieval adaptation from the value content: depth/feature residuals and the focus prior learn where to retrieve, while the final encoder states supply the values. The encoder, value projection and shared width projection remain trainable in full fine-tuning. Nothing is detached. Gradients from CE reach both paths; for retrieval-only residual parameters, the direct derivative of V is zero. This restriction does not guarantee factuality or ROUGE improvement, and normalization of keys can still change addressing.
 
-The value correction is bounded **after** each decoder layer's value projection, in FP32, before conversion to the compute dtype. BF16 rounding can slightly perturb the bound. This is a bound on value residuals, not on logits, factuality or ROUGE. Only the radius is detached; CE gradients still reach `H0`, the encoder, all context modules and the value projection. At initialization the new graph matches the previous value-anchor graph exactly. The output projection learns on the first update and the upstream context modules receive nonzero gradients on subsequent updates. Context initialization preserves the RNG state and existing shared weights at a fixed seed.
+The residual outputs start at zero, so the two variants have identical initial outputs with identical weights and inputs. The new variant introduces no trainable parameters, candidate generation, extra Transformer pass or auxiliary loss. It retains another full-source hidden tensor and performs value-side normalization separately; therefore memory/latency are not claimed to be identical. Both variants use one cross-attention operation per layer and the same once-per-document K/V cache and finished-row compaction.
 
-Grounded copy continues to prepare its keys from the unmodified `H0` and existing source bias. It never reads `value_residual`; the copy gate and query can still change indirectly as decoder states change. Region context is computed once per source and the corrected K/V tensors are cached for generation, including finished-row compaction. Training uses the same CE objective and one encoder/decoder pass, with optional activation checkpointing of the context block. The extra source attention and value projections add training cost; GPU throughput has to be measured.
-
-At decoder width 1024, the default context block adds 1,574,912 parameters. The training startup message reports the effective `bridge` mode and `contextual_value` flag so the full and ablated graphs can be identified from the log.
-
-Set `architecture.contextual_value.enabled: false` to recover the previous value-anchor architecture; resolved configs that omit the section also retain that graph and checkpoint compatibility. The historical `afmr_v1` graph uses `M` for both K and V and requires context disabled. New checkpoints record the context dimensions, pooling settings, head count and value bound. Train a fresh run for the new architecture; an old checkpoint cannot be resumed merely by enabling the block in YAML.
-
-The optional context mechanism draws on [Top-down and Bottom-up Inference for Long Document Summarization](https://aclanthology.org/2023.findings-eacl.94/). Its published results do not establish a gain for this architecture. The [bridge contribution report](../../doc/research/bridge_contribution_2026_09_18/final_report.md) documents why the current PubMed experiment tests a predicted evidence prior instead. An offline correctness test is not evidence of a ROUGE gain.
+The conceptual precedent is [Key-Value Memory Networks](https://aclanthology.org/D16-1147/), which separates addressing and reading. That work is not evidence of a summarization gain for this model. The hypothesis here is that task-specific routing need not rewrite the value stream of an already pretrained encoder. Run the shared-memory control with the same FP32 updates, prompt, preprocessing, seed, epochs and decoding settings before attributing any gain to this interface.
 
 ## Contextual grounded output
 
@@ -51,7 +40,7 @@ P(y_t=v) = (1-g_t) P_LM(v) + g_t sum_{j: token_j=v} a_tj
 loss = -mean_t log P(reference_t)
 ```
 
-`g_t` initially equals 0.05 and is subsequently learned without a fixed copy quota. Duplicate occurrences accumulate probability; there is no hard selection of an evidence sentence. A row with no eligible source tokens uses the LM logits exactly. The grounded-copy head itself remains trained through **one CE objective**, not a separately weighted copy/contrastive loss. In the PubMed evidence-prior experiment, a separate train-only loss also supervises the bridge's source prior. CE reaches the decoder query, copy gate, lexical projection, source context and source prior. Encoder parameters are frozen during warm-up as before and receive these gradients in full fine-tuning. Source keys are not detached during training. No gold evidence, candidate ranking, teacher or reference-derived input is required at inference.
+`g_t` initially equals 0.05 and is subsequently learned without a fixed copy quota. Duplicate occurrences accumulate probability; there is no hard selection of an evidence sentence. A row with no eligible source tokens uses the LM logits exactly. Training remains **one CE objective**, not CE plus a separately weighted copy/contrastive loss. CE reaches the decoder query, copy gate, lexical projection, source context and source prior. Encoder parameters are frozen during warm-up as before and receive these gradients in full fine-tuning. Source keys are not detached during training. No gold evidence, candidate ranking, teacher or reference-derived input is required at inference.
 
 This is an adaptation of [pointer-generator networks](https://aclanthology.org/P17-1099/), not a claim that copying is a new invention. The integration uses a pretrained LLM vocabulary and sparse cross-tokenizer alignment instead of assuming identical encoder/decoder token IDs. Copying cannot by itself fix incorrect role binding, omitted findings or evidence outside the encoder input: selecting a supplier's country is still wrong even if that country appears verbatim in the source. Exact-copy biases can also limit abstraction; see [Improving Latent Alignment in Text Summarization by Generalizing the Pointer Generator](https://aclanthology.org/D19-1390/). No ROUGE gain is guaranteed.
 
@@ -65,16 +54,16 @@ For the bridge ablation, set `architecture.bridge_mode: direct_projection` in a
 fresh config and output directory. This keeps the pretrained encoder and the
 decoder cross-attention path, but maps the final encoder states through only a
 width projection; AFMR's controller, depth/feature residuals, focus prior,
-temperature, contextual-value branch and value anchor are absent. Grounded copy remains enabled unless
+temperature and value anchor are absent. Grounded copy remains enabled unless
 it is disabled separately, so the bridge contribution is isolated. The
 checkpoint architecture spec records this mode and refuses to load it as a
 full AFMR checkpoint. The ArXiv and PubMed runners expose the same control via
-`AFMR_BRIDGE_MODE=direct_projection`; this also sets the evidence-loss weight to zero. Use `AFMR_GROUNDED_COPY=false` for the
+`AFMR_BRIDGE_MODE=direct_projection`; use `AFMR_GROUNDED_COPY=false` for the
 independent no-copy condition.
 
 ## Offline smoke test
 
-The offline smoke uses the actual AFMR/copy graph with tiny randomly initialized Qwen backbones and no model downloads. It enables grounded copy and contextual values explicitly and checks CE gradients, warm-up/full optimizer updates, dense/chunked CE parity, checkpoint round-trip, greedy evaluation and prediction resume. The legacy `afmr_smoke.yaml` fixture disables both additions for backward-compatibility tests; the smoke command enables them with small context dimensions:
+The offline smoke uses the actual AFMR/copy graph with tiny randomly initialized Qwen backbones and no model downloads. It enables grounded copy explicitly and checks CE gradients, warm-up/full optimizer updates, dense/chunked CE parity, checkpoint round-trip, greedy evaluation and prediction resume. The legacy `afmr_smoke.yaml` fixture disables copy for backward-compatibility tests; the smoke command enables it:
 
 ```bash
 cd /absolute/path/to/LLM2Seq
@@ -105,14 +94,14 @@ The script creates an isolated `runs/smoke/run_*` directory and never overwrites
 
 ## Preparing data
 
-Each input record contains the configured source and target fields (strings or lists of strings). A record may also contain an optional `system_prompt` string (or list of strings). Training can read raw JSONL directly. For the same three-split preparation used by `eviseq_v2`, run `prepare-dataset`: PubMed/ArXiv first look for `train.label.jsonl`, `val.label.jsonl`, and `test.label.jsonl`, then fall back to the usual split names; CNNDM, WikiLingua, and BookSum accept `train`, `val`/`validation`, and `test` JSONL/JSON/TXT names. GovReport accepts those names and the public release's `gao_{train,valid,test}` and `crs_{train,valid,test}` files, merging GAO and CRS records when both are present. BookSum aliases `chapter`/`chapter_text` and `summary_text`; GovReport also flattens nested `report`/`highlight` sections. The command copies raw files, writes canonical `id/text/summary` JSONL and preserves `system_prompt` when present, emits `preparation_report.json`, and rejects duplicate IDs or exact source text across splits. Pre-existing evidence-label fields are not consumed by AFMR. The optional evidence ranking labels are computed from the visible source and reference inside the training collator, and are never present in generation batches.
+Each input record contains the configured source and target fields (strings or lists of strings). A record may also contain an optional `system_prompt` string (or list of strings). Training can read raw JSONL directly. For the same three-split preparation used by `eviseq_v2`, run `prepare-dataset`: PubMed/ArXiv first look for `train.label.jsonl`, `val.label.jsonl`, and `test.label.jsonl`, then fall back to the usual split names; CNNDM, WikiLingua, and BookSum accept `train`, `val`/`validation`, and `test` JSONL/JSON/TXT names. GovReport accepts those names and the public release's `gao_{train,valid,test}` and `crs_{train,valid,test}` files, merging GAO and CRS records when both are present. BookSum aliases `chapter`/`chapter_text` and `summary_text`; GovReport also flattens nested `report`/`highlight` sections. The command copies raw files, writes canonical `id/text/summary` JSONL and preserves `system_prompt` when present, emits `preparation_report.json`, and rejects duplicate IDs or exact source text across splits. Evidence labels are not consumed by AFMR.
 
 The decoder can render a true system/user chat prefix. Set `data.system_prompt` for a YAML default and `data.system_prompt_field` for the per-row field; a non-empty row value takes precedence over the YAML default. The decoder-side `data.decoder_prompt` is the user instruction and must stay short because the document is already supplied through the encoder and bridge. To fill a prompt into every prepared row when the source does not contain one, add `--default-system-prompt "..."` to either preparation command. During evaluation, `--system-prompt "..."` overrides both the YAML and row prompts for every example without changing checkpoint shapes:
 
 ```bash
 PYTHON=/absolute/path/to/bienkieu_env/bin/python \
   bash scripts/run_afmr.sh evaluate configs/8192_avg.yaml \
-  runs/afmr/8192_avg_contextual_value/last.pt runs/afmr/8192_avg_contextual_value/test_predictions.jsonl \
+  runs/afmr/8192_avg/last.pt runs/afmr/8192_avg/test_predictions.jsonl \
   --split test --system-prompt "Bạn là trợ lý chuyên tóm tắt văn bản tiếng Việt. Chỉ trả về nội dung tóm tắt."
 ```
 
@@ -157,7 +146,7 @@ bash scripts/prepare_afmr.sh --dataset booksum \
 
 ## A100 training/evaluation
 
-Start from `configs/afmr_base.yaml`, copy it to a task recipe, and set model locations, data files, lengths, batch resources, and output directory. The generic base uses one warm-up epoch and four full-finetuning epochs; benchmark recipes override this to match the corresponding T5Gemma total (PubMed 1+3, CNNDM/WikiLingua 1+5). The benchmark defaults to greedy decoding (`num_beams: 1`, `do_sample: false`, `temperature: 0.0`, `top_k: 0`, `top_p: 1.0`). The base and PubMed recipes are CE-only so the default full-vs-direct comparison isolates the bridge architecture. Set `salience_loss_weight: 0.002` only for the separate experimental evidence-supervision arm.
+Start from `configs/afmr_base.yaml`, copy it to a task recipe, and set only model locations, data files, lengths, batch resources, and output directory. The generic base uses one warm-up epoch and four full-finetuning epochs; benchmark recipes override this to match the corresponding T5Gemma total (PubMed 1+3, CNNDM/WikiLingua 1+5). The benchmark defaults to greedy decoding (`num_beams: 1`, `do_sample: false`, `temperature: 0.0`, `top_k: 0`, `top_p: 1.0`), and training is CE-only.
 
 ```bash
 cd src/eviseq_new
@@ -167,7 +156,7 @@ PYTHON=/absolute/path/to/bienkieu_env/bin/python \
 PYTHON=/absolute/path/to/bienkieu_env/bin/python \
   CUDA_VISIBLE_DEVICES=0 bash scripts/run_afmr.sh evaluate \
   configs/afmr_pubmed.yaml runs/afmr/pubmed_value_anchor_copy/last.pt \
-  runs/afmr/pubmed_value_anchor_copy/test_predictions.jsonl --split test
+runs/afmr/pubmed_value_anchor_copy/test_predictions.jsonl --split test
 ```
 
 For a one-GPU PubMed queue that prepares data, trains the PPLX
@@ -223,7 +212,7 @@ bash scripts/run_pubmed_nemotron.sh
 The wrapper keeps the effective training batch at 96 while using a smaller
 per-GPU micro-batch for the larger encoder, materializes a local-only config,
 trains the configured warm-up/full stages, and evaluates `last.pt` on the
-PubMed test split. It writes to `runs/afmr/pubmed_nemotron_contextual_value` and logs to
+PubMed test split. It writes to `runs/afmr/pubmed_nemotron_embed` and logs to
 `logs/afmr`; `OVERWRITE_OUTPUT_DIR=true` starts a fresh run and
 `RESUME_CHECKPOINT=/path/to/last.pt` resumes a compatible run. No model is
 downloaded by this wrapper.
@@ -235,12 +224,12 @@ nucleus top-p; this path is never called during training:
 ```bash
 PYTHON=/absolute/path/to/bienkieu_env/bin/python \
   bash scripts/run_afmr.sh evaluate configs/afmr_pubmed.yaml \
-  runs/afmr/pubmed_value_anchor_copy/last.pt \
-  runs/afmr/pubmed_value_anchor_copy/test_candidates.jsonl \
+  runs/afmr/pubmed_value_anchor_wide/last.pt \
+  runs/afmr/pubmed_value_anchor_wide/test_candidates.jsonl \
   --split test --do-sample --temperature 0.7 --top-k 50 --top-p 0.9
 ```
 
-The PubMed queue defaults to `runs/afmr/pubmed_pair_afmr_value_anchor_copy` with `AFMR_SALIENCE_WEIGHT=0` and `AFMR_CONTEXTUAL_VALUE=false`. Set `AFMR_SALIENCE_WEIGHT=0.002` only for a separately named, validation-tuned evidence-supervision arm. Set `AFMR_BRIDGE_MODE=direct_projection` for w/o bridge; this also disables the auxiliary loss. Use `AFMR_ENCODERS=pplx` to run only the paper's PPLX encoder, and `AFMR_OUTPUT_DIR` to choose a fresh directory. `OVERWRITE_OUTPUT_DIR` defaults to false to protect existing checkpoints. ArXiv defaults to `runs/afmr/arxiv_value_anchor_copy`, with contextual value and auxiliary salience off. For a single experiment, use `run_afmr.sh train` with one task config instead.
+The queue now writes to `runs/afmr/pubmed_pair_afmr_value_anchor_copy`, leaving earlier results untouched. Set `AFMR_GROUNDED_COPY=false` for the value-anchor LM-only control in `pubmed_pair_afmr_value_anchor_lm`. Additionally set `AFMR_ARCHITECTURE=afmr_v1` for the shared-memory LM-only control in `pubmed_pair_afmr_v1_lm`. Numerical/text fixes remain enabled. The queue still runs PPLX then Qwen3-Embedding on the same GPU. For a single experiment, use `run_afmr.sh train` with one task config instead.
 
 For ArXiv, `scripts/run_arxiv.sh` prepares the canonical ArXiv JSONL tree
 when it is missing, materializes a config with local model/data paths, trains
