@@ -10,10 +10,10 @@ def test_smoke_config_is_valid():
     assert config["generation"]["num_beams"] == 1
 
 
-def test_8192_avg_config_exposes_system_prompt_and_context_budget():
+def test_8192_avg_config_moves_the_instruction_to_encoder_prefix():
     config = load_config(Path(__file__).parents[1] / "configs" / "8192_avg.yaml")
-    assert config["data"]["system_prompt_field"] == "system_prompt"
-    assert "Bạn là trợ lý chuyên tóm tắt" in config["data"]["system_prompt"]
+    assert "Bạn là trợ lý chuyên tóm tắt" in config["data"]["encoder_prefix"]
+    assert "Văn bản nguồn:" in config["data"]["encoder_prefix"]
     assert config["data"]["max_source_length"] == 8192
     assert config["data"]["decoder_chat_template"] is True
 

@@ -84,10 +84,6 @@ data:
   id_field: id
   list_separator: "\n"
   encoder_prefix: "Summarize the following document faithfully and concisely.\nDocument:\n"
-  # Optional row-level system prompt. Non-empty dataset values override this
-  # default; --system-prompt can override both during evaluation.
-  system_prompt: ""
-  system_prompt_field: system_prompt
   decoder_prompt: "Summarize the encoded source concisely and faithfully. Preserve the essential facts and relationships. Do not add unsupported information. Output only the summary."
   decoder_chat_template: true
   decoder_prefix: "Summary:\n"

@@ -10,21 +10,13 @@ model:
   decoder_name: /absolute/path/to/Qwen3-0.6B
 
 data:
-  # Prepared JSONL is expected to contain text, summary and optionally
-  # system_prompt. Change system_prompt in this file for training, or pass
-  # --system-prompt to evaluate for an evaluation-only override.
   train_file: datasets/8192_avg/train.jsonl
   validation_file: datasets/8192_avg/validation.jsonl
   test_file: datasets/8192_avg/test.jsonl
   source_field: text
   target_field: summary
   id_field: id
-  system_prompt_field: system_prompt
-  system_prompt: >-
-    Bạn là trợ lý chuyên tóm tắt văn bản tiếng Việt. Hãy tạo bản tóm tắt chính
-    xác, mạch lạc, chỉ giữ các thông tin quan trọng và không thêm thông tin
-    không có trong văn bản nguồn. Chỉ trả về nội dung tóm tắt.
-  encoder_prefix: "Hãy tóm tắt văn bản sau:\n\n"
+  encoder_prefix: "Bạn là trợ lý chuyên tóm tắt văn bản tiếng Việt. Hãy tạo bản tóm tắt chính xác, mạch lạc, chỉ giữ các thông tin quan trọng và không thêm thông tin không có trong văn bản nguồn. Chỉ trả về nội dung tóm tắt.\n\nVăn bản nguồn:\n\n"
   decoder_prompt: "Hãy tóm tắt văn bản đã được mã hóa. Chỉ trả về nội dung tóm tắt."
   decoder_chat_template: true
   decoder_prefix: ""

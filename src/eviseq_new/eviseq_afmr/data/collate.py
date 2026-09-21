@@ -43,7 +43,6 @@ class SummarizationCollator:
         data_config: dict[str, Any],
         *,
         grounded_copy: bool = False,
-        system_prompt_override: str | None = None,
     ):
         self.encoder_tokenizer = encoder_tokenizer
         self.decoder_tokenizer = decoder_tokenizer
@@ -51,58 +50,35 @@ class SummarizationCollator:
         self.include_targets = True
         self.grounded_copy = grounded_copy
         decoder_prompt = data_config.get("decoder_prompt", "")
-        system_prompt = data_config.get("system_prompt", "")
         self.decoder_prompt = "" if decoder_prompt is None else str(decoder_prompt)
-        self.system_prompt = "" if system_prompt is None else str(system_prompt)
-        self.system_prompt_override = system_prompt_override
         self.decoder_chat_template = bool(data_config.get("decoder_chat_template", False))
         decoder_prefix = data_config.get("decoder_prefix", "")
         self.decoder_prefix = "" if decoder_prefix is None else str(decoder_prefix)
         self._prompt_cache: dict[str, list[int]] = {}
-        # Validate and cache the YAML/default prompt in the main process. This
-        # keeps malformed chat-template outputs from surfacing later inside a
-        # DataLoader worker, while row-specific prompts are still built lazily.
-        self._prompt_ids = (
-            self._prompt_ids_for("")
-            if self.decoder_prompt.strip() or self.system_prompt.strip() or system_prompt_override is not None
-            else []
-        )
+        # Validate and cache the fixed decoder instruction in the main process.
+        # This keeps malformed chat-template output out of DataLoader workers.
+        self._prompt_ids = self._prompt_ids_for() if self.decoder_prompt.strip() else []
         self.max_source_length = int(data_config.get("max_source_length", 4096))
         self.max_target_length = int(data_config.get("max_target_length", 512))
         self.encoder_prefix = str(data_config.get("encoder_prefix", ""))
         self.pad_encoder = int(getattr(encoder_tokenizer, "pad_token_id", 0) or 0)
         self.pad_decoder = int(getattr(decoder_tokenizer, "pad_token_id", 0) or 0)
 
-    def _prompt_ids_for(self, record_system_prompt: str) -> list[int]:
-        """Build the decoder prefix, including an optional system role.
+    def _prompt_ids_for(self) -> list[int]:
+        """Build the fixed decoder instruction and cache its token IDs."""
 
-        The system prompt is deliberately kept separate from the source text:
-        EviSeq supplies the document through the encoder/bridge, so putting
-        ``{text}`` into this decoder-side prompt would duplicate the input.
-        Prompt IDs are cached because most datasets use one shared instruction.
-        """
-
-        if self.system_prompt_override is not None:
-            system_prompt = str(self.system_prompt_override).strip()
-        else:
-            system_prompt = str(record_system_prompt).strip() or self.system_prompt.strip()
-        cache_key = f"{system_prompt}\x00{self.decoder_prompt}\x00{self.decoder_prefix}\x00{self.decoder_chat_template}"
+        cache_key = f"{self.decoder_prompt}\x00{self.decoder_prefix}\x00{self.decoder_chat_template}"
         cached = self._prompt_cache.get(cache_key)
         if cached is not None:
             return cached
 
         instruction = self.decoder_prompt.strip()
         if self.decoder_chat_template:
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            if instruction:
-                messages.append({"role": "user", "content": instruction})
-            if not messages:
-                raise ValueError("decoder_chat_template requires a non-empty system_prompt or decoder_prompt")
+            if not instruction:
+                raise ValueError("decoder_chat_template requires a non-empty decoder_prompt")
             prompt = _token_ids(
                 self.decoder_tokenizer.apply_chat_template(
-                    messages,
+                    [{"role": "user", "content": instruction}],
                     tokenize=True,
                     return_dict=False,
                     add_generation_prompt=True,
@@ -110,8 +86,7 @@ class SummarizationCollator:
                 )
             )
         else:
-            parts = [part for part in (system_prompt, instruction) if part]
-            prompt = _ids(self.decoder_tokenizer, "\n\n".join(parts))
+            prompt = _ids(self.decoder_tokenizer, instruction) if instruction else []
         prompt += _ids(self.decoder_tokenizer, self.decoder_prefix)
         if not prompt:
             start_token = getattr(self.decoder_tokenizer, "bos_token_id", None)
@@ -171,7 +146,7 @@ class SummarizationCollator:
             encoder_rows.append(source)
             content_rows.append(content)
 
-            prompt = self._prompt_ids_for(record.system_prompt)
+            prompt = self._prompt_ids_for()
             target = (
                 _ids(self.decoder_tokenizer, record.target)[: max(1, self.max_target_length - 1)]
                 if self.include_targets
