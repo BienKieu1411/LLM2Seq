@@ -59,10 +59,10 @@ def _load(path: Path, stack: tuple[Path, ...]) -> dict[str, Any]:
     return _merge(merged, own)
 
 
-def load_config(path: str | Path) -> dict[str, Any]:
+def load_config(path: str | Path, *, train_only: bool = False) -> dict[str, Any]:
     resolved = Path(path).resolve()
     config = _load(resolved, ())
-    validate_config(config)
+    validate_config(config, train_only=train_only)
     config.setdefault("_meta", {})["config_path"] = str(resolved)
     return config
 
@@ -84,7 +84,7 @@ def _check_keys(mapping: dict[str, Any], allowed: set[str], section: str) -> Non
         raise ValueError(f"Unknown AFMR {section} key(s): {sorted(unknown)}")
 
 
-def validate_config(config: dict[str, Any]) -> None:
+def validate_config(config: dict[str, Any], *, train_only: bool = False) -> None:
     _check_keys(config, _TOP_LEVEL | {"_meta"}, "top-level")
     required_sections = ("model", "encoder", "architecture", "decoder", "training", "data", "generation")
     for section in required_sections:
@@ -276,7 +276,10 @@ def validate_config(config: dict[str, Any]) -> None:
         },
         "data",
     )
-    for name in ("train_file", "validation_file", "test_file", "source_field", "target_field"):
+    required_data_paths = ("train_file", "source_field", "target_field")
+    if not train_only:
+        required_data_paths += ("validation_file", "test_file")
+    for name in required_data_paths:
         if not str(data.get(name, "")).strip():
             raise ValueError(f"data.{name} is required")
     generation = config["generation"]

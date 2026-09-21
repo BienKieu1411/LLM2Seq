@@ -168,13 +168,19 @@ def build_loaders(
 ):
     encoder_tokenizer, decoder_tokenizer = _tokenizers(config)
     data = config["data"]
-    paths = {"train": data["train_file"], "validation": data["validation_file"], "test": data["test_file"]}
+    paths = {
+        "train": data["train_file"],
+        "validation": data.get("validation_file"),
+        "test": data.get("test_file"),
+    }
     selected = (split,) if split else ("train", "validation")
     loaders = {}
     distributed = _distributed_active()
     rank = _distributed_rank()
     world_size = _distributed_world_size()
     for name in selected:
+        if not paths[name]:
+            raise ValueError(f"data.{name}_file is required to load the {name} split")
         split_data = copy.deepcopy(data)
         limit = max_train_examples if name == "train" else max_validation_examples if name == "validation" else 0
         dataset = JsonlSummarizationDataset(resolve_path(paths[name], config), split_data, max_examples=limit)
@@ -250,7 +256,8 @@ def _write_resolved_config(config: dict[str, Any], output_dir: Path) -> None:
     resolved = copy.deepcopy(config)
     resolved.pop("_meta", None)
     for key in ("train_file", "validation_file", "test_file"):
-        resolved["data"][key] = str(resolve_path(resolved["data"][key], config))
+        if resolved["data"].get(key):
+            resolved["data"][key] = str(resolve_path(resolved["data"][key], config))
     output_dir.mkdir(parents=True, exist_ok=True)
     with (output_dir / "resolved_config.yaml").open("w", encoding="utf-8") as handle:
         yaml.safe_dump(resolved, handle, sort_keys=False, allow_unicode=True)
@@ -270,6 +277,8 @@ def train(
     *,
     device: str | None = None,
     resume_checkpoint: str | None = None,
+    train_file: str | Path | None = None,
+    train_only: bool = False,
     max_train_examples: int = 0,
     max_validation_examples: int = 0,
     overwrite_output_dir: bool = False,
@@ -277,12 +286,14 @@ def train(
 ) -> None:
     selected_device, initialized_here = _init_distributed(device)
     try:
-        config = load_config(config_path)
+        config = load_config(config_path, train_only=train_only)
         config["model"]["dtype"] = "float32"
         config["model"].setdefault("compute_dtype", "bfloat16")
         _configure_precision(config)
         if output_dir_override:
             config["experiment"]["output_dir"] = output_dir_override
+        if train_file is not None:
+            config["data"]["train_file"] = str(Path(train_file).expanduser().resolve())
         checkpoint = resume_checkpoint or str(config["training"].get("resume_checkpoint", "")).strip()
         if overwrite_output_dir and checkpoint:
             raise ValueError("--overwrite-output-dir cannot be combined with --resume-checkpoint")
@@ -301,7 +312,10 @@ def train(
             _write_resolved_config(config, output_dir)
         _barrier()
         loaders = build_loaders(
-            config, max_train_examples=max_train_examples, max_validation_examples=max_validation_examples
+            config,
+            split="train" if train_only else None,
+            max_train_examples=max_train_examples,
+            max_validation_examples=max_validation_examples,
         )
         model = EviSeqAFMR(config).to(device=selected_device, dtype=torch.float32)
         counts = {
@@ -330,7 +344,11 @@ def train(
         trainer = AFMRTrainer(model, config, selected_device)
         if checkpoint and _is_main_process():
             LOGGER.info("resumed AFMR checkpoint: %s", checkpoint)
-        trainer.fit(loaders["train"], loaders.get("validation"), resume_checkpoint=checkpoint or None)
+        trainer.fit(
+            loaders["train"],
+            None if train_only else loaders.get("validation"),
+            resume_checkpoint=checkpoint or None,
+        )
         _barrier()
     finally:
         _destroy_distributed(initialized_here)

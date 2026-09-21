@@ -26,6 +26,12 @@ def main(argv: list[str] | None = None) -> None:
     train.add_argument("config")
     train.add_argument("--device", default=None)
     train.add_argument("--resume-checkpoint", default=None)
+    train.add_argument("--train-file", default=None, help="Override data.train_file with one JSONL file")
+    train.add_argument(
+        "--train-only",
+        action="store_true",
+        help="Load only the training split and skip validation; evaluation is a separate command",
+    )
     train.add_argument("--max-train-examples", type=int, default=0)
     train.add_argument("--max-validation-examples", type=int, default=0)
     train.add_argument("--overwrite-output-dir", action="store_true")
@@ -79,6 +85,8 @@ def main(argv: list[str] | None = None) -> None:
             args.config,
             device=args.device,
             resume_checkpoint=args.resume_checkpoint,
+            train_file=args.train_file,
+            train_only=args.train_only,
             max_train_examples=args.max_train_examples,
             max_validation_examples=args.max_validation_examples,
             overwrite_output_dir=args.overwrite_output_dir,
