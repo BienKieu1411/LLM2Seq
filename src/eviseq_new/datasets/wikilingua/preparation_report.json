@@ -1,0 +1,51 @@
+{
+  "dataset": "wikilingua",
+  "input_dir": "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/data/raw/wikilingua",
+  "splits": {
+    "train": {
+      "kept": 13999,
+      "skipped": 0,
+      "source_path": "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/data/raw/wikilingua/train.json",
+      "source_paths": [
+        "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/data/raw/wikilingua/train.json"
+      ],
+      "raw_copy": "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/data/raw/wikilingua/train.json",
+      "raw_copies": [
+        "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/data/raw/wikilingua/train.json"
+      ],
+      "processed_path": "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/datasets/wikilingua/train.jsonl",
+      "duplicate_ids": 0,
+      "duplicate_sources": 0
+    },
+    "validation": {
+      "kept": 1680,
+      "skipped": 0,
+      "source_path": "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/data/raw/wikilingua/val.json",
+      "source_paths": [
+        "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/data/raw/wikilingua/val.json"
+      ],
+      "raw_copy": "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/data/raw/wikilingua/val.json",
+      "raw_copies": [
+        "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/data/raw/wikilingua/val.json"
+      ],
+      "processed_path": "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/datasets/wikilingua/validation.jsonl",
+      "duplicate_ids": 0,
+      "duplicate_sources": 0
+    },
+    "test": {
+      "kept": 3901,
+      "skipped": 1,
+      "source_path": "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/data/raw/wikilingua/test.json",
+      "source_paths": [
+        "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/data/raw/wikilingua/test.json"
+      ],
+      "raw_copy": "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/data/raw/wikilingua/test.json",
+      "raw_copies": [
+        "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/data/raw/wikilingua/test.json"
+      ],
+      "processed_path": "/Users/kieugiangbien/Downloads/Project/LLM2Seq/src/eviseq_new/datasets/wikilingua/test.jsonl",
+      "duplicate_ids": 0,
+      "duplicate_sources": 0
+    }
+  }
+}
