@@ -100,7 +100,7 @@ The source instruction is part of `data.encoder_prefix`, so the same instruction
 
 `decoder_chat_template: true` sends the fixed decoder instruction as a user message to the decoder tokenizer and appends its assistant generation marker. With `decoder_chat_template: false`, the decoder instruction is tokenized as literal text. When changing either prompt for a comparison, use a fresh prediction filename so an existing JSONL resume prefix cannot be mistaken for generations made with the new instruction.
 
-PubMed, ArXiv and CNNDM preparation detokenizes punctuation, brackets, quotes and contractions using the T5Gemma sentence-level rules, preserving sentence newlines. Their recipes also enable `data.detokenize: true`, so already-prepared files receive the same idempotent normalization when read. No full-corpus cache or repeated copy is required. This applies to both source and target, including test references. Legacy resolved configs without this key retain their previous text handling; do not mix old partial predictions with newly normalized references. WikiLingua does not enable this English-oriented normalization.
+PubMed, ArXiv and CNNDM preparation detokenizes punctuation, brackets, quotes and contractions using the T5Gemma sentence-level rules, preserving sentence newlines. Their recipes also enable `data.detokenize: true`, so already-prepared files receive the same idempotent normalization when read. No full-corpus cache or repeated copy is required. This applies to both source and target, including test references. Legacy resolved configs without this key retain their previous text handling; do not mix old partial predictions with newly normalized references. The WikiLingua continuation recipe now uses the same normalization and plain-summary prompt.
 
 ```bash
 PYTHON=/absolute/path/to/bienkieu_env/bin/python \
@@ -187,6 +187,29 @@ bash scripts/continue_wikilingua.sh \
 The active WikiLingua config must point to the same local encoder and decoder
 backbones used to create the checkpoint. The wrapper rejects a missing
 checkpoint or dataset split and never overwrites the checkpoint directory.
+
+To train a summary-only corpus for four epochs and then continue the same
+checkpoint for four epochs on WikiLingua, use the two-stage runner. It shares
+one plain-summary encoder/decoder prompt, uses a 3,072-token source limit and
+a 512-token target limit, selects `best.pt` by WikiLingua validation CE, and
+evaluates that checkpoint on the WikiLingua test split:
+
+```bash
+cd src/eviseq_new
+PYTHON=/absolute/path/to/bienkieu_env/bin/python \
+CUDA_VISIBLE_DEVICES=0 \
+bash scripts/run_summary_then_wikilingua.sh \
+  --summary-train /path/to/datasets/90k/train.jsonl \
+  --wikilingua-dir /path/to/datasets/wikilingua \
+  --output-dir runs/afmr/summary_then_wikilingua \
+  --encoder-model /path/to/pplx-embed-v1-0.6b \
+  --decoder-model /path/to/Qwen3-0.6B \
+  --overwrite-output-dir
+```
+
+The summary JSONL defaults to `text`, `summary`, and `id` fields; override
+them with `--source-field`, `--target-field`, and `--id-field` when needed.
+Use `CUDA_VISIBLE_DEVICES=0,1` to launch the two stages with DDP.
 
 For a one-GPU PubMed queue that prepares data, trains the PPLX
 encoder recipe, then trains a Qwen3-Embedding control and evaluates both

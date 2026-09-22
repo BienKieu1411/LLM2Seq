@@ -1,18 +1,22 @@
 _base_: afmr_base.yaml
 
 experiment:
-  name: afmr_wikilingua_direct
-  output_dir: runs/afmr/wikilingua_direct
+  name: afmr_summary_wikilingua
+  output_dir: runs/afmr/summary_wikilingua
 
+# This file is a recipe template. The two-stage runner materializes the
+# dataset paths and epoch counts for each stage.
 data:
-  train_file: datasets/wikilingua/train.jsonl
+  train_file: datasets/90k/train.jsonl
   validation_file: datasets/wikilingua/validation.jsonl
   test_file: datasets/wikilingua/test.jsonl
-  # Use the same plain-summary instruction as the summary-only corpus.
+  source_field: text
+  target_field: summary
+  id_field: id
   encoder_prefix: "Hãy đọc văn bản nguồn và viết một bản tóm tắt ngắn gọn, chính xác, mạch lạc. Chỉ giữ các thông tin quan trọng; không thêm thông tin không có trong văn bản nguồn.\n\nVăn bản nguồn:\n"
   decoder_prompt: "Viết bản tóm tắt ngắn gọn và chính xác từ văn bản nguồn. Chỉ sử dụng thông tin trong nguồn, không thêm thông tin mới. Chỉ trả về bản tóm tắt."
-  decoder_prefix: "Tóm tắt:\n"
   decoder_chat_template: true
+  decoder_prefix: "Tóm tắt:\n"
   detokenize: true
   max_source_length: 3072
   max_target_length: 512
@@ -35,7 +39,8 @@ model:
 
 training:
   interface_warmup_epochs: 0
-  full_finetune_epochs: 6
-  save_best: true
+  full_finetune_epochs: 4
+  save_best: false
   save_each_epoch: true
   resume_checkpoint: ""
+  resume_scheduler: false
