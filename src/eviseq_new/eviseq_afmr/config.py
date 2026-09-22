@@ -236,6 +236,7 @@ def validate_config(config: dict[str, Any], *, train_only: bool = False) -> None
             "save_each_epoch",
             "save_best",
             "resume_checkpoint",
+            "resume_scheduler",
             "length_bucketing",
             "length_bucket_multiplier",
             "persistent_workers",
