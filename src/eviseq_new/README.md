@@ -138,7 +138,7 @@ bash scripts/prepare_afmr.sh --dataset booksum \
 
 ## A100 training/evaluation
 
-Start from `configs/afmr_base.yaml`, copy it to a task recipe, and set only model locations, data files, lengths, batch resources, and output directory. The generic base uses one warm-up epoch and four full-finetuning epochs; benchmark recipes override this to match the corresponding T5Gemma total (PubMed 1+3, CNNDM/WikiLingua 1+5). The benchmark defaults to greedy decoding (`num_beams: 1`, `do_sample: false`, `temperature: 0.0`, `top_k: 0`, `top_p: 1.0`), and training is CE-only.
+Start from `configs/afmr_base.yaml`, copy it to a task recipe, and set only model locations, data files, lengths, batch resources, and output directory. The generic base uses one warm-up epoch and four full-finetuning epochs; benchmark recipes override this to match the corresponding T5Gemma total. WikiLingua uses six full-finetuning epochs with no warm-up. The benchmark defaults to greedy decoding (`num_beams: 1`, `do_sample: false`, `temperature: 0.0`, `top_k: 0`, `top_p: 1.0`), and training is CE-only.
 
 ```bash
 cd src/eviseq_new
@@ -386,6 +386,46 @@ GPU speedups must be measured on the actual B200, model paths, and batch shapes;
 offline tiny-model correctness tests are not hardware performance benchmarks.
 
 ## Package layout
+
+## JSONL length inspection and filtering
+
+The repository includes two model-free utilities for datasets whose fields may
+differ from the canonical `text`/`summary` names. Both scripts preserve the
+complete JSON object when filtering; pass dotted paths when the source or
+target is nested. For model-token lengths, point the scripts at local
+tokenizers. Without `--tokenizer`, they use whitespace counts and label that
+choice in the report.
+
+Inspect all fields, sample counts, length percentiles, and a histogram:
+
+```bash
+python scripts/inspect_jsonl_lengths.py /data/train.jsonl \
+  --source-field input.article --target-field output.summary \
+  --source-tokenizer /models/pplx-embed-v1-0.6b \
+  --target-tokenizer /models/Qwen3-0.6B \
+  --output-dir /data/train_length_report
+```
+
+The report directory contains `length_report.json`, `lengths.csv`, and
+`length_histogram.png`. The JSON report lists every observed field and its
+types, plus complete field names in a few sample records. Use
+`--sample-rows 0` when sample values are not needed.
+
+Create a training subset with targets strictly shorter than 512 tokens and a
+fixed number of examples:
+
+```bash
+python scripts/filter_jsonl_by_target_length.py /data/train.jsonl \
+  /data/train_lt512_100k.jsonl \
+  --target-field output.summary --target-tokenizer /models/Qwen3-0.6B \
+  --target-below 512 --num-samples 100000 --selection random --seed 17 \
+  --report /data/train_lt512_100k.report.json
+```
+
+Use `--selection first` to retain input order, `--allow-fewer` when the
+eligible pool may be smaller than the requested count, and `--max-target-tokens
+N` for an inclusive `<= N` limit. The output lines are copied verbatim, so
+additional metadata fields are retained.
 
 ```text
 eviseq_new/

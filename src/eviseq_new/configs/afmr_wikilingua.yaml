@@ -37,8 +37,8 @@ model:
   decoder_name: /absolute/path/to/Qwen3-0.6B
 
 training:
-  interface_warmup_epochs: 1
-  full_finetune_epochs: 5
+  interface_warmup_epochs: 0
+  full_finetune_epochs: 6
   save_best: true
   save_each_epoch: true
   resume_checkpoint: ""
