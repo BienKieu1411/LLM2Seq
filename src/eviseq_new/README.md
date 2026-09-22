@@ -440,8 +440,8 @@ target filtering, or roughly 84k rows after `target <= 512`:
 python scripts/filter_jsonl_by_target_length.py /data/train.jsonl \
   /data/train_balanced.jsonl \
   --source-field input --target-field output \
-  --source-tokenizer /models/pplx-embed-v1-0.6b \
   --target-tokenizer /models/Qwen3-0.6B \
+  --detokenize \
   --max-target-tokens 512 \
   --balance-source-bins 50 --max-per-source-bin 20000 \
   --selection random --seed 17 \
@@ -451,6 +451,17 @@ python scripts/filter_jsonl_by_target_length.py /data/train.jsonl \
 The report contains the eligible and written count for every source-length
 bin. `--selection first` keeps the earliest rows in each bin; `random` uses a
 reproducible reservoir sample and then writes the selected rows in input order.
+With `--detokenize`, only the configured source and target fields are
+normalized; all other metadata fields are preserved.
+
+The server defaults are also packaged as a one-command wrapper:
+
+```bash
+bash scripts/balance_train_jsonl.sh
+```
+
+Override its paths with `--input`, `--output`, and `--report` when using a
+different dataset.
 
 ```text
 eviseq_new/

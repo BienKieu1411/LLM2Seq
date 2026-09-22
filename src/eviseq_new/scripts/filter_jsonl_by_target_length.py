@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-from jsonl_length_utils import load_counters, record_texts
+from jsonl_length_utils import detokenize_record_fields, load_counters, record_texts
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -23,6 +23,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-field", default="text")
     parser.add_argument("--target-field", default="summary")
     parser.add_argument("--list-separator", default="\n")
+    parser.add_argument(
+        "--detokenize",
+        action="store_true",
+        help="Detokenize source/target fields before measuring and writing the output JSONL",
+    )
     source_bounds = parser.add_mutually_exclusive_group()
     source_bounds.add_argument("--max-source-tokens", type=int, help="Inclusive upper bound (source length <= N)")
     source_bounds.add_argument("--source-below", type=int, help="Strict upper bound (source length < N)")
@@ -70,12 +75,20 @@ def _measure_line(
     source_field: str,
     target_field: str,
     list_separator: str,
+    detokenize: bool,
     source_counter,
     target_counter,
 ) -> tuple[int, int]:
     row = json.loads(raw_line)
     if not isinstance(row, dict):
         raise ValueError("record is not an object")
+    if detokenize:
+        detokenize_record_fields(
+            row,
+            source_field=source_field,
+            target_field=target_field,
+            separator=list_separator,
+        )
     source, target = record_texts(
         row,
         source_field=source_field,
@@ -107,6 +120,7 @@ def _collect_eligible(
                     source_field=args.source_field,
                     target_field=args.target_field,
                     list_separator=args.list_separator,
+                    detokenize=args.detokenize,
                     source_counter=source_counter,
                     target_counter=target_counter,
                 )
@@ -130,7 +144,24 @@ def _collect_eligible(
     return records, invalid_count
 
 
-def _write_selected_lines(input_path: Path, output_path: Path, selected_lines: set[int]) -> None:
+def _serialize_output_line(raw_line: str, args: argparse.Namespace) -> str:
+    if not args.detokenize:
+        return raw_line if raw_line.endswith("\n") else raw_line + "\n"
+    row = json.loads(raw_line)
+    if not isinstance(row, dict):
+        raise ValueError("record is not an object")
+    detokenize_record_fields(
+        row,
+        source_field=args.source_field,
+        target_field=args.target_field,
+        separator=args.list_separator,
+    )
+    return json.dumps(row, ensure_ascii=False) + "\n"
+
+
+def _write_selected_lines(
+    input_path: Path, output_path: Path, selected_lines: set[int], args: argparse.Namespace
+) -> None:
     file_descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{output_path.name}.", suffix=".tmp", dir=output_path.parent
     )
@@ -143,7 +174,7 @@ def _write_selected_lines(input_path: Path, output_path: Path, selected_lines: s
         ):
             for line_number, raw_line in enumerate(source_handle, start=1):
                 if line_number in selected_lines:
-                    output_handle.write(raw_line if raw_line.endswith("\n") else raw_line + "\n")
+                    output_handle.write(_serialize_output_line(raw_line, args))
         temporary.replace(output_path)
     except Exception:
         temporary.unlink(missing_ok=True)
@@ -177,11 +208,13 @@ def _balance_source_bins(
     selected_lines = {line_number for bin_lines in chosen for line_number in bin_lines}
     bin_report = []
     for index, (left, right, before) in enumerate(zip(edges[:-1], edges[1:], counts.tolist())):
+        start = int(np.ceil(left))
+        end = max(start, int(np.ceil(right)) - 1)
         bin_report.append(
             {
                 "bin": index,
-                "source_token_start_inclusive": int(np.ceil(left)),
-                "source_token_end_inclusive": int(np.ceil(right)) - 1,
+                "source_token_start_inclusive": start,
+                "source_token_end_inclusive": end,
                 "eligible_samples": int(before),
                 "written_samples": len(chosen[index]),
             }
@@ -244,7 +277,7 @@ def filter_jsonl(args: argparse.Namespace) -> dict:
             selection=args.selection,
             seed=args.seed,
         )
-        _write_selected_lines(input_path, output_path, selected_lines)
+        _write_selected_lines(input_path, output_path, selected_lines, args)
         report = {
             "input": str(input_path),
             "output": str(output_path),
@@ -288,19 +321,15 @@ def filter_jsonl(args: argparse.Namespace) -> dict:
                 if not raw_line.strip():
                     continue
                 try:
-                    row = json.loads(raw_line)
-                    if not isinstance(row, dict):
-                        raise ValueError("record is not an object")
-                    source, target = record_texts(
-                        row,
+                    source_length, target_length = _measure_line(
+                        raw_line,
                         source_field=args.source_field,
                         target_field=args.target_field,
-                        separator=args.list_separator,
+                        list_separator=args.list_separator,
+                        detokenize=args.detokenize,
+                        source_counter=source_counter,
+                        target_counter=target_counter,
                     )
-                    if not source or not target:
-                        raise ValueError("source and target must be non-empty")
-                    source_length = source_counter(source)
-                    target_length = target_counter(target)
                 except (json.JSONDecodeError, TypeError, ValueError):
                     invalid_count += 1
                     continue
@@ -320,12 +349,12 @@ def filter_jsonl(args: argparse.Namespace) -> dict:
                     continue
                 eligible_count += 1
                 if args.num_samples is None:
-                    first_output.write(raw_line if raw_line.endswith("\n") else raw_line + "\n")
+                    first_output.write(_serialize_output_line(raw_line, args))
                     seen += 1
                     continue
                 if args.selection == "first":
                     if seen < args.num_samples:
-                        first_output.write(raw_line if raw_line.endswith("\n") else raw_line + "\n")
+                        first_output.write(_serialize_output_line(raw_line, args))
                         seen += 1
                 else:
                     # Reservoir sampling stores only N long JSON lines in memory.
@@ -339,7 +368,7 @@ def filter_jsonl(args: argparse.Namespace) -> dict:
                 first_output.seek(0)
                 first_output.truncate(0)
                 for _line_number, raw_line in sorted(selected):
-                    first_output.write(raw_line if raw_line.endswith("\n") else raw_line + "\n")
+                    first_output.write(_serialize_output_line(raw_line, args))
 
         if args.num_samples is not None and eligible_count < args.num_samples and not args.allow_fewer:
             raise ValueError(

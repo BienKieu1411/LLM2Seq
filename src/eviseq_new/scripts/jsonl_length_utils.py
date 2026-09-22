@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -68,6 +69,79 @@ def record_texts(
     source = as_text(get_field(row, source_field, DEFAULT_SOURCE_ALIASES), separator=separator)
     target = as_text(get_field(row, target_field, DEFAULT_TARGET_ALIASES), separator=separator)
     return source, target
+
+
+def _detokenize_text(text: str) -> str:
+    lines = []
+    for line in text.splitlines():
+        line = unicodedata.normalize("NFKC", line).replace("``", '"').replace("''", '"')
+        line = re.sub(r"\s+", " ", line).strip()
+        line = re.sub(r"\s+([,.;:!?%])", r"\1", line)
+        line = re.sub(r"([\(\[\{])\s+", r"\1", line)
+        line = re.sub(r"\s+([\)\]\}])", r"\1", line)
+        line = re.sub(r"\s+n['’]t\b", "n't", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+(['’](?:s|re|ve|ll|d|m))\b", r"\1", line, flags=re.IGNORECASE)
+        if line.strip():
+            lines.append(line.strip())
+    return "\n".join(lines)
+
+
+def _detokenize_value(value: Any, *, separator: str) -> Any:
+    if isinstance(value, str):
+        return _detokenize_text(value)
+    if isinstance(value, list):
+        return [_detokenize_value(item, separator=separator) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_detokenize_value(item, separator=separator) for item in value)
+    return value
+
+
+def _find_field_path(row: Mapping[str, Any], field: str, aliases: tuple[str, ...]) -> tuple[str, ...] | None:
+    def exists(path: str) -> bool:
+        value: Any = row
+        for part in path.split("."):
+            if not isinstance(value, Mapping) or part not in value:
+                return False
+            value = value[part]
+        return True
+
+    for candidate in (field, *aliases):
+        if exists(candidate):
+            return tuple(candidate.split("."))
+    return None
+
+
+def _set_nested(row: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
+    target: dict[str, Any] = row
+    for part in path[:-1]:
+        child = target.get(part)
+        if not isinstance(child, dict):
+            return
+        target = child
+    target[path[-1]] = value
+
+
+def detokenize_record_fields(
+    row: dict[str, Any],
+    *,
+    source_field: str,
+    target_field: str,
+    separator: str = "\n",
+) -> dict[str, Any]:
+    """Detokenize only source/target fields while preserving every other field."""
+
+    for field, aliases in (
+        (source_field, DEFAULT_SOURCE_ALIASES),
+        (target_field, DEFAULT_TARGET_ALIASES),
+    ):
+        path = _find_field_path(row, field, aliases)
+        if path is None:
+            continue
+        current: Any = row
+        for part in path:
+            current = current[part]
+        _set_nested(row, path, _detokenize_value(current, separator=separator))
+    return row
 
 
 def _type_name(value: Any) -> str:
