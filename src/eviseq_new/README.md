@@ -431,6 +431,27 @@ eligible pool may be smaller than the requested count, `--source-below N` or
 The output lines are copied verbatim, so additional metadata fields are
 retained.
 
+To balance the source-length distribution, cap every source-length bin rather
+than keeping only the sparse tail. For example, the 50-bin histogram used for
+the report and a cap of 20,000 samples per bin gives roughly 90k rows before
+target filtering, or roughly 84k rows after `target <= 512`:
+
+```bash
+python scripts/filter_jsonl_by_target_length.py /data/train.jsonl \
+  /data/train_balanced.jsonl \
+  --source-field input --target-field output \
+  --source-tokenizer /models/pplx-embed-v1-0.6b \
+  --target-tokenizer /models/Qwen3-0.6B \
+  --max-target-tokens 512 \
+  --balance-source-bins 50 --max-per-source-bin 20000 \
+  --selection random --seed 17 \
+  --report /data/train_balanced.report.json
+```
+
+The report contains the eligible and written count for every source-length
+bin. `--selection first` keeps the earliest rows in each bin; `random` uses a
+reproducible reservoir sample and then writes the selected rows in input order.
+
 ```text
 eviseq_new/
 ├── eviseq_afmr/       public AFMR namespace
