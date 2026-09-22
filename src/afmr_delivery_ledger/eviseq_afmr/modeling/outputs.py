@@ -28,6 +28,7 @@ class BridgeState:
     value_memory: Optional[torch.Tensor] = None
     copy_state: Optional[CopyState] = None
     region_states: Optional[torch.Tensor] = None
+    cross_region_states: Optional[torch.Tensor] = None
     region_mask: Optional[torch.Tensor] = None
     source_region_ids: Optional[torch.Tensor] = None
 

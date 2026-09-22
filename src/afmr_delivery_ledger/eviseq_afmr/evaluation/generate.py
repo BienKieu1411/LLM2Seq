@@ -151,7 +151,9 @@ def generate_greedy(
     value_memory = getattr(bridge, "value_memory", None)
     copy_state = getattr(bridge, "copy_state", None)
     region_states = getattr(bridge, "region_states", None)
+    cross_region_states = getattr(bridge, "cross_region_states", None)
     region_mask = getattr(bridge, "region_mask", None)
+    source_region_ids = getattr(bridge, "source_region_ids", None)
     try:
         model.decoder.prepare_cross_cache(
             memory, **({"value_memory": value_memory} if value_memory is not None else {})
@@ -169,7 +171,16 @@ def generate_greedy(
                 use_cache=True,
                 **({"value_memory": value_memory} if value_memory is not None else {}),
                 **({"copy_state": copy_state} if copy_state is not None else {}),
-                **({"region_states": region_states, "region_mask": region_mask} if region_states is not None else {}),
+                **(
+                    {
+                        "region_states": region_states,
+                        "cross_region_states": cross_region_states,
+                        "region_mask": region_mask,
+                        "source_region_ids": source_region_ids,
+                    }
+                    if region_states is not None
+                    else {}
+                ),
             )
             scores = logits[:, -1].float()
             constraint_history = history[:, width:] if chat_prompt else history
@@ -223,7 +234,9 @@ def generate_greedy(
                         copy_state = copy_state.index_select(surviving)
                     if region_states is not None:
                         region_states = region_states.index_select(0, surviving)
+                        cross_region_states = cross_region_states.index_select(0, surviving)
                         region_mask = region_mask.index_select(0, surviving)
+                        source_region_ids = source_region_ids.index_select(0, surviving)
     finally:
         model.decoder.clear_cross_cache()
     texts = tokenizer.batch_decode(token_ids[:, batch["decoder_prompt_ids"].shape[1] :], skip_special_tokens=True)

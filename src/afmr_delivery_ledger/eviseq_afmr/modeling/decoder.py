@@ -85,6 +85,17 @@ class CopiedCrossAttention(nn.Module):
         value = self.v_proj(value_hidden).view(batch, length, self.num_kv_heads, self.head_dim).transpose(1, 2)
         return key, value
 
+    def region_relevance(self, query_states: torch.Tensor, regions: torch.Tensor) -> torch.Tensor:
+        """Approximate this attention's token logits on pooled source keys."""
+        batch, target_length, _ = query_states.shape
+        region_count = regions.shape[1]
+        query = self.q_norm(self.q_proj(query_states).view(batch, target_length, self.num_heads, self.head_dim)).float()
+        keys = self.k_norm(
+            self.k_proj(self.memory_norm(regions)).view(batch, region_count, self.num_kv_heads, self.head_dim)
+        ).float()
+        keys = keys.repeat_interleave(self.num_heads // self.num_kv_heads, dim=2)
+        return torch.einsum("bthd,brhd->btr", query, keys) / (self.num_heads * math.sqrt(self.head_dim))
+
     def forward(
         self,
         query_states: torch.Tensor,
@@ -156,7 +167,16 @@ class CopiedCrossAttention(nn.Module):
 
 
 class DecoderLayerWithCross(GradientCheckpointingLayer):
-    def __init__(self, base: nn.Module, config: Any, dropout: float, gate_init: float, gate_max: float, index: int):
+    def __init__(
+        self,
+        base: nn.Module,
+        config: Any,
+        dropout: float,
+        gate_init: float,
+        gate_max: float,
+        index: int,
+        ledger_cross_route: bool = False,
+    ):
         super().__init__()
         if not 0.0 < gate_init < gate_max <= 1.0:
             raise ValueError("cross gate must satisfy 0 < init < max <= 1")
@@ -166,6 +186,7 @@ class DecoderLayerWithCross(GradientCheckpointingLayer):
         self.cross_gate = nn.Parameter(torch.tensor(math.log(gate_init / (gate_max - gate_init)), dtype=torch.float32))
         self.cross_gate_max = float(gate_max)
         self.index = int(index)
+        self.ledger_cross_route = bool(ledger_cross_route)
 
     def forward(
         self,
@@ -178,6 +199,12 @@ class DecoderLayerWithCross(GradientCheckpointingLayer):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         encoder_attention_bias: Optional[torch.Tensor] = None,
         encoder_value_states: Optional[torch.Tensor] = None,
+        encoder_delivery_ledger: Optional[SourceDeliveryLedger] = None,
+        encoder_region_states: Optional[torch.Tensor] = None,
+        encoder_region_mask: Optional[torch.Tensor] = None,
+        encoder_source_region_ids: Optional[torch.Tensor] = None,
+        encoder_ledger_active_mask: Optional[torch.Tensor] = None,
+        encoder_ledger_use_cache: bool = False,
         **kwargs: Any,
     ) -> torch.Tensor:
         residual = hidden_states
@@ -192,11 +219,44 @@ class DecoderLayerWithCross(GradientCheckpointingLayer):
         )
         hidden_states = residual + self_states
         if encoder_hidden_states is not None:
+            cross_bias = encoder_attention_bias
+            if self.ledger_cross_route and encoder_delivery_ledger is not None:
+                cross_query = self.cross_norm(hidden_states)
+                relevance = self.cross.region_relevance(cross_query, encoder_region_states)
+                region_ids = encoder_source_region_ids
+                if encoder_attention_bias is not None:
+                    valid = region_ids.ge(0)
+                    destination = region_ids.clamp_min(0)
+                    region_count = encoder_region_states.shape[1]
+                    region_bias = encoder_attention_bias.new_zeros(
+                        region_ids.shape[0], region_count, dtype=torch.float32
+                    ).scatter_add(1, destination, encoder_attention_bias.float() * valid)
+                    counts = region_bias.new_zeros(region_bias.shape).scatter_add(1, destination, valid.float())
+                    relevance = relevance + (region_bias / counts.clamp_min(1))[:, None, :]
+                _, _, region_prior, coverage = encoder_delivery_ledger(
+                    hidden_states,
+                    encoder_region_states,
+                    encoder_region_mask,
+                    encoder_ledger_active_mask,
+                    encoder_delivery_ledger.get_cross_coverage() if encoder_ledger_use_cache else None,
+                    relevance_override=relevance,
+                )
+                if encoder_ledger_use_cache:
+                    encoder_delivery_ledger.set_cross_coverage(coverage)
+                token_prior = region_prior.gather(
+                    2, region_ids.clamp_min(0)[:, None, :].expand(-1, hidden_states.shape[1], -1)
+                )
+                token_prior = token_prior.masked_fill(~region_ids[:, None, :].ge(0), 0.0)
+                cross_bias = token_prior[:, None, :, :]
+                if encoder_attention_bias is not None:
+                    cross_bias = cross_bias + encoder_attention_bias[:, None, None, :].float()
+            else:
+                cross_query = self.cross_norm(hidden_states)
             cross = self.cross(
-                self.cross_norm(hidden_states),
+                cross_query,
                 encoder_hidden_states,
                 encoder_attention_mask,
-                encoder_attention_bias,
+                cross_bias,
                 value_memory=encoder_value_states,
             )
             hidden_states = (
@@ -252,14 +312,21 @@ class QwenCrossDecoder(nn.Module):
         gate_init = float(config.get("cross_gate_init", 0.10))
         gate_max = float(config.get("cross_gate_max", 1.0))
         wrapped = []
-        for index, layer in enumerate(list(self.backbone.layers)):
+        base_layers = list(self.backbone.layers)
+        for index, layer in enumerate(base_layers):
             if not hasattr(layer, "self_attn"):
                 raise ValueError("AFMR requires decoder layers with self_attn")
             if hasattr(layer.self_attn, "layer_idx"):
                 layer.self_attn.layer_idx = index
             wrapped.append(
                 DecoderLayerWithCross(
-                    layer, model_config, float(config.get("attention_dropout", 0.0)), gate_init, gate_max, index
+                    layer,
+                    model_config,
+                    float(config.get("attention_dropout", 0.0)),
+                    gate_init,
+                    gate_max,
+                    index,
+                    ledger_cross_route=self.ledger_enabled and index == len(base_layers) - 1,
                 )
             )
         self.backbone.layers = nn.ModuleList(wrapped)
@@ -286,16 +353,28 @@ class QwenCrossDecoder(nn.Module):
         value_memory: Optional[torch.Tensor] = None,
         copy_state: Optional[CopyState] = None,
         region_states: Optional[torch.Tensor] = None,
+        cross_region_states: Optional[torch.Tensor] = None,
         region_mask: Optional[torch.Tensor] = None,
+        source_region_ids: Optional[torch.Tensor] = None,
     ) -> tuple[Optional[torch.Tensor], Optional[Any], Optional[torch.Tensor]]:
         if (self.grounded_copy is None) != (copy_state is None):
             raise ValueError("Decoder grounded-copy configuration and source state disagree")
-        if self.ledger_enabled and (region_states is None or region_mask is None):
-            raise ValueError("delivery ledger requires pooled source regions")
+        if self.ledger_enabled and any(
+            item is None for item in (region_states, cross_region_states, region_mask, source_region_ids)
+        ):
+            raise ValueError("delivery ledger requires cross and copy source regions with token membership")
         position_ids = None
         if attention_mask is not None:
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids = position_ids.masked_fill(~attention_mask.bool(), 0)[:, -input_ids.shape[1] :]
+        active_mask = None
+        if self.delivery_ledger is not None:
+            active_mask = torch.ones_like(input_ids, dtype=torch.bool)
+            if labels is not None and not use_cache:
+                active_mask.zero_()
+                active_mask[:, :-1] = labels[:, 1:].ne(-100)
+            elif use_cache:
+                active_mask[:, :-1] = False
         outputs = self.backbone(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -307,17 +386,19 @@ class QwenCrossDecoder(nn.Module):
             encoder_attention_mask=memory_mask,
             encoder_attention_bias=source_bias,
             encoder_value_states=value_memory,
+            encoder_delivery_ledger=self.delivery_ledger,
+            encoder_region_states=cross_region_states,
+            encoder_region_mask=region_mask,
+            encoder_source_region_ids=source_region_ids,
+            encoder_ledger_active_mask=active_mask,
+            encoder_ledger_use_cache=use_cache,
         )
         hidden = outputs.last_hidden_state
         output_hidden = hidden[:, -1:] if use_cache else hidden
         region_prior = None
         if self.delivery_ledger is not None and (return_logits or use_cache or labels is None):
-            active_mask = None
-            if labels is not None and not use_cache:
-                active_mask = torch.zeros(hidden.shape[:2], dtype=torch.bool, device=hidden.device)
-                active_mask[:, :-1] = labels[:, 1:].ne(-100)
             coverage = self.delivery_ledger.get_coverage() if use_cache else None
-            output_hidden, region_prior, coverage = self.delivery_ledger(
+            output_hidden, region_prior, _, coverage = self.delivery_ledger(
                 output_hidden,
                 region_states,
                 region_mask,
@@ -335,7 +416,7 @@ class QwenCrossDecoder(nn.Module):
             ledger_hidden = hidden[:, :-1]
             ledger_prior = None
             if logits is None and self.delivery_ledger is not None:
-                ledger_hidden, ledger_prior, _ = self.delivery_ledger(
+                ledger_hidden, ledger_prior, _, _ = self.delivery_ledger(
                     ledger_hidden,
                     region_states,
                     region_mask,

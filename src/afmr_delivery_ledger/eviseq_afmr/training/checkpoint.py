@@ -52,13 +52,16 @@ def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
     ledger = decoder.get("delivery_ledger", {})
     if ledger.get("enabled", False):
         spec["delivery_ledger"] = {
-            "version": "causal_region_delivery_v1",
+            "version": "causal_cross_qk_copy_value_signed_gates",
             "region_width": int(ledger.get("region_width", 32)),
             "rank": int(ledger.get("rank", 128)),
+            "write_top_k": int(ledger.get("write_top_k", 4)),
             "write_strength_max": float(ledger.get("write_strength_max", 0.25)),
-            "coverage_strength_max": float(ledger.get("coverage_strength_max", 1.0)),
+            "coverage_strength_max": float(ledger.get("coverage_strength_max", 3.0)),
+            "read_enabled": bool(ledger.get("read_enabled", False)),
             "read_strength_max": float(ledger.get("read_strength_max", 0.20)),
-            "copy_strength_max": float(ledger.get("copy_strength_max", 0.50)),
+            "copy_strength_max": float(ledger.get("copy_strength_max", 1.0)),
+            "cross_strength_max": float(ledger.get("cross_strength_max", 1.0)),
         }
     return spec
 

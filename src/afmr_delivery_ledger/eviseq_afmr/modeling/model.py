@@ -63,6 +63,14 @@ class EviSeqAFMR(nn.Module):
                 bridge.content_mask,
                 int(ledger_config.get("region_width", 32)),
             )
+            if bridge.value_memory is None:
+                bridge.cross_region_states = bridge.region_states
+            else:
+                bridge.cross_region_states, _, _ = pool_source_regions(
+                    bridge.memory,
+                    bridge.content_mask,
+                    int(ledger_config.get("region_width", 32)),
+                )
         if self.decoder.grounded_copy is not None:
             if not copy_inputs:
                 raise ValueError("Grounded copy is enabled but source-token alignment is missing")
@@ -119,6 +127,8 @@ class EviSeqAFMR(nn.Module):
             value_memory=bridge.value_memory,
             copy_state=bridge.copy_state,
             region_states=bridge.region_states,
+            cross_region_states=bridge.cross_region_states,
             region_mask=bridge.region_mask,
+            source_region_ids=bridge.source_region_ids,
         )
         return AFMROutput(logits, loss_ce, loss_ce, bridge)

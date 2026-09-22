@@ -51,14 +51,18 @@ decoder:
     enabled: true
     region_width: 32
     rank: 128
+    write_top_k: 4
     write_strength_init: 0.05
     write_strength_max: 0.25
-    coverage_strength_init: 0.10
-    coverage_strength_max: 1.0
+    coverage_strength_init: 1.5
+    coverage_strength_max: 3.0
+    read_enabled: false
     read_strength_init: 0.05
     read_strength_max: 0.20
-    copy_strength_init: 0.10
-    copy_strength_max: 0.50
+    copy_strength_init: 0.50
+    copy_strength_max: 1.0
+    cross_strength_init: 0.50
+    cross_strength_max: 1.0
 
 training:
   interface_warmup_epochs: 1
@@ -82,7 +86,7 @@ training:
   weight_decay: 0.01
   max_grad_norm: 1.0
   seed: 42
-  log_every_steps: 10
+  log_every_steps: 1
   save_each_epoch: true
   save_best: false
   resume_checkpoint: ""

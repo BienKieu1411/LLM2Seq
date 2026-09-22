@@ -222,25 +222,31 @@ def validate_config(config: dict[str, Any], *, train_only: bool = False) -> None
             "enabled",
             "region_width",
             "rank",
+            "write_top_k",
             "write_strength_init",
             "write_strength_max",
             "coverage_strength_init",
             "coverage_strength_max",
+            "read_enabled",
             "read_strength_init",
             "read_strength_max",
             "copy_strength_init",
             "copy_strength_max",
+            "cross_strength_init",
+            "cross_strength_max",
         },
         "decoder.delivery_ledger",
     )
     if not isinstance(ledger.get("enabled", False), bool):
         raise ValueError("decoder.delivery_ledger.enabled must be a boolean")
+    if not isinstance(ledger.get("read_enabled", False), bool):
+        raise ValueError("decoder.delivery_ledger.read_enabled must be a boolean")
     if bool(ledger.get("enabled", False)):
         if not bool(copy_config.get("enabled", False)):
             raise ValueError("delivery ledger requires grounded copy so its state is shared by both readout paths")
-        if int(ledger.get("region_width", 32)) <= 0 or int(ledger.get("rank", 128)) <= 0:
-            raise ValueError("delivery ledger region_width and rank must be positive")
-        for stem in ("write_strength", "coverage_strength", "read_strength", "copy_strength"):
+        if any(int(ledger.get(key, 0)) <= 0 for key in ("region_width", "rank", "write_top_k")):
+            raise ValueError("delivery ledger region_width, rank, and write_top_k must be positive")
+        for stem in ("write_strength", "coverage_strength", "read_strength", "copy_strength", "cross_strength"):
             initial = float(ledger.get(f"{stem}_init", 0.0))
             maximum = float(ledger.get(f"{stem}_max", 0.0))
             if not 0.0 < initial < maximum:
