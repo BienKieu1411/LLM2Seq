@@ -39,7 +39,7 @@ Trong train, router chỉ nhìn decoder prefix theo teacher forcing và nhận g
 
 ## Chạy thử
 
-Script mặc định chỉ chạy PPLX trên một GPU, dùng model local và data đã chuẩn bị trong `eviseq_new`:
+Script mặc định chỉ chạy PPLX, dùng model local và data đã chuẩn bị trong `eviseq_new`. Một GPU chạy trực tiếp; hai GPU dùng DDP khi train, sau đó eval hai shard song song và ghép lại theo thứ tự gốc:
 
 ```bash
 cd /workspace/storage-shared/nlp/dungdx4/bien_projects/LLM2Seq-main
@@ -53,6 +53,8 @@ ROUGE155_SCRIPT="$PWD/src/rouge155/evaluate_rouge.py" \
 PYROUGE_HOME_DIR=/workspace/storage-shared/nlp/dungdx4/textsum_platform_eval/pyrouge-master/tools/ROUGE-1.5.5 \
 bash src/afmr_evidence_route/scripts/run_pubmed_pair.sh
 ```
+
+Để chạy trên hai GPU, giữ nguyên lệnh trên và đổi `CUDA_VISIBLE_DEVICES=0,1`. Mặc định một GPU dùng batch 48 × accum 2; hai GPU dùng batch 48 mỗi GPU × accum 1, nên global effective batch đều là 96. Có thể đặt `TRAIN_BATCH_SIZE` và `GRADIENT_ACCUMULATION_STEPS` để thay đổi; script ghi cả hai giá trị vào config của run. `EVAL_BATCH_SIZE` là batch trên **mỗi** GPU khi eval hai shard. `AFMR_OUTPUT_DIR` nên là đường dẫn mới để không trộn checkpoint hoặc prediction từ run khác.
 
 Đối chứng trong cùng folder dùng lại lệnh với `AFMR_EVIDENCE_ROUTER=false` và output dir khác. Đối chứng `direct projection + copy` thêm `AFMR_BRIDGE_MODE=direct_projection`. Các run cần cùng data fingerprint, seed, batch, epochs, prompt, precision và decoding; chọn tham số trên **validation**, chỉ dùng test cho báo cáo cuối. Nếu gap nhỏ, chạy nhiều seeds và paired bootstrap theo example ID.
 

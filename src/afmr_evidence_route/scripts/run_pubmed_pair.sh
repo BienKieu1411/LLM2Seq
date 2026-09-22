@@ -17,6 +17,11 @@ export PYTHONUNBUFFERED=1
 export HF_HUB_DISABLE_TELEMETRY=1
 export TOKENIZERS_PARALLELISM=false
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+GPU_COUNT=1
+if [[ "${CUDA_VISIBLE_DEVICES}" == *,* ]]; then
+  IFS=',' read -r -a VISIBLE_GPUS <<< "${CUDA_VISIBLE_DEVICES}"
+  GPU_COUNT="${#VISIBLE_GPUS[@]}"
+fi
 
 PUBMED_SOURCE_DIR="${PUBMED_SOURCE_DIR:-/workspace/storage-shared/nlp/dungdx4/datasets/pubmed}"
 if [[ -z "${PROCESSED_DATA_DIR:-}" ]]; then
@@ -52,6 +57,8 @@ PPLX_ENCODER="${PPLX_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/pplx-em
 QWEN_ENCODER="${QWEN_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-Embedding-0.6B}"
 DECODER_MODEL="${DECODER_MODEL:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-0.6B}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-64}"
+TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-48}"
+GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-$((2 / GPU_COUNT))}"
 OVERWRITE_OUTPUT_DIR="${OVERWRITE_OUTPUT_DIR:-false}"
 
 mkdir -p "${LOG_DIR}" "${RUN_ROOT}" "${GENERATED_CONFIG_DIR}"
@@ -64,6 +71,9 @@ die() {
 }
 
 [[ -x "${PYTHON_BIN}" || "$(command -v "${PYTHON_BIN}" 2>/dev/null || true)" ]] || die "Python not found: ${PYTHON_BIN}"
+[[ "${GPU_COUNT}" == 1 || "${GPU_COUNT}" == 2 ]] || die "Use one or two visible GPUs"
+[[ "${TRAIN_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || die "TRAIN_BATCH_SIZE must be a positive integer"
+[[ "${GRADIENT_ACCUMULATION_STEPS}" =~ ^[1-9][0-9]*$ ]] || die "GRADIENT_ACCUMULATION_STEPS must be a positive integer"
 if [[ ! -s "${PROCESSED_DATA_DIR}/train.jsonl" ]]; then
   [[ -d "${PUBMED_SOURCE_DIR}" ]] || die "PubMed source directory not found: ${PUBMED_SOURCE_DIR}"
 fi
@@ -80,6 +90,7 @@ fi
 
 echo "=== AFMR PubMed sequential benchmark ==="
 echo "=== GPU: CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ==="
+echo "=== Processes: ${GPU_COUNT}; batch/GPU: ${TRAIN_BATCH_SIZE}; accumulation: ${GRADIENT_ACCUMULATION_STEPS}; global effective batch: $((TRAIN_BATCH_SIZE * GPU_COUNT * GRADIENT_ACCUMULATION_STEPS)) ==="
 echo "=== Architecture: ${AFMR_ARCHITECTURE}; FP32 updates, BF16 compute ==="
 echo "=== Bridge mode: ${AFMR_BRIDGE_MODE} ==="
 echo "=== Grounded copy: ${AFMR_GROUNDED_COPY} ==="
@@ -113,7 +124,7 @@ make_config() {
   local output_config="$2"
   local encoder_name="$3"
   local output_dir="$4"
-  "${PYTHON_BIN}" - "${base_config}" "${output_config}" "${encoder_name}" "${DECODER_MODEL}" "${output_dir}" "${PROCESSED_DATA_DIR}" "${AFMR_ARCHITECTURE}" "${AFMR_BRIDGE_MODE}" "${AFMR_GROUNDED_COPY}" "${AFMR_EVIDENCE_ROUTER}" <<'PY'
+  "${PYTHON_BIN}" - "${base_config}" "${output_config}" "${encoder_name}" "${DECODER_MODEL}" "${output_dir}" "${PROCESSED_DATA_DIR}" "${AFMR_ARCHITECTURE}" "${AFMR_BRIDGE_MODE}" "${AFMR_GROUNDED_COPY}" "${AFMR_EVIDENCE_ROUTER}" "${TRAIN_BATCH_SIZE}" "${GRADIENT_ACCUMULATION_STEPS}" <<'PY'
 import sys
 from pathlib import Path
 
@@ -121,13 +132,15 @@ import yaml
 
 from eviseq_afmr.config import load_config
 
-base, destination, encoder, decoder, output_dir, data_dir, architecture, bridge_mode, grounded_copy, router = sys.argv[1:]
+base, destination, encoder, decoder, output_dir, data_dir, architecture, bridge_mode, grounded_copy, router, batch_size, accumulation = sys.argv[1:]
 config = load_config(base)
 config["architecture"]["name"] = architecture
 if bridge_mode == "direct_projection":
     config["architecture"]["bridge_mode"] = bridge_mode
 config["decoder"]["grounded_copy"]["enabled"] = grounded_copy == "true"
 config["decoder"]["evidence_router"]["enabled"] = router == "true"
+config["training"]["batch_size"] = int(batch_size)
+config["training"]["gradient_accumulation_steps"] = int(accumulation)
 config.pop("_meta", None)
 config["model"]["encoder_name"] = encoder
 config["model"]["decoder_name"] = decoder
@@ -152,19 +165,42 @@ run_one() {
   if [[ "${OVERWRITE_OUTPUT_DIR}" =~ ^(1|true|yes)$ ]]; then
     train_args+=(--overwrite-output-dir)
   fi
-  bash "${ROOT}/scripts/run_afmr.sh" "${train_args[@]}"
+  if (( GPU_COUNT > 1 )); then
+    "${PYTHON_BIN}" -m torch.distributed.run --standalone --nproc_per_node="${GPU_COUNT}" \
+      "${ROOT}/run_afmr.py" "${train_args[@]}"
+  else
+    PYTHON="${PYTHON_BIN}" bash "${ROOT}/scripts/run_afmr.sh" "${train_args[@]}"
+  fi
 
   echo "=== Evaluating ${name}: last.pt on PubMed test ==="
   local eval_config="${output_dir}/resolved_config.yaml"
   [[ -s "${eval_config}" ]] || die "Training did not write ${eval_config}; refuse to evaluate with a different config"
   echo "=== Eval config: ${eval_config} ==="
   grep -E "^[[:space:]]*(encoder_name|decoder_name):" "${eval_config}"
-  bash "${ROOT}/scripts/run_afmr.sh" evaluate \
-    "${eval_config}" \
-    "${output_dir}/last.pt" \
-    "${predictions}" \
-    --split test \
-    --batch-size "${EVAL_BATCH_SIZE}"
+  if (( GPU_COUNT > 1 )); then
+    local shard_zero="${predictions}.shard0.jsonl"
+    local shard_one="${predictions}.shard1.jsonl"
+    CUDA_VISIBLE_DEVICES="${VISIBLE_GPUS[0]}" PYTHON="${PYTHON_BIN}" WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 \
+      bash "${ROOT}/scripts/run_afmr.sh" evaluate \
+      "${eval_config}" "${output_dir}/last.pt" "${shard_zero}" \
+      --split test --batch-size "${EVAL_BATCH_SIZE}" --shard-rank 0 --num-shards 2 &
+    local pid_zero=$!
+    CUDA_VISIBLE_DEVICES="${VISIBLE_GPUS[1]}" PYTHON="${PYTHON_BIN}" WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 \
+      bash "${ROOT}/scripts/run_afmr.sh" evaluate \
+      "${eval_config}" "${output_dir}/last.pt" "${shard_one}" \
+      --split test --batch-size "${EVAL_BATCH_SIZE}" --shard-rank 1 --num-shards 2 &
+    local pid_one=$!
+    local status_zero=0 status_one=0
+    wait "${pid_zero}" || status_zero=$?
+    wait "${pid_one}" || status_one=$?
+    (( status_zero == 0 && status_one == 0 )) || die "One or more test evaluation shards failed"
+    "${PYTHON_BIN}" "${ROOT}/scripts/merge_eval_shards.py" \
+      --output "${predictions}" "${shard_zero}" "${shard_one}"
+  else
+    PYTHON="${PYTHON_BIN}" bash "${ROOT}/scripts/run_afmr.sh" evaluate \
+      "${eval_config}" "${output_dir}/last.pt" "${predictions}" \
+      --split test --batch-size "${EVAL_BATCH_SIZE}"
+  fi
 
   if [[ -n "${ROUGE155_SCRIPT:-}" && -f "${ROUGE155_SCRIPT}" ]]; then
     echo "=== Perl ROUGE-1.5.5 for ${name} ==="
