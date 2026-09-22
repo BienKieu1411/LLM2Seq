@@ -1,24 +1,36 @@
 _base_: afmr_base.yaml
 
 experiment:
-  name: afmr_wikilingua
-  output_dir: runs/afmr/wikilingua_value_anchor_copy
+  name: afmr_wikilingua_direct
+  output_dir: runs/afmr/wikilingua_direct
 
 data:
   train_file: datasets/wikilingua/train.jsonl
   validation_file: datasets/wikilingua/validation.jsonl
   test_file: datasets/wikilingua/test.jsonl
+  # Keep the T5Gemma WikiLingua source template for a fair comparison.
   encoder_prefix: "Tóm tắt thành các bước hành động ngắn, đúng thứ tự; không thêm thông tin.\nVăn bản:\n"
-  decoder_prompt: "Tóm tắt nội dung được mã hóa thành các bước hành động ngắn gọn, đúng thứ tự. Giữ các chỉ dẫn quan trọng, không thêm thông tin. Chỉ trả lời bằng bản tóm tắt."
-  decoder_prefix: "Tóm tắt:\n"
+  # The decoder instruction mirrors the target format without referring to
+  # internal representations. The assistant prefix primes a line-separated
+  # list while remaining outside the supervised labels.
+  decoder_prompt: "Tóm tắt hướng dẫn thành các bước hành động ngắn, theo đúng thứ tự. Chỉ dùng thông tin trong văn bản nguồn; không thêm bước mới."
+  decoder_prefix: "Các bước:\n"
+  decoder_chat_template: true
+  detokenize: false
   max_source_length: 3072
   max_target_length: 384
 
 generation:
+  batch_size: 4
   max_new_tokens: 256
   min_new_tokens: 16
   repetition_penalty: 1.05
   no_repeat_ngram_size: 3
+  num_beams: 1
+  do_sample: false
+  temperature: 0.0
+  top_k: 0
+  top_p: 1.0
 
 model:
   encoder_name: /absolute/path/to/pplx-embed-v1-0.6b
@@ -27,3 +39,6 @@ model:
 training:
   interface_warmup_epochs: 1
   full_finetune_epochs: 5
+  save_best: true
+  save_each_epoch: true
+  resume_checkpoint: ""

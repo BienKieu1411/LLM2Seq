@@ -151,6 +151,21 @@ PYTHON=/absolute/path/to/bienkieu_env/bin/python \
 runs/afmr/pubmed_value_anchor_copy/test_predictions.jsonl --split test
 ```
 
+To train WikiLingua directly from the local pretrained encoder and decoder,
+save the checkpoint with the lowest validation CE, and evaluate that checkpoint
+on the test split, run:
+
+```bash
+cd src/eviseq_new
+PYTHON=/absolute/path/to/bienkieu_env/bin/python \
+  CUDA_VISIBLE_DEVICES=0 \
+  bash scripts/run_wikilingua.sh
+```
+
+Set `ENCODER_MODEL`, `DECODER_MODEL`, `WIKILINGUA_DATA_DIR`, or
+`AFMR_OUTPUT_DIR` when the local paths differ. Use `CUDA_VISIBLE_DEVICES=0,1`
+for DDP training; test evaluation runs on the first visible GPU.
+
 To continue a completed train-only run on WikiLingua, use a fresh output
 directory. The wrapper reads the checkpoint stage and extends that stage by
 five WikiLingua epochs, then evaluates `last.pt` on the WikiLingua test split:
