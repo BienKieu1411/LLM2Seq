@@ -432,9 +432,9 @@ The output lines are copied verbatim, so additional metadata fields are
 retained.
 
 To balance the source-length distribution, cap every source-length bin rather
-than keeping only the sparse tail. For example, the 50-bin histogram used for
-the report and a cap of 20,000 samples per bin gives roughly 90k rows before
-target filtering, or roughly 84k rows after `target <= 512`:
+than keeping only the sparse tail. The following also enforces the 2,048-token
+source and 512-token target limits; the exact written count is recorded per
+bin in the report:
 
 ```bash
 python scripts/filter_jsonl_by_target_length.py /data/train.jsonl \
@@ -442,6 +442,7 @@ python scripts/filter_jsonl_by_target_length.py /data/train.jsonl \
   --source-field input --target-field output \
   --target-tokenizer /models/Qwen3-0.6B \
   --detokenize \
+  --max-source-tokens 2048 \
   --max-target-tokens 512 \
   --balance-source-bins 50 --max-per-source-bin 20000 \
   --selection random --seed 17 \

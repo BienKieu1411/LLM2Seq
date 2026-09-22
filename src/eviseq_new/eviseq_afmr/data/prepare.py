@@ -8,6 +8,7 @@ import tempfile
 from dataclasses import replace
 from pathlib import Path
 
+from .normalization import detokenize
 from .schema import iter_jsonl
 
 
@@ -19,6 +20,7 @@ def prepare_split(
     target_field: str = "summary",
     id_field: str = "id",
     max_examples: int = 0,
+    detokenize_text: bool = False,
 ) -> int:
     destination = Path(output_path)
     if destination.resolve() == Path(input_path).resolve():
@@ -37,7 +39,14 @@ def prepare_split(
                 ),
                 start=1,
             ):
-                row = replace(record, example_id=record.example_id or str(count)).as_dict()
+                record = replace(record, example_id=record.example_id or str(count))
+                if detokenize_text:
+                    record = replace(
+                        record,
+                        source=detokenize(record.source),
+                        target=detokenize(record.target),
+                    )
+                row = record.as_dict()
                 handle.write(json.dumps(row, ensure_ascii=False) + "\n")
                 if count % 1000 == 0:
                     logging.getLogger(__name__).info("prepare: %s records -> %s", count, destination)
@@ -60,6 +69,7 @@ def main() -> None:
     parser.add_argument("--target-field", default="summary")
     parser.add_argument("--id-field", default="id")
     parser.add_argument("--max-examples", type=int, default=0)
+    parser.add_argument("--detokenize", action="store_true")
     args = parser.parse_args()
     count = prepare_split(**vars(args))
     print(f"prepared {count} records -> {args.output_path}")

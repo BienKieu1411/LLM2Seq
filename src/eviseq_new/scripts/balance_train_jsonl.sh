@@ -11,6 +11,7 @@ REPORT_JSON="${REPORT_JSON:-${DEFAULT_ROOT}/train_balanced.report.json}"
 TARGET_TOKENIZER="${TARGET_TOKENIZER:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-0.6B}"
 SOURCE_FIELD="${SOURCE_FIELD:-input}"
 TARGET_FIELD="${TARGET_FIELD:-output}"
+MAX_SOURCE_TOKENS="${MAX_SOURCE_TOKENS:-2048}"
 MAX_TARGET_TOKENS="${MAX_TARGET_TOKENS:-512}"
 TARGET_BELOW="${TARGET_BELOW:-}"
 SOURCE_BINS="${SOURCE_BINS:-50}"
@@ -23,8 +24,8 @@ usage() {
 Usage:
   bash scripts/balance_train_jsonl.sh [options]
 
-Defaults: target <= 512 tokens, 50 source-length bins, 20,000 samples/bin,
-and detokenized source/target output.
+Defaults: source <= 2048 tokens, target <= 512 tokens, 50 source-length bins,
+20,000 samples/bin, and detokenized source/target output.
 
 Options:
   --input PATH                 Input train JSONL
@@ -33,6 +34,7 @@ Options:
   --target-tokenizer PATH      Local tokenizer for target lengths
   --source-field FIELD         Source field/path (default: input)
   --target-field FIELD         Target field/path (default: output)
+  --max-source-tokens N        Inclusive source limit <= N (default: 2048)
   --max-target-tokens N        Inclusive target limit <= N (default: 512)
   --target-below N             Strict target limit < N
   --source-bins N              Number of source-length bins (default: 50)
@@ -52,6 +54,7 @@ while (($#)); do
     --target-tokenizer) TARGET_TOKENIZER="$2"; shift 2 ;;
     --source-field) SOURCE_FIELD="$2"; shift 2 ;;
     --target-field) TARGET_FIELD="$2"; shift 2 ;;
+    --max-source-tokens) MAX_SOURCE_TOKENS="$2"; shift 2 ;;
     --max-target-tokens) MAX_TARGET_TOKENS="$2"; TARGET_BELOW=""; shift 2 ;;
     --target-below) TARGET_BELOW="$2"; MAX_TARGET_TOKENS=""; shift 2 ;;
     --source-bins) SOURCE_BINS="$2"; shift 2 ;;
@@ -76,6 +79,7 @@ ARGS=(
   --source-field "$SOURCE_FIELD"
   --target-field "$TARGET_FIELD"
   --target-tokenizer "$TARGET_TOKENIZER"
+  --max-source-tokens "$MAX_SOURCE_TOKENS"
   --detokenize
   --balance-source-bins "$SOURCE_BINS"
   --max-per-source-bin "$MAX_PER_SOURCE_BIN"
@@ -91,5 +95,10 @@ fi
 
 echo "[balance] input=$INPUT_JSONL"
 echo "[balance] output=$OUTPUT_JSONL"
-echo "[balance] detokenize=true source_bins=$SOURCE_BINS max_per_bin=$MAX_PER_SOURCE_BIN"
+if [[ -n "$TARGET_BELOW" ]]; then
+  TARGET_LIMIT="<${TARGET_BELOW}"
+else
+  TARGET_LIMIT="<=${MAX_TARGET_TOKENS}"
+fi
+echo "[balance] detokenize=true source<=${MAX_SOURCE_TOKENS} target=${TARGET_LIMIT} source_bins=$SOURCE_BINS max_per_bin=$MAX_PER_SOURCE_BIN"
 exec "$PYTHON_BIN" "${ARGS[@]}"

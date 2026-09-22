@@ -58,6 +58,11 @@ def main(argv: list[str] | None = None) -> None:
     prepare.add_argument("--source-field", default="text")
     prepare.add_argument("--target-field", default="summary")
     prepare.add_argument("--id-field", default="id")
+    prepare.add_argument(
+        "--detokenize",
+        action="store_true",
+        help="Normalize whitespace and punctuation in source and target before writing.",
+    )
     prepare_dataset = subparsers.add_parser("prepare-dataset")
     prepare_dataset.add_argument("--dataset", required=True, choices=SUPPORTED_DATASETS)
     prepare_dataset.add_argument("--input-dir", required=True)
@@ -138,6 +143,7 @@ def main(argv: list[str] | None = None) -> None:
         source_field=args.source_field,
         target_field=args.target_field,
         id_field=args.id_field,
+        detokenize_text=args.detokenize,
     )
     print(f"prepared {count} records -> {args.output_path}")
 
