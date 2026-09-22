@@ -411,21 +411,25 @@ The report directory contains `length_report.json`, `lengths.csv`, and
 types, plus complete field names in a few sample records. Use
 `--sample-rows 0` when sample values are not needed.
 
-Create a training subset with targets strictly shorter than 512 tokens and a
-fixed number of examples:
+Create a training subset with targets strictly shorter than 512 tokens,
+sources shorter than 4,096 tokens, and a fixed number of examples:
 
 ```bash
 python scripts/filter_jsonl_by_target_length.py /data/train.jsonl \
   /data/train_lt512_100k.jsonl \
+  --source-field input.article --source-tokenizer /models/pplx-embed-v1-0.6b \
+  --source-below 4096 \
   --target-field output.summary --target-tokenizer /models/Qwen3-0.6B \
   --target-below 512 --num-samples 100000 --selection random --seed 17 \
   --report /data/train_lt512_100k.report.json
 ```
 
 Use `--selection first` to retain input order, `--allow-fewer` when the
-eligible pool may be smaller than the requested count, and `--max-target-tokens
-N` for an inclusive `<= N` limit. The output lines are copied verbatim, so
-additional metadata fields are retained.
+eligible pool may be smaller than the requested count, `--source-below N` or
+`--target-below N` for strict `< N` limits, and
+`--max-source-tokens N`/`--max-target-tokens N` for inclusive `<= N` limits.
+The output lines are copied verbatim, so additional metadata fields are
+retained.
 
 ```text
 eviseq_new/
