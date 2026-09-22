@@ -124,6 +124,7 @@ data["validation_file"] = str(dataset_dir / "validation.jsonl")
 data["test_file"] = str(dataset_dir / "test.jsonl")
 config["experiment"]["output_dir"] = str(output_dir)
 config["training"]["resume_checkpoint"] = ""
+config["training"]["resume_scheduler"] = False
 
 # The trainer interprets stage epoch counts as totals when resuming. Extend
 # the active stage by the requested number of WikiLingua epochs so a completed

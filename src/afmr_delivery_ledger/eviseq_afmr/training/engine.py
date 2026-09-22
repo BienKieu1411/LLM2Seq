@@ -82,6 +82,7 @@ class AFMRTrainer:
         self.stage_optimizer_step = 0
         self.epoch = 0
         self.scheduler = None
+        self._fit_start_global_step = 0
         self.metrics_path = Path(self.config["experiment"]["output_dir"]) / "training_metrics.jsonl"
         self._fit_started_at: float | None = None
         self._elapsed_before_fit = 0.0
@@ -187,6 +188,8 @@ class AFMRTrainer:
                     examples = sum(int(raw["input_ids"].shape[0]) for raw in window)
                     epoch_progress = epoch_step / max(1, epoch_steps)
                     total_progress = (global_epoch - 1 + epoch_progress) / max(1, total_epochs)
+                    schedule_step = max(0, global_epoch - 1) * epoch_steps + epoch_step
+                    run_step = self.global_step - self._fit_start_global_step
                     epoch_eta = epoch_elapsed * (1.0 - epoch_progress) / max(epoch_progress, 1.0e-9)
                     remaining_steps = max(0, total_epochs - global_epoch) * epoch_steps + max(
                         0, epoch_steps - epoch_step
@@ -199,6 +202,8 @@ class AFMRTrainer:
                         "stage": stage,
                         "epoch": global_epoch,
                         "step": self.global_step,
+                        "run_step": run_step,
+                        "schedule_step": schedule_step,
                         "epoch_step": epoch_step,
                         "epoch_steps": epoch_steps,
                         "epoch_progress": round(epoch_progress, 6),
@@ -224,7 +229,7 @@ class AFMRTrainer:
                     }
                     self._write_metric(record)
                     LOGGER.info(
-                        "[train] stage=%s | epoch=%d/%d | epoch_progress=%s %5.1f%% | step=%d/%d | total_step=%d/%d | CE=%.5f | grad=%.4f | lr=%s | elapsed=%s | epoch_eta=%s | total_eta=%s | vram=%s | ex/s=%.2f | tok/s=%.0f",
+                        "[train] stage=%s | epoch=%d/%d | epoch_progress=%s %5.1f%% | step=%d/%d | total_step=%d/%d | run_step=%d | global_step=%d | CE=%.5f | grad=%.4f | lr=%s | elapsed=%s | epoch_eta=%s | total_eta=%s | vram=%s | ex/s=%.2f | tok/s=%.0f",
                         _stage_label(stage),
                         global_epoch,
                         total_epochs,
@@ -232,8 +237,10 @@ class AFMRTrainer:
                         100.0 * epoch_progress,
                         epoch_step,
                         epoch_steps,
-                        self.global_step,
+                        schedule_step,
                         total_training_steps,
+                        run_step,
+                        self.global_step,
                         float(step_loss),
                         float(grad),
                         learning_rates,
@@ -261,8 +268,10 @@ class AFMRTrainer:
             self._elapsed_before_fit = float(resume_info.get("elapsed_train_seconds") or 0.0)
         else:
             self._elapsed_before_fit = 0.0
+        self._fit_start_global_step = self.global_step
         self._fit_started_at = time.monotonic()
         training = self.config["training"]
+        resume_scheduler = bool(training.get("resume_scheduler", True))
         stages = (
             ("interface_warmup", int(training["interface_warmup_epochs"])),
             ("full_finetune", int(training["full_finetune_epochs"])),
@@ -291,11 +300,29 @@ class AFMRTrainer:
             start_epoch = 1
             self.stage_optimizer_step = 0
             if resume_info and resume_info["stage"] == stage:
-                load_checkpoint(resume_checkpoint, self.model, optimizer, self.config, scheduler=self.scheduler)
+                load_checkpoint(
+                    resume_checkpoint,
+                    self.model,
+                    optimizer,
+                    self.config,
+                    scheduler=self.scheduler if resume_scheduler else None,
+                )
                 start_epoch = int(resume_info.get("stage_epoch") or 0) + 1
                 self.stage_optimizer_step = max(0, start_epoch - 1) * steps_per_epoch
-                for group, base_lr in zip(optimizer.param_groups, self.scheduler.base_lrs):
-                    group["lr"] = base_lr * max(0.0, 1.0 - self.stage_optimizer_step / total_steps)
+                if not resume_scheduler:
+                    # A cross-dataset continuation has a different number of
+                    # steps per epoch and a different schedule length. Reuse
+                    # model/optimizer state, but place the fresh scheduler at
+                    # the resumed epoch in the current dataset's schedule.
+                    self.scheduler.last_epoch = self.stage_optimizer_step
+                    self.scheduler._step_count = self.stage_optimizer_step + 1
+                    learning_rates = [
+                        base_lr * lr_lambda(self.stage_optimizer_step)
+                        for base_lr, lr_lambda in zip(self.scheduler.base_lrs, self.scheduler.lr_lambdas)
+                    ]
+                    for group, learning_rate in zip(optimizer.param_groups, learning_rates):
+                        group["lr"] = learning_rate
+                    self.scheduler._last_lr = list(learning_rates)
             for epoch in range(start_epoch, epochs + 1):
                 self.epoch = epoch + (stages[0][1] if stage == "full_finetune" else 0)
                 global_epoch = self.epoch
@@ -413,10 +440,11 @@ class AFMRTrainer:
                     dist.barrier()
             carried_state = dict(optimizer.state)
         LOGGER.info(
-            "[train] complete | epochs=%d/%d | optimizer_steps=%d/%d | total_elapsed=%s",
+            "[train] complete | epochs=%d/%d | optimizer_steps=%d/%d | global_step=%d | total_elapsed=%s",
             total_epochs,
             total_epochs,
-            self.global_step,
+            self.global_step - self._fit_start_global_step,
             total_training_steps,
+            self.global_step,
             _format_duration(self._elapsed_train_seconds()),
         )
