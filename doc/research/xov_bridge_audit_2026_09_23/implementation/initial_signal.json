@@ -1,0 +1,6 @@
+{
+  "init_gate": 0.10000000149011612,
+  "relative_rms_median": 0.011245205998420715,
+  "relative_rms_max": 0.01666855253279209,
+  "fixture": "synthetic normal embedding, width1024 rank256, one-to-one; not pretrained data"
+}

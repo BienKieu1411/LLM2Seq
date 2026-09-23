@@ -1,0 +1,10 @@
+id,title,url,source_type,credibility,transfer,role
+01,Convolutional Sequence to Sequence Learning,https://proceedings.mlr.press/v70/gehring17a/gehring17a.pdf,primary peer-reviewed architecture,5/5,mechanism direct; task low,contextual keys plus lexical values
+02,Primer: Searching for Efficient Transformers for Language Modeling,https://arxiv.org/abs/2109.08668,primary architecture search,5/5,local operator direct; bridge task low,width-3 depthwise convolution boundary
+03,ReZero is All You Need: Fast Convergence at Large Depth,https://arxiv.org/abs/2003.04887,primary optimization,5/5,initialization relevant; XOV quality none,zero residual identity and cold-start gradients
+04,Going deeper with Image Transformers,https://arxiv.org/abs/2103.17239,primary optimization,5/5,initialization alternative; modality differs,small nonzero LayerScale residual opening
+05,Understanding the Difficulty of Training Transformers,https://arxiv.org/abs/2004.08249,primary optimization,5/5,initialization relevant; XOV quality none,adaptive residual dependence warning
+06,How Contextual are Contextualized Word Representations?,https://arxiv.org/abs/1909.00512,primary representation analysis,4/5,lexical redundancy counterevidence; no bridge,static versus contextual lexical information
+07,BERT Rediscovers the Classical NLP Pipeline,https://aclanthology.org/P19-1452/,primary ACL empirical analysis,5/5,lexical redundancy counterevidence; encoder differs,lower-level information appears within contextual representations
+08,Deep Learning Chapter 11,https://www.deeplearningbook.org/contents/guidelines.html,primary textbook,5/5,methodology only,baseline and instrumentation
+09,Historical XOV and repair probes,git:efce6f8:src/xov_bridge,local code and synthetic experiment,5/5,mechanical behavior only,order and gap counterexamples

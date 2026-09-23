@@ -1,0 +1,30 @@
+{
+  "scope": "synthetic research prototype; no pretrained model, tokenizer-corpus, DDP or ROUGE test",
+  "identity_at_initialization": true,
+  "gap_crossing_naive_max_delta": 3.813187599182129,
+  "gap_crossing_corrected_max_delta": 0.0,
+  "historical_aligner_compacts_gap_fixture": [
+    10,
+    11
+  ],
+  "nonlinear_before_pool_order_swap_max_delta": 0.0006711483001708984,
+  "contiguous_conv_max_error": 1.1920928955078125e-07,
+  "padding_invariance": true,
+  "empty_alignment_identity": true,
+  "relative_value_residual_rms_max": 0.001230278518050909,
+  "first_backward_gradient_l1": {
+    "value_gate_raw": 0.0,
+    "lexical_norm.weight": 0.0,
+    "lexical_down.weight": 0.0,
+    "phrase_conv.weight": 0.0,
+    "lexical_up.weight": 0.18522010743618011
+  },
+  "second_backward_gradient_l1": {
+    "value_gate_raw": 5.3135034249862656e-05,
+    "lexical_norm.weight": 0.0001199246253236197,
+    "lexical_down.weight": 0.0021344167180359364,
+    "phrase_conv.weight": 0.0003777424863073975,
+    "lexical_up.weight": 0.18521960079669952
+  },
+  "post_norm_effect_after_one_step": 8.58306884765625e-06
+}

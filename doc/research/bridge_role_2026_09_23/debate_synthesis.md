@@ -1,5 +1,9 @@
 # Does XOV complement cross-attention?
 
+Design follow-up (2026-09-23): [XOV reviewed and repaired design](../xov_bridge_audit_2026_09_23/2026-09-23_design.md)
+specifies activation-before-pooling, original-token adjacency masks, explicit copy anchoring and checkpoint contracts.
+The historical audit below remains evidence/provenance; the linked design governs the proposed next implementation.
+
 Date: 2026-09-23. Research and synthetic probes only; no production source edits.
 XOV is untested on the user's task, explicitly confirmed by the user.
 

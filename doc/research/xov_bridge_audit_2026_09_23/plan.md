@@ -6,6 +6,8 @@ Task: improve source-to-summary training through a correct XOV bridge; performan
 
 At initial inspection HEAD is fa27888 and src/xov_bridge is absent. The existing research identifies efce6f8:src/xov_bridge as historical XOV. A clarification is pending before restoring or replacing production files. Existing research and user files remain intact.
 
+Clarification received: the user means the XOV design in research/debate. Deliver a revised research design and isolated prototype; do not restore or edit src. HEAD later became 45a20ba through an external change; the coordinator has not committed anything.
+
 ## Falsifiable hypotheses
 
 1. Linear local composition followed by mean alignment loses some internal token-order distinctions. Test the existing many-to-one counterexample and a corrected activation placement.

@@ -1,0 +1,8 @@
+{
+  "max_weight_delta_resume": 0.0,
+  "rng_ranks": 2,
+  "steps": 2,
+  "world_size": 2,
+  "backend": "gloo CPU",
+  "single_process_train_eval": "passed, two prediction rows"
+}
