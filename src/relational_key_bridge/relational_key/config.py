@@ -1,4 +1,4 @@
-"""Strict XOV configuration loading and invariant checks."""
+"""Strict RelationalKey configuration loading and invariant checks."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def _load(path: Path, stack: tuple[Path, ...]) -> dict[str, Any]:
     if path in stack:
         raise ValueError("Cyclic config inheritance: " + " -> ".join(map(str, (*stack, path))))
     if len(stack) > 1:
-        raise ValueError("XOV supports only one base and one task override")
+        raise ValueError("RelationalKey supports only one base and one task override")
     with path.open("r", encoding="utf-8") as handle:
         own = yaml.safe_load(handle) or {}
     if not isinstance(own, dict):
@@ -53,7 +53,7 @@ def _load(path: Path, stack: tuple[Path, ...]) -> dict[str, Any]:
     merged: dict[str, Any] = {}
     parents = tuple(_parents(own.pop("_base_", None)))
     if len(parents) > 1:
-        raise ValueError("XOV supports only one base config")
+        raise ValueError("RelationalKey supports only one base config")
     for parent in parents:
         merged = _merge(merged, _load(path.parent / parent, (*stack, path)))
     return _merge(merged, own)
@@ -81,7 +81,7 @@ def resolve_path(value: str | Path, config: dict[str, Any]) -> Path:
 def _check_keys(mapping: dict[str, Any], allowed: set[str], section: str) -> None:
     unknown = set(mapping) - allowed
     if unknown:
-        raise ValueError(f"Unknown XOV {section} key(s): {sorted(unknown)}")
+        raise ValueError(f"Unknown RelationalKey {section} key(s): {sorted(unknown)}")
 
 
 def validate_architecture(architecture: dict[str, Any]) -> None:
@@ -91,54 +91,30 @@ def validate_architecture(architecture: dict[str, Any]) -> None:
             "name",
             "bridge_mode",
             "output_init_gain",
-            "lexical_rank",
-            "phrase_kernel",
-            "phrase_directional",
-            "value_gate_init",
-            "value_gate_max",
-            "value_gate_mode",
+            "relation_rank",
             "key_gate_init",
             "key_gate_max",
             "residual_reference_rms",
-            "no_alignment_fallback",
-            "key_memory",
+            "value_memory",
             "copy_memory",
         },
         "architecture",
     )
-    if architecture.get("name", "cross_tokenizer_ordered_value") != "cross_tokenizer_ordered_value":
-        raise ValueError("architecture.name must be cross_tokenizer_ordered_value")
-    if architecture.get("bridge_mode", "cross_tokenizer_ordered_value") not in {
-        "cross_tokenizer_ordered_value",
-        "direct_projection",
-    }:
-        raise ValueError("architecture.bridge_mode must be cross_tokenizer_ordered_value or direct_projection")
-    rank = architecture.get("lexical_rank", 256)
+    if architecture.get("name", "relational_key") != "relational_key":
+        raise ValueError("architecture.name must be relational_key")
+    if architecture.get("bridge_mode", "relational_key") not in {"relational_key", "direct_projection"}:
+        raise ValueError("architecture.bridge_mode must be relational_key or direct_projection")
+    rank = architecture.get("relation_rank", 256)
     if not isinstance(rank, int) or isinstance(rank, bool) or rank <= 0:
-        raise ValueError("architecture.lexical_rank must be a positive integer")
-    if architecture.get("phrase_kernel", 3) not in (1, 3):
-        raise ValueError("architecture.phrase_kernel must be 3, or 1 for phrase-off")
-    if architecture.get("phrase_directional", True) is not True:
-        raise ValueError("architecture.phrase_directional must be true")
-    if architecture.get("value_gate_mode", "global") not in {"global", "source_lexical"}:
-        raise ValueError("architecture.value_gate_mode must be global or source_lexical")
-    if (
-        not 0
-        < float(architecture.get("value_gate_init", 0.10))
-        < float(architecture.get("value_gate_max", 0.20))
-        <= 0.20
-    ):
-        raise ValueError("Require 0 < architecture.value_gate_init < value_gate_max <= 0.20")
-    if not 0 < float(architecture.get("key_gate_init", 0.12)) < float(architecture.get("key_gate_max", 0.20)) <= 0.20:
+        raise ValueError("architecture.relation_rank must be a positive integer")
+    if not 0 < float(architecture.get("key_gate_init", 0.10)) < float(architecture.get("key_gate_max", 0.20)) <= 0.20:
         raise ValueError("Require 0 < architecture.key_gate_init < key_gate_max <= 0.20")
     if not 0 < float(architecture.get("output_init_gain", 1.0)) <= 2.0:
         raise ValueError("output_init_gain must lie in (0, 2]")
     reference = float(architecture.get("residual_reference_rms", 1.0))
     if not 0 < reference < float("inf"):
         raise ValueError("architecture.residual_reference_rms must be finite and positive")
-    # key_memory names the direct-projection anchor; XOV adds its bounded
-    # lexical route after this anchor is built.
-    for key in ("no_alignment_fallback", "key_memory", "copy_memory"):
+    for key in ("value_memory", "copy_memory"):
         if architecture.get(key, "direct_projection") != "direct_projection":
             raise ValueError(f"architecture.{key} must be direct_projection")
 
@@ -148,7 +124,7 @@ def validate_config(config: dict[str, Any]) -> None:
     required_sections = ("model", "encoder", "architecture", "decoder", "training", "data", "generation")
     for section in required_sections:
         if not isinstance(config.get(section), dict):
-            raise ValueError(f"Missing XOV section: {section}")
+            raise ValueError(f"Missing RelationalKey section: {section}")
     model = config["model"]
     _check_keys(
         model,
@@ -167,18 +143,20 @@ def validate_config(config: dict[str, Any]) -> None:
     if not str(model.get("encoder_name", "")).strip() or not str(model.get("decoder_name", "")).strip():
         raise ValueError("model.encoder_name and model.decoder_name are required")
     if model.get("dtype", "float32") not in {"float32", "bfloat16"}:
-        raise ValueError("XOV supports float32 or bfloat16; float16 requires a loss scaler and is not supported")
+        raise ValueError(
+            "RelationalKey supports float32 or bfloat16; float16 requires a loss scaler and is not supported"
+        )
     if model.get("compute_dtype", "bfloat16") not in {"float32", "bfloat16"}:
         raise ValueError("model.compute_dtype must be float32 or bfloat16")
     if not model.get("tokenizer_use_fast", True):
-        raise ValueError("XOV requires a fast encoder tokenizer for exact offset mapping")
+        raise ValueError("RelationalKey requires a fast encoder tokenizer for exact offset mapping")
     validate_architecture(config["architecture"])
     _check_keys(config["encoder"], {"backend", "upper_bidirectional_layers"}, "encoder")
     if config["encoder"].get("backend", "pretrained_native") != "pretrained_native":
-        raise ValueError("XOV currently exposes only encoder.backend=pretrained_native")
+        raise ValueError("RelationalKey currently exposes only encoder.backend=pretrained_native")
     if int(config["encoder"].get("upper_bidirectional_layers", 0)) != 0:
         raise ValueError(
-            "XOV pretrained_native keeps the encoder attention implementation unchanged; upper_bidirectional_layers must be 0"
+            "RelationalKey pretrained_native keeps the encoder attention implementation unchanged; upper_bidirectional_layers must be 0"
         )
     decoder = config["decoder"]
     _check_keys(
@@ -195,9 +173,9 @@ def validate_config(config: dict[str, Any]) -> None:
         "decoder",
     )
     if int(decoder.get("cross_attention_every", 0)) != 1:
-        raise ValueError("XOV uses cross-attention in every decoder layer")
+        raise ValueError("RelationalKey uses cross-attention in every decoder layer")
     if not bool(decoder.get("initialize_cross_from_self", True)):
-        raise ValueError("XOV cross-attention projections must be initialized from decoder self-attention")
+        raise ValueError("RelationalKey cross-attention projections must be initialized from decoder self-attention")
     copy_config = decoder.get("grounded_copy", {})
     if not isinstance(copy_config, dict):
         raise ValueError("decoder.grounded_copy must be a mapping")
@@ -244,7 +222,7 @@ def validate_config(config: dict[str, Any]) -> None:
     if int(training.get("batch_size", 0)) == 0 or int(training.get("gradient_accumulation_steps", 0)) == 0:
         raise ValueError("batch_size and gradient_accumulation_steps must be positive")
     if int(training.get("interface_warmup_epochs", 0)) + int(training.get("full_finetune_epochs", 0)) == 0:
-        raise ValueError("At least one XOV training epoch is required")
+        raise ValueError("At least one RelationalKey training epoch is required")
     data = config["data"]
     if int(decoder.get("ce_chunk_size", 1024)) <= 0:
         raise ValueError("decoder.ce_chunk_size must be positive")
@@ -292,7 +270,7 @@ def validate_config(config: dict[str, Any]) -> None:
         "generation",
     )
     if int(generation.get("num_beams", 0)) != 1:
-        raise ValueError("XOV generation currently supports num_beams=1 only")
+        raise ValueError("RelationalKey generation currently supports num_beams=1 only")
     if float(generation.get("repetition_penalty", 1.0)) <= 0:
         raise ValueError("generation.repetition_penalty must be positive")
     if int(generation.get("no_repeat_ngram_size", 0)) < 0:

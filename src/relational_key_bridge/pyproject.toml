@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "relational_key-bridge"
+version = "1.0.0"
+description = "Directional source-pair relational keys for encoder-decoder summarization"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.6",
+  "transformers>=5.2,<6",
+  "accelerate>=1.2",
+  "safetensors>=0.4",
+  "pyyaml>=6.0",
+  "numpy>=1.24",
+  "rouge==1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff==0.15.20"]
+
+[project.scripts]
+relational_key-bridge = "relational_key.cli:main"
+
+[tool.setuptools]
+packages = ["relational_key", "relational_key.data", "relational_key.evaluation", "relational_key.modeling", "relational_key.training"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"

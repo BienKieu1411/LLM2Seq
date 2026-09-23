@@ -1,11 +1,11 @@
 _base_: xov_base.yaml
 
 experiment:
-  name: xov_pubmed
-  output_dir: runs/xov/pubmed_source_lexical_matched
+  name: xov_pubmed_direct_control
+  output_dir: runs/xov/pubmed_direct_matched
 
 architecture:
-  value_gate_mode: source_lexical
+  bridge_mode: direct_projection
 
 data:
   train_file: ../eviseq_new/datasets/pubmed/train.jsonl

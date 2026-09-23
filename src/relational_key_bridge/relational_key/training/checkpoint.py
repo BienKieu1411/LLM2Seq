@@ -1,4 +1,4 @@
-"""Atomic XOV checkpoints with structural, not path, compatibility."""
+"""Atomic RelationalKey checkpoints with structural, not path, compatibility."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def _asset_fingerprint(name: str) -> str:
         return "tiny_qwen_fixture"
     root = Path(name)
     if not root.is_dir():
-        raise ValueError(f"XOV requires a local model directory: {name}")
+        raise ValueError(f"RelationalKey requires a local model directory: {name}")
     digest = hashlib.sha256()
     # No model weights are read. Moving an unchanged local model remains valid.
     names = (
@@ -81,14 +81,9 @@ def _asset_fingerprint(name: str) -> str:
 def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
     arch = config["architecture"]
     decoder = config["decoder"]
-    active_xov = arch.get("bridge_mode", "cross_tokenizer_ordered_value") != "direct_projection"
     spec = {
-        "graph_version": "ordered_lexical_keys_and_values" if active_xov else "ordered_lexical_values",
-        "operator_contract": (
-            "silu_before_pool_original_adjacency_bounded_key_value_copy_anchor"
-            if active_xov
-            else "silu_before_pool_original_adjacency_clipped_source_copy_anchor"
-        ),
+        "graph_version": "directional_adjacent_relational_keys_v1",
+        "operator_contract": "source_content_adjacent_bilinear_keys_direct_value_copy_anchor",
         "input_policy": {
             key: config["data"].get(key, default)
             for key, default in {
@@ -112,23 +107,16 @@ def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
         },
         "encoder_assets": _asset_fingerprint(str(config["model"]["encoder_name"])),
         "decoder_assets": _asset_fingerprint(str(config["model"]["decoder_name"])),
-        "architecture": arch.get("name", "cross_tokenizer_ordered_value"),
-        "bridge_mode": arch.get("bridge_mode", "cross_tokenizer_ordered_value"),
-        "lexical_rank": int(arch.get("lexical_rank", 256)),
-        "phrase_kernel": int(arch.get("phrase_kernel", 3)),
-        "phrase_directional": bool(arch.get("phrase_directional", True)),
-        "value_gate_max": float(arch.get("value_gate_max", 0.20)),
+        "architecture": arch.get("name", "relational_key"),
+        "bridge_mode": arch.get("bridge_mode", "relational_key"),
+        "relation_rank": int(arch.get("relation_rank", 256)),
+        "key_gate_max": float(arch.get("key_gate_max", 0.20)),
         "residual_reference_rms": float(arch.get("residual_reference_rms", 1.0)),
-        "key_memory": "direct_projection_anchor_plus_bounded_lexical" if active_xov else "direct_projection",
+        "value_memory": "direct_projection",
         "copy_memory": "direct_projection",
         "cross_attention_every": int(decoder.get("cross_attention_every", 1)),
         "cross_gate_max": float(decoder.get("cross_gate_max", 1.0)),
     }
-    if active_xov:
-        spec["key_gate_init"] = float(arch.get("key_gate_init", 0.12))
-        spec["key_gate_max"] = float(arch.get("key_gate_max", 0.20))
-    if arch.get("value_gate_mode", "global") != "global":
-        spec["value_gate_mode"] = arch["value_gate_mode"]
     copy_config = decoder.get("grounded_copy", {})
     if copy_config.get("enabled", False):
         spec["grounded_copy"] = {
@@ -185,7 +173,7 @@ def _embedding_shape_mismatches(
 ) -> list[tuple[str, tuple[int, ...], tuple[int, ...]]]:
     """Return vocabulary-shape mismatches that usually indicate a wrong backbone.
 
-    XOV checkpoints intentionally do not require model *paths* to stay the same:
+    RelationalKey checkpoints intentionally do not require model *paths* to stay the same:
     a local copy can move without invalidating its weights.  Embedding dimensions,
     however, are part of the trained graph.  Checking these tensors before the
     generic ``load_state_dict`` call turns a cryptic PyTorch error into an
@@ -224,7 +212,7 @@ def load_checkpoint(
     state = torch.load(Path(path), map_location=map_location, weights_only=False)
     model = _unwrap_model(model)
     if config is not None and state.get("architecture_spec") != architecture_spec(config):
-        raise ValueError("Checkpoint architecture_spec does not match the active XOV configuration")
+        raise ValueError("Checkpoint architecture_spec does not match the active RelationalKey configuration")
     mismatches = _embedding_shape_mismatches(state["model"], model)
     if mismatches:
         details = "; ".join(

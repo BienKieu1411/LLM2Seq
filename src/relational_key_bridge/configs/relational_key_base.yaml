@@ -1,6 +1,6 @@
 experiment:
-  name: xov
-  output_dir: runs/xov
+  name: relational_key
+  output_dir: runs/relational_key
 
 model:
   encoder_name: /absolute/path/to/Qwen3-Embedding-0.6B
@@ -16,17 +16,14 @@ encoder:
   backend: pretrained_native
 
 architecture:
-  name: cross_tokenizer_ordered_value
-  bridge_mode: cross_tokenizer_ordered_value
+  name: relational_key
+  bridge_mode: relational_key
   output_init_gain: 1.0
-  lexical_rank: 256
-  phrase_kernel: 3
-  phrase_directional: true
-  value_gate_init: 0.10
-  value_gate_max: 0.20
+  relation_rank: 256
+  key_gate_init: 0.10
+  key_gate_max: 0.20
   residual_reference_rms: 1.0
-  no_alignment_fallback: direct_projection
-  key_memory: direct_projection
+  value_memory: direct_projection
   copy_memory: direct_projection
 
 decoder:
@@ -61,7 +58,7 @@ training:
   full_bridge_lr: 1.0e-4
   full_cross_attention_lr: 1.0e-4
   weight_decay: 0.01
-  max_grad_norm: 1.0
+  max_grad_norm: 3.0
   seed: 42
   log_every_steps: 1
   save_each_epoch: true
@@ -86,7 +83,7 @@ data:
 
 generation:
   compact_finished: true
-  batch_size: 96
+  batch_size: 256
   max_new_tokens: 512
   min_new_tokens: 16
   repetition_penalty: 1.05

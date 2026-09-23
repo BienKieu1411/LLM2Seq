@@ -1,11 +1,8 @@
-_base_: xov_base.yaml
+_base_: relational_key_base.yaml
 
 experiment:
-  name: xov_pubmed
-  output_dir: runs/xov/pubmed_source_lexical_matched
-
-architecture:
-  value_gate_mode: source_lexical
+  name: relational_key_pubmed
+  output_dir: runs/relational_key/pubmed_pair
 
 data:
   train_file: ../eviseq_new/datasets/pubmed/train.jsonl

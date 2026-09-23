@@ -31,7 +31,7 @@ COPY_VARIANT=lm
 [[ "${XOV_GROUNDED_COPY}" == false ]] || COPY_VARIANT=copy
 BRIDGE_VARIANT=cross_tokenizer_ordered_value
 [[ "${XOV_BRIDGE_MODE}" == direct_projection ]] && BRIDGE_VARIANT=direct_projection
-RUN_ROOT="${ROOT}/runs/xov/pubmed_pair_${XOV_ARCHITECTURE}_${BRIDGE_VARIANT}_${COPY_VARIANT}"
+RUN_ROOT="${XOV_RUN_ROOT:-${ROOT}/runs/xov/pubmed_pair_${XOV_ARCHITECTURE}_${BRIDGE_VARIANT}_${COPY_VARIANT}_matched}"
 GENERATED_CONFIG_DIR="${RUN_ROOT}/configs"
 LOG_DIR="${ROOT}/logs/xov"
 PPLX_ENCODER="${PPLX_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/pplx-embed-v1-0.6b}"
@@ -111,7 +111,11 @@ config = load_config(base)
 config["architecture"]["name"] = architecture
 if bridge_mode == "direct_projection":
     config["architecture"]["bridge_mode"] = bridge_mode
+    config["architecture"]["value_gate_mode"] = "global"
 config["decoder"]["grounded_copy"]["enabled"] = grounded_copy == "true"
+# This script trains on one GPU. Match the baseline global batch of 96;
+# the source PubMed config uses 24 per GPU for the two-GPU launcher.
+config["training"]["batch_size"] = 48
 config.pop("_meta", None)
 config["model"]["encoder_name"] = encoder
 config["model"]["decoder_name"] = decoder

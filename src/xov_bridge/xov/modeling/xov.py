@@ -1,4 +1,4 @@
-"""Ordered decoder-token evidence added only to cross-attention values."""
+"""Ordered decoder-token evidence for cross-attention retrieval and values."""
 
 from __future__ import annotations
 
@@ -26,10 +26,13 @@ class CrossTokenizerOrderedValueBridge(nn.Module):
         if self.bridge_mode == "direct_projection":
             return
         self.value_gate_max = float(config.get("value_gate_max", 0.20))
+        self.key_gate_max = float(config.get("key_gate_max", 0.20))
         self.residual_reference_rms = float(config.get("residual_reference_rms", 1.0))
         rank = int(config.get("lexical_rank", 256))
         kernel = int(config.get("phrase_kernel", 3))
         initial = float(config.get("value_gate_init", 0.10))
+        key_initial = float(config.get("key_gate_init", 0.12))
+        self.value_gate_mode = str(config.get("value_gate_mode", "global"))
         # Adding XOV must not advance the RNG used for later data/dropout draws.
         with torch.random.fork_rng(devices=[]):
             self.lexical_norm = nn.RMSNorm(decoder_hidden, eps=1e-6)
@@ -43,6 +46,12 @@ class CrossTokenizerOrderedValueBridge(nn.Module):
             self.lexical_up = nn.Linear(rank, decoder_hidden, bias=False)
             nn.init.orthogonal_(self.lexical_up.weight, gain=float(config.get("output_init_gain", 1.0)))
             self.value_gate_raw = nn.Parameter(torch.tensor(math.log(initial / (self.value_gate_max - initial))))
+            self.key_gate_raw = nn.Parameter(torch.tensor(math.log(key_initial / (self.key_gate_max - key_initial))))
+            if self.value_gate_mode == "source_lexical":
+                self.source_gate = nn.Linear(decoder_hidden, 1, bias=False)
+                self.lexical_gate = nn.Linear(rank, 1, bias=False)
+                nn.init.zeros_(self.source_gate.weight)
+                nn.init.zeros_(self.lexical_gate.weight)
 
     @property
     def requires_alignment(self) -> bool:
@@ -139,6 +148,18 @@ class CrossTokenizerOrderedValueBridge(nn.Module):
         )
         residual = self.lexical_up(pooled.to(self.lexical_up.weight.dtype)).float()
         residual = self._unit_capped(residual, memory).masked_fill(~aligned[..., None], 0.0)
-        gate = self.value_gate_max * self.value_gate_raw.float().sigmoid()
+        gate_logit = self.value_gate_raw.float()
+        if self.value_gate_mode == "source_lexical":
+            source_features = F.rms_norm(memory.float(), (memory.shape[-1],))
+            lexical_features = F.rms_norm(pooled.float(), (pooled.shape[-1],))
+            gate_logit = (
+                gate_logit
+                + self.source_gate(source_features.to(self.source_gate.weight.dtype)).float()
+                + self.lexical_gate(lexical_features.to(self.lexical_gate.weight.dtype)).float()
+            )
+        gate = self.value_gate_max * gate_logit.sigmoid()
+        key_gate = self.key_gate_max * self.key_gate_raw.float().sigmoid()
+        keys = (memory.float() + key_gate * residual).to(memory.dtype)
         values = (memory.float() + gate * residual).to(memory.dtype)
-        return BridgeState(memory, memory_mask, content, values, memory)
+        # Copy sees the original projected encoder states, not the lexical key route.
+        return BridgeState(keys, memory_mask, content, values, memory)

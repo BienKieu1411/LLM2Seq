@@ -12,7 +12,7 @@ from xov.modeling.model import XOVModel
 from xov.modeling.outputs import EncoderState
 from xov.modeling.xov import CrossTokenizerOrderedValueBridge
 from xov.runtime import build_loaders
-from xov.training.checkpoint import save_checkpoint, load_checkpoint
+from xov.training.checkpoint import architecture_spec, save_checkpoint, load_checkpoint
 
 CONFIG = Path(__file__).resolve().parents[1] / "configs/xov_smoke.yaml"
 
@@ -49,10 +49,12 @@ def test_original_positions_and_prefix_crossing():
 
 
 @pytest.mark.parametrize("copy_enabled", [True, False])
-def test_real_ce_first_step_updates_branch_and_checkpoint_roundtrip(tmp_path, copy_enabled):
+@pytest.mark.parametrize("gate_mode", ["global", "source_lexical"])
+def test_real_ce_first_step_updates_branch_and_checkpoint_roundtrip(tmp_path, copy_enabled, gate_mode):
     torch.manual_seed(33)
     config = load_config(CONFIG)
     config["decoder"]["grounded_copy"]["enabled"] = copy_enabled
+    config["architecture"]["value_gate_mode"] = gate_mode
     batch = next(iter(build_loaders(config, max_train_examples=2)["train"]))
     model = XOVModel(config)
     args = {k: v for k, v in batch.items() if torch.is_tensor(v)}
@@ -86,6 +88,113 @@ def test_real_ce_first_step_updates_branch_and_checkpoint_roundtrip(tmp_path, co
         model(**args)
 
 
+def test_source_lexical_gate_starts_at_global_then_can_vary_by_source():
+    torch.manual_seed(19)
+    global_config = load_config(CONFIG)["architecture"]
+    local_config = dict(global_config, value_gate_mode="source_lexical")
+    global_bridge = CrossTokenizerOrderedValueBridge(8, 8, global_config)
+    local_bridge = CrossTokenizerOrderedValueBridge(8, 8, local_config)
+    local_bridge.load_state_dict(global_bridge.state_dict(), strict=False)
+    embedding = torch.nn.Embedding(32, 8)
+    state = EncoderState(
+        torch.randn(1, 3, 8),
+        (),
+        torch.ones(1, 3, dtype=torch.bool),
+        torch.ones(1, 3, dtype=torch.bool),
+    )
+    alignment = pad_source_alignments(
+        [
+            dict(
+                copy_token_ids=[4, 5, 6],
+                copy_token_positions=[0, 1, 2],
+                copy_encoder_indices=[0, 1, 2],
+                copy_token_indices=[0, 1, 2],
+                copy_alignment_weights=[1.0, 1.0, 1.0],
+            )
+        ]
+    )
+    global_values = global_bridge(state, embedding, **alignment).value_memory
+    local_values = local_bridge(state, embedding, **alignment).value_memory
+    torch.testing.assert_close(local_values, global_values, rtol=0, atol=0)
+    with torch.no_grad():
+        local_bridge.source_gate.weight[0, 0] = 3.0
+    changed = local_bridge(state, embedding, **alignment)
+    assert not torch.equal(changed.value_memory, global_values)
+    assert torch.equal(changed.memory, global_bridge(state, embedding, **alignment).memory)
+    assert torch.equal(changed.copy_memory, state.final)
+
+
+def test_source_lexical_gate_reaches_decoder_without_changing_copy_keys():
+    torch.manual_seed(29)
+    config = load_config(CONFIG)
+    config["architecture"]["value_gate_mode"] = "source_lexical"
+    config["decoder"]["grounded_copy"]["enabled"] = True
+    model = XOVModel(config).eval()
+    batch = next(iter(build_loaders(config, max_train_examples=2)["train"]))
+    args = {key: value for key, value in batch.items() if torch.is_tensor(value)}
+    with torch.no_grad():
+        before = model(**args)
+        model.bridge.source_gate.weight[0, 0] = 10.0
+        after = model(**args)
+    assert torch.equal(before.bridge.memory, after.bridge.memory)
+    assert torch.equal(before.bridge.copy_state.keys, after.bridge.copy_state.keys)
+    assert not torch.equal(before.bridge.value_memory, after.bridge.value_memory)
+    assert not torch.equal(before.logits, after.logits)
+
+
+def test_key_gate_is_independent_and_leaves_copy_route_anchored():
+    torch.manual_seed(37)
+    config = load_config(CONFIG)
+    config["decoder"]["grounded_copy"]["enabled"] = True
+    model = XOVModel(config).eval()
+    batch = next(iter(build_loaders(config, max_train_examples=2)["train"]))
+    args = {key: value for key, value in batch.items() if torch.is_tensor(value)}
+    with torch.no_grad():
+        before = model(**args)
+        model.bridge.key_gate_raw.fill_(5.0)
+        after = model(**args)
+    assert not torch.equal(before.bridge.memory, after.bridge.memory)
+    assert torch.equal(before.bridge.value_memory, after.bridge.value_memory)
+    assert torch.equal(before.bridge.copy_memory, after.bridge.copy_memory)
+    assert torch.equal(before.bridge.copy_state.keys, after.bridge.copy_state.keys)
+    assert not torch.equal(before.logits, after.logits)
+
+
+@pytest.mark.parametrize("encoder_hidden", [8, 6])
+def test_source_lexical_gate_runs_in_bf16_without_autocast(encoder_hidden):
+    torch.manual_seed(43)
+    config = dict(load_config(CONFIG)["architecture"], value_gate_mode="source_lexical")
+    bridge = CrossTokenizerOrderedValueBridge(encoder_hidden, 8, config).to(torch.bfloat16)
+    embedding = torch.nn.Embedding(32, 8).to(torch.bfloat16)
+    state = EncoderState(
+        torch.randn(1, 3, encoder_hidden, dtype=torch.bfloat16),
+        (),
+        torch.ones(1, 3, dtype=torch.bool),
+        torch.ones(1, 3, dtype=torch.bool),
+    )
+    alignment = pad_source_alignments(
+        [
+            dict(
+                copy_token_ids=[4, 5, 6],
+                copy_token_positions=[0, 1, 2],
+                copy_encoder_indices=[0, 1, 2],
+                copy_token_indices=[0, 1, 2],
+                copy_alignment_weights=[1.0, 1.0, 1.0],
+            )
+        ]
+    )
+    result = bridge(state, embedding, **alignment)
+    assert result.memory.isfinite().all()
+    assert result.value_memory.isfinite().all()
+    projection_dtype = (
+        bridge.direct_projection.weight.dtype
+        if isinstance(bridge.direct_projection, torch.nn.Linear)
+        else torch.float32
+    )
+    expected_anchor = bridge.direct_projection(state.final.to(projection_dtype))
+    torch.testing.assert_close(result.copy_memory, expected_anchor)
+
+
 @pytest.mark.parametrize("autocast", [False, True])
 def test_cap_padding_and_many_to_one_order(autocast):
     torch.manual_seed(7)
@@ -109,13 +218,56 @@ def test_cap_padding_and_many_to_one_order(autocast):
         swapped = deepcopy(align)
         swapped["copy_token_ids"] = swapped["copy_token_ids"][:, [0, 2, 1, 3]]
         other = bridge(state, embedding, **swapped)
-    delta = result.value_memory - result.memory
-    assert torch.count_nonzero(delta[:, [0, 2]]) == 0
-    assert delta[:, 1].norm() > 0
+    value_delta = result.value_memory - result.copy_memory
+    key_delta = result.memory - result.copy_memory
+    assert torch.count_nonzero(value_delta[:, [0, 2]]) == 0
+    assert torch.count_nonzero(key_delta[:, [0, 2]]) == 0
+    assert value_delta[:, 1].norm() > 0
+    assert key_delta[:, 1].norm() > 0
     assert not torch.equal(result.value_memory, other.value_memory)
-    assert delta.norm(dim=-1).max() <= 0.201 * result.memory.norm(dim=-1).max()
-    result.value_memory.square().mean().backward()
+    assert not torch.equal(result.memory, other.memory)
+    assert value_delta.norm(dim=-1).max() <= 0.201 * result.copy_memory.norm(dim=-1).max()
+    assert key_delta.norm(dim=-1).max() <= 0.201 * result.copy_memory.norm(dim=-1).max()
+    (result.value_memory.square().mean() + result.memory.square().mean()).backward()
     assert all(p.grad is not None and p.grad.isfinite().all() for p in bridge.parameters())
+
+
+def test_key_route_changes_post_projection_attention_weights_with_fixed_query():
+    torch.manual_seed(41)
+    config = load_config(CONFIG)
+    model = XOVModel(config).eval()
+    batch = next(iter(build_loaders(config, max_train_examples=2)["train"]))
+    with torch.no_grad():
+        bridge = model.encode_source(
+            batch["input_ids"],
+            batch["attention_mask"],
+            batch["source_content_mask"],
+            batch["decoder_prompt_ids"],
+            batch["decoder_prompt_mask"],
+            torch.full((batch["input_ids"].shape[0],), 4.0),
+            **{key: batch[key] for key in SOURCE_ALIGNMENT_KEYS},
+        )
+        cross = model.decoder.backbone.layers[0].cross
+        query_states = torch.randn(bridge.memory.shape[0], 1, cross.hidden_size)
+        query = cross.q_norm(
+            cross.q_proj(query_states).view(bridge.memory.shape[0], 1, cross.num_heads, cross.head_dim)
+        ).transpose(1, 2)
+        base_key, _ = cross._memory_kv(bridge.copy_memory, bridge.value_memory)
+        active_key, _ = cross._memory_kv(bridge.memory, bridge.value_memory)
+        repeat = cross.num_heads // cross.num_kv_heads
+        base_logits = query @ base_key.repeat_interleave(repeat, dim=1).transpose(-1, -2)
+        active_logits = query @ active_key.repeat_interleave(repeat, dim=1).transpose(-1, -2)
+        mask = bridge.memory_mask[:, None, None, :]
+        base_attention = base_logits.masked_fill(~mask, -torch.inf).softmax(dim=-1)
+        active_attention = active_logits.masked_fill(~mask, -torch.inf).softmax(dim=-1)
+    assert not torch.equal(active_key, base_key)
+    assert (active_attention - base_attention).abs().max() > 1e-7
+    torch.testing.assert_close(
+        bridge.copy_memory,
+        model.bridge.direct_projection(
+            model.encoder(batch["input_ids"], batch["attention_mask"], batch["source_content_mask"]).final
+        ).masked_fill(~bridge.memory_mask[..., None], 0.0),
+    )
 
 
 def test_cached_teacher_forcing_guard():
@@ -139,6 +291,7 @@ def _empty_rank_worker(rank, rendezvous):
     try:
         torch.manual_seed(39)
         config = load_config(CONFIG)
+        config["architecture"]["value_gate_mode"] = "source_lexical"
         model = XOVModel(config)
         ddp = DistributedDataParallel(model, find_unused_parameters=False)
         batch = next(iter(build_loaders(config, max_train_examples=4)["train"]))
@@ -189,3 +342,21 @@ def test_checkpoint_rejects_changed_input_or_execution_policy(tmp_path, section,
     changed[section][key] = value
     with pytest.raises(ValueError, match="architecture_spec"):
         load_checkpoint(path, model, config=changed, restore_rng=False)
+
+
+def test_direct_checkpoint_spec_keeps_historical_graph_contract():
+    config = load_config(CONFIG)
+    config["architecture"]["bridge_mode"] = "direct_projection"
+    spec = architecture_spec(config)
+    assert spec["graph_version"] == "ordered_lexical_values"
+    assert spec["operator_contract"] == "silu_before_pool_original_adjacency_clipped_source_copy_anchor"
+    assert spec["key_memory"] == "direct_projection"
+    assert "key_gate_init" not in spec
+    assert "key_gate_max" not in spec
+
+    config["architecture"]["bridge_mode"] = "cross_tokenizer_ordered_value"
+    active = architecture_spec(config)
+    assert active["graph_version"] == "ordered_lexical_keys_and_values"
+    assert active["key_memory"] == "direct_projection_anchor_plus_bounded_lexical"
+    assert active["key_gate_init"] == 0.12
+    assert active["key_gate_max"] == 0.20

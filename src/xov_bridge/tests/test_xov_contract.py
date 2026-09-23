@@ -93,7 +93,7 @@ def test_configs_contain_only_xov_architecture_fields() -> None:
     }
 
 
-def test_initial_values_differ_but_keys_and_copy_preserve_anchor() -> None:
+def test_initial_keys_and_values_differ_while_copy_preserves_anchor() -> None:
     torch.manual_seed(23)
     xov = CrossTokenizerOrderedValueBridge(7, 11, _architecture())
     torch.manual_seed(23)
@@ -104,9 +104,10 @@ def test_initial_values_differ_but_keys_and_copy_preserve_anchor() -> None:
     alignment = _alignment()
     xov_out = xov(state, _embedding(), **alignment)
     direct_out = direct(state, _embedding())
-    assert torch.equal(xov_out.memory, direct_out.memory)
+    assert torch.equal(xov_out.copy_memory, direct_out.memory)
+    assert not torch.equal(xov_out.memory, direct_out.memory)
+    assert not torch.equal(xov_out.value_memory, direct_out.memory)
     assert not torch.equal(xov_out.value_memory, xov_out.memory)
-    assert torch.equal(xov_out.copy_memory, xov_out.memory)
 
 
 def test_reverse_scatter_renormalizes_unequal_many_to_one_overlap() -> None:
@@ -142,11 +143,12 @@ def test_prefix_padding_and_unaligned_destinations_have_zero_residual() -> None:
         "copy_alignment_weights": torch.tensor([[1.0, 1.0, 1.0]]),
     }
     result = bridge(state, _embedding(), **alignment)
-    residual = result.value_memory - result.memory
-    assert torch.equal(residual[0, 0], torch.zeros_like(residual[0, 0]))
-    assert torch.equal(residual[0, 1], torch.zeros_like(residual[0, 1]))
-    assert torch.equal(residual[0, 3], torch.zeros_like(residual[0, 3]))
-    assert torch.any(residual[0, 2].ne(0))
+    for routed in (result.memory, result.value_memory):
+        residual = routed - result.copy_memory
+        assert torch.equal(residual[0, 0], torch.zeros_like(residual[0, 0]))
+        assert torch.equal(residual[0, 1], torch.zeros_like(residual[0, 1]))
+        assert torch.equal(residual[0, 3], torch.zeros_like(residual[0, 3]))
+        assert torch.any(residual[0, 2].ne(0))
 
 
 def test_first_and_second_backward_open_the_lexical_route() -> None:
@@ -156,7 +158,7 @@ def test_first_and_second_backward_open_the_lexical_route() -> None:
     embedding = _embedding()
     alignment = _alignment()
     output = bridge(state, embedding, **alignment)
-    output.value_memory.square().mean().backward()
+    (output.value_memory.square().mean() + output.memory.square().mean()).backward()
     named = dict(bridge.named_parameters())
     assert named["direct_projection.weight"].grad is not None
     assert named["direct_projection.weight"].grad.isfinite().all()
@@ -168,8 +170,9 @@ def test_first_and_second_backward_open_the_lexical_route() -> None:
     optimizer = torch.optim.SGD(bridge.parameters(), lr=0.1)
     optimizer.step()
     bridge.zero_grad(set_to_none=True)
-    bridge(state, embedding, **alignment).value_memory.square().mean().backward()
-    for name in ("lexical_down.weight", "phrase_conv.weight", "value_gate_raw"):
+    output = bridge(state, embedding, **alignment)
+    (output.value_memory.square().mean() + output.memory.square().mean()).backward()
+    for name in ("lexical_down.weight", "phrase_conv.weight", "value_gate_raw", "key_gate_raw"):
         gradient = named[name].grad
         assert gradient is not None and gradient.isfinite().all() and gradient.abs().sum() > 0, name
 
@@ -187,11 +190,12 @@ def test_empty_alignment_is_identity_and_backward_graph_safe() -> None:
     }
     output = bridge(state, _embedding(), **empty)
     assert torch.equal(output.value_memory, output.memory)
-    output.value_memory.square().mean().backward()
+    assert torch.equal(output.memory, output.copy_memory)
+    (output.value_memory.square().mean() + output.memory.square().mean()).backward()
     assert all(parameter.grad is not None and parameter.grad.isfinite().all() for parameter in bridge.parameters())
 
 
-def test_active_value_route_keeps_keys_and_copy_state_on_base_memory() -> None:
+def test_active_key_and_value_routes_keep_copy_state_on_base_memory() -> None:
     torch.manual_seed(9)
     bridge = CrossTokenizerOrderedValueBridge(7, 11, _architecture())
     with torch.no_grad():
@@ -199,8 +203,10 @@ def test_active_value_route_keeps_keys_and_copy_state_on_base_memory() -> None:
     state = _state(hidden=7)
     alignment = _alignment()
     output = bridge(state, _embedding(), **alignment)
-    assert torch.any(output.value_memory.ne(output.memory))
-    assert torch.equal(output.copy_memory, output.memory)
+    assert torch.any(output.value_memory.ne(output.copy_memory))
+    assert torch.any(output.memory.ne(output.copy_memory))
+    expected_anchor = bridge.direct_projection(state.final)
+    assert torch.equal(output.copy_memory, expected_anchor)
     copy_a = GroundedCopyHead(11, 4, 0.05)
     copy_b = deepcopy(copy_a)
     state_a = copy_a.prepare(
@@ -210,7 +216,7 @@ def test_active_value_route_keeps_keys_and_copy_state_on_base_memory() -> None:
         **{k: v for k, v in alignment.items() if k != "copy_token_positions"},
     )
     state_b = copy_b.prepare(
-        output.memory,
+        expected_anchor,
         output.content_mask,
         _embedding(),
         **{k: v for k, v in alignment.items() if k != "copy_token_positions"},
@@ -291,6 +297,7 @@ def test_production_model_ce_steps_open_xov_gradients() -> None:
         "phrase_conv.weight",
         "lexical_up.weight",
         "value_gate_raw",
+        "key_gate_raw",
     ):
         gradient = named[name].grad
         assert gradient is not None and gradient.isfinite().all() and gradient.abs().sum() > 0, name
@@ -303,18 +310,19 @@ def test_production_model_ce_steps_open_xov_gradients() -> None:
         "phrase_conv.weight",
         "lexical_up.weight",
         "value_gate_raw",
+        "key_gate_raw",
     ):
         assert not torch.equal(before[name], named[name]), name
     model.zero_grad(set_to_none=True)
     second_loss = model(**forward_args).loss_ce
     assert second_loss is not None and torch.isfinite(second_loss)
     second_loss.backward()
-    for name in ("lexical_down.weight", "phrase_conv.weight", "value_gate_raw"):
+    for name in ("lexical_down.weight", "phrase_conv.weight", "value_gate_raw", "key_gate_raw"):
         gradient = named[name].grad
         assert gradient is not None and gradient.isfinite().all() and gradient.abs().sum() > 0, name
 
 
-def test_production_decoder_logits_change_when_active_values_replace_anchor() -> None:
+def test_production_decoder_logits_change_when_key_or_value_route_is_active() -> None:
     config = load_config(CONFIG_ROOT / "xov_smoke.yaml")
     loader = __import__("xov.runtime", fromlist=["build_loaders"]).build_loaders(config, max_train_examples=2)["train"]
     batch = next(iter(loader))
@@ -340,16 +348,25 @@ def test_production_decoder_logits_change_when_active_values_replace_anchor() ->
             return_logits=True,
             value_memory=bridge.value_memory,
         )
-        anchor_logits, _, _ = model.decoder(
+        value_only_logits, _, _ = model.decoder(
+            batch["decoder_input_ids"],
+            bridge.copy_memory,
+            bridge.memory_mask,
+            batch["decoder_attention_mask"],
+            return_logits=True,
+            value_memory=bridge.value_memory,
+        )
+        key_only_logits, _, _ = model.decoder(
             batch["decoder_input_ids"],
             bridge.memory,
             bridge.memory_mask,
             batch["decoder_attention_mask"],
             return_logits=True,
-            value_memory=bridge.memory,
+            value_memory=bridge.copy_memory,
         )
-    assert active_logits is not None and anchor_logits is not None
-    assert torch.any(active_logits.ne(anchor_logits))
+    assert active_logits is not None and value_only_logits is not None and key_only_logits is not None
+    assert torch.any(active_logits.ne(value_only_logits))
+    assert torch.any(active_logits.ne(key_only_logits))
 
 
 def test_production_cached_generation_compacts_active_value_state() -> None:
