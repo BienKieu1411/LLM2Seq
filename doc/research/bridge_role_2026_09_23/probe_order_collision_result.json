@@ -1,0 +1,8 @@
+{
+  "scope": "synthetic counterexample, not corpus prevalence or score evidence",
+  "many_to_one_order_swap_max_delta": 0.0,
+  "one_to_one_order_swap_max_delta": 0.00971326231956482,
+  "pure_radial_norm_delta": 2.384185791015625e-07,
+  "activation_before_scatter_order_swap_max_delta": 0.0009185373783111572,
+  "activation_before_scatter_one_to_one_control_max_delta": 0.0
+}

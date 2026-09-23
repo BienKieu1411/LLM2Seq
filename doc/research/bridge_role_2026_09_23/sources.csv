@@ -1,0 +1,26 @@
+file,title,urls,scores_note
+sources/01_transformer.md,S01 — Attention Is All You Need,https://arxiv.org/html/1706.03762v7,See per-source metadata; evidence applicability differs
+sources/02_convseq.md,S02 — Convolutional Sequence to Sequence Learning,https://proceedings.mlr.press/v70/gehring17a.html | https://proceedings.mlr.press/v70/gehring17a/gehring17a.pdf,See per-source metadata; evidence applicability differs
+sources/03_primer.md,S03 — Primer: Searching for Efficient Transformers for Language Modeling,https://arxiv.org/abs/2109.08668,See per-source metadata; evidence applicability differs
+sources/04_convbert.md,S04 — ConvBERT,https://arxiv.org/abs/2008.02496,See per-source metadata; evidence applicability differs
+sources/05_conv_llm_2026.md,"S05 — Convolution for Large Language Models, technical report",https://arxiv.org/html/2607.18413v1,See per-source metadata; evidence applicability differs
+sources/06_convbert_reviews.md,S06 — Public ConvBERT peer reviews,https://papers.neurips.cc/paper_files/paper/2020/file/96da2f590cd7246bbde0051047b0d6f7-Review.html,See per-source metadata; evidence applicability differs
+sources/07_preprojection.md,S07 — Position-Agnostic Pre-Projection for Transformer Attention,https://arxiv.org/html/2604.10791v1,See per-source metadata; evidence applicability differs
+sources/08_gated_attention.md,S08 — Gated Attention for Large Language Models,https://proceedings.neurips.cc/paper_files/paper/2025/hash/904e89bb4e632e75fb47f093b620b257-Abstract-Conference.html,See per-source metadata; evidence applicability differs
+sources/09_local_code.md,S09 — Current source implementation and historical experiments,,See per-source metadata; evidence applicability differs
+sources/a01_tian_qwen_convolution.md,Source A01 — Convolution for Large Language Models,https://arxiv.org/html/2607.18413v1,See per-source metadata; evidence applicability differs
+sources/a02_chang_convolution_attention.md,Source A02 — Convolutions and Self-Attention,https://aclanthology.org/2021.acl-long.333/,See per-source metadata; evidence applicability differs
+sources/a03_ainslie_gqa.md,Source A03 — GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints,https://aclanthology.org/2023.emnlp-main.298/,See per-source metadata; evidence applicability differs
+sources/a04_zhang_rmsnorm.md,Source A04 — Root Mean Square Layer Normalization,https://arxiv.org/abs/1910.07467,See per-source metadata; evidence applicability differs
+sources/a05_pascual_context_mixing.md,Source A05 — Telling BERT’s Full Story: from Local Attention to Global Aggregation,https://aclanthology.org/2021.eacl-main.9/,See per-source metadata; evidence applicability differs
+sources/a06_li_local_attention.md,Source A06 — Characterizing the Expressivity of Local Attention in Transformers,https://aclanthology.org/2026.acl-long.1739/,See per-source metadata; evidence applicability differs
+sources/a07_su_whitening_geometry.md,"A07 — Su et al. (2021), whitening sentence representations",https://arxiv.org/abs/2103.15316,See per-source metadata; evidence applicability differs
+sources/a08_gehring_convs2s_key_value.md,"A08 — Gehring et al. (2017), point information in attention values",https://proceedings.mlr.press/v70/gehring17a/gehring17a.pdf,See per-source metadata; evidence applicability differs
+sources/g01_transformer_attention.md,g01 — Transformer attention exposes the equivalence boundary,https://papers.nips.cc/paper/7181-attention-is-all-you-need.pdf,See per-source metadata; evidence applicability differs
+sources/g02_conv_llm.md,g02 — Qwen3 depthwise convolution gives a direct local-operator precedent,https://arxiv.org/abs/2607.18413,See per-source metadata; evidence applicability differs
+sources/g03_conformer_locality.md,g03 — Conformer supports local composition as complementary to global attention,https://arxiv.org/abs/2005.08100,See per-source metadata; evidence applicability differs
+sources/g04_qiu_gated_attention.md,g04 — Qwen-team evidence for where nonlinearity breaks attention's low-rank path,https://papers.nips.cc/paper_files/paper/2025/file/904e89bb4e632e75fb47f093b620b257-Paper-Conference.pdf,See per-source metadata; evidence applicability differs
+sources/g05_preprojection.md,"g05 — Nonlinear pre-projection is a known interface family, not a fresh AFMR distinction",https://arxiv.org/abs/2604.10791,See per-source metadata; evidence applicability differs
+sources/g06_whitening_geometry.md,"g06 — Isotropy evidence motivates a diagnostic, but not an automatic bridge",https://arxiv.org/abs/2103.15316,See per-source metadata; evidence applicability differs
+sources/g07_rmsnorm.md,g07 — RMSNorm explains why scale-only bridge normalization is a poor candidate,https://proceedings.neurips.cc/paper/2019/file/1e8a19426224ca89e83cef47f1e7f53b-Paper.pdf,See per-source metadata; evidence applicability differs
+sources/g08_conv_s2s.md,g08 — ConvS2S gives a direct key/value lexical-residual precedent,https://proceedings.mlr.press/v70/gehring17a/gehring17a.pdf,See per-source metadata; evidence applicability differs

@@ -1,0 +1,13 @@
+{
+  "scope": "random tensors + randomly initialized tiny actual cross-attention; not training efficacy",
+  "identity_memory_max_error": 0.0,
+  "identity_cross_max_error": 0.0,
+  "first_backward_left_gradient_norm": 0.023888018606780036,
+  "first_backward_right_gradient_norm": 0.0451533929539818,
+  "normalized_key_delta_norm": 1.588707989783799,
+  "anchored_value_max_error": 0.0,
+  "masked_neighbor_content_max_error": 0.0,
+  "constant_region_max_error": 0.0,
+  "same_center_changed_neighbor_key_delta_norm": 0.3650012606937232,
+  "linear_absorption_without_norm_max_error": 4.263256414560601e-14
+}

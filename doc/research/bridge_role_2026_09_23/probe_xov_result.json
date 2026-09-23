@@ -1,0 +1,23 @@
+{
+  "scope": "actual historical bridge with fixture state/config; synthetic tensors only",
+  "initial_value_identity_max_error": 0.0,
+  "backward_1_grad_norms": {
+    "value_gate_raw": 0.0,
+    "lexical_norm.weight": 0.0,
+    "lexical_down.weight": 0.0,
+    "phrase_conv.weight": 0.0,
+    "lexical_up.weight": 0.0014515597140416503
+  },
+  "backward_2_grad_norms": {
+    "value_gate_raw": 3.160538426527637e-07,
+    "lexical_norm.weight": 1.557832547405269e-07,
+    "lexical_down.weight": 7.612508170495857e-07,
+    "phrase_conv.weight": 5.533599392038013e-07,
+    "lexical_up.weight": 0.0014515594812110066
+  },
+  "keys_memory_max_error": 0.0,
+  "copy_memory_max_error": 0.0,
+  "post_norm_value_delta": 2.323928856640123e-05,
+  "padding_residual_max_error": 0.0,
+  "empty_alignment_max_error": 0.0
+}
