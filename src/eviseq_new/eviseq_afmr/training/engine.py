@@ -123,32 +123,61 @@ class AFMRTrainer:
         if train and self.device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(self.device)
         epoch_started_at = time.monotonic()
-        trace_first_step = (
-            train
-            and self.global_step == self._fit_start_global_step
-            and os.environ.get("AFMR_TRACE_FIRST_STEP", "0").lower() in {"1", "true", "yes"}
+        trace_first_step = os.environ.get("AFMR_TRACE_FIRST_STEP", "0").lower() in {"1", "true", "yes"}
+        trace_steps = (
+            max(0, int(os.environ.get("AFMR_TRACE_STEPS", "2" if trace_first_step else "0")))
+            if train and self.global_step == self._fit_start_global_step
+            else 0
         )
-        if trace_first_step:
-            STARTUP_LOGGER.info("[first-step] rank=%d reading %d microbatches", self.rank, accum)
-        while window := list(islice(iterator, accum if train else 1)):
-            trace_window = trace_first_step and epoch_step == 0
+        while True:
+            trace_window = epoch_step < trace_steps
             if trace_window:
-                STARTUP_LOGGER.info("[first-step] rank=%d loaded %d microbatches", self.rank, len(window))
+                STARTUP_LOGGER.info(
+                    "[step-trace] rank=%d step=%d reading %d microbatches",
+                    self.rank,
+                    self.global_step + 1,
+                    accum,
+                )
+                window = []
+                for raw_batch in islice(iterator, accum if train else 1):
+                    window.append(raw_batch)
+                    STARTUP_LOGGER.info(
+                        "[step-trace] rank=%d step=%d loaded data microbatch %d/%d source=%s target=%s",
+                        self.rank,
+                        self.global_step + 1,
+                        len(window),
+                        accum,
+                        tuple(raw_batch["input_ids"].shape),
+                        tuple(raw_batch["decoder_input_ids"].shape),
+                    )
+            else:
+                window = list(islice(iterator, accum if train else 1))
+            if not window:
+                break
             started = time.monotonic()
             counts = [int(raw["labels"][:, 1:].ne(-100).sum()) for raw in window]
             window_tokens = sum(counts)
             if self.distributed:
+                if trace_window:
+                    STARTUP_LOGGER.info(
+                        "[step-trace] rank=%d step=%d synchronizing token counts", self.rank, self.global_step + 1
+                    )
                 token_count = torch.tensor(window_tokens, device=self.device, dtype=torch.long)
                 dist.all_reduce(token_count, op=dist.ReduceOp.SUM)
                 window_tokens = int(token_count.item())
+                if trace_window:
+                    STARTUP_LOGGER.info(
+                        "[step-trace] rank=%d step=%d synchronized token counts", self.rank, self.global_step + 1
+                    )
             if train:
                 optimizer.zero_grad(set_to_none=True)
             step_loss = torch.zeros_like(ce_sum)
             for micro_index, (raw_batch, tokens) in enumerate(zip(window, counts), start=1):
                 if trace_window:
                     STARTUP_LOGGER.info(
-                        "[first-step] rank=%d microbatch=%d/%d source=%s target=%s forward starting",
+                        "[step-trace] rank=%d step=%d microbatch=%d/%d source=%s target=%s forward starting",
                         self.rank,
+                        self.global_step + 1,
                         micro_index,
                         len(window),
                         tuple(raw_batch["input_ids"].shape),
@@ -181,8 +210,9 @@ class AFMRTrainer:
                         loss = output.loss_ce * scale
                     if trace_window:
                         STARTUP_LOGGER.info(
-                            "[first-step] rank=%d microbatch=%d/%d forward complete",
+                            "[step-trace] rank=%d step=%d microbatch=%d/%d forward complete",
                             self.rank,
+                            self.global_step + 1,
                             micro_index,
                             len(window),
                         )
@@ -190,8 +220,9 @@ class AFMRTrainer:
                         loss.backward()
                         if trace_window:
                             STARTUP_LOGGER.info(
-                                "[first-step] rank=%d microbatch=%d/%d backward complete",
+                                "[step-trace] rank=%d step=%d microbatch=%d/%d backward complete",
                                 self.rank,
+                                self.global_step + 1,
                                 micro_index,
                                 len(window),
                             )
@@ -210,7 +241,9 @@ class AFMRTrainer:
                 )
                 optimizer.step()
                 if trace_window:
-                    STARTUP_LOGGER.info("[first-step] rank=%d optimizer step complete", self.rank)
+                    STARTUP_LOGGER.info(
+                        "[step-trace] rank=%d step=%d optimizer step complete", self.rank, self.global_step + 1
+                    )
                 if self.scheduler is not None:
                     self.scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
