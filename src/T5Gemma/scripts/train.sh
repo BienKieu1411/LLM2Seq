@@ -46,8 +46,8 @@ elif [[ -n "${CUDA_VISIBLE_DEVICES:-}" && "${CUDA_VISIBLE_DEVICES}" != "-1" ]]; 
   IFS=',' read -r -a visible_gpus <<< "${CUDA_VISIBLE_DEVICES}"
   visible_gpu_count="${#visible_gpus[@]}"
 fi
-if [[ ! "${visible_gpu_count}" =~ ^[12]$ ]]; then
-  echo "T5Gemma supports one or two GPUs; got nproc_per_node=${visible_gpu_count}." >&2
+if [[ ! "${visible_gpu_count}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "nproc_per_node must be a positive integer; got ${visible_gpu_count}." >&2
   exit 2
 fi
 if [[ -n "${T5GEMMA_NPROC_PER_NODE:-}" && -n "${CUDA_VISIBLE_DEVICES:-}" && "${CUDA_VISIBLE_DEVICES}" != "-1" ]]; then
@@ -65,7 +65,7 @@ log_file="${LOG_DIR}/${ts}_train_full.log"
 echo "=== T5Gemma full fine-tune ==="
 echo "Config: ${CONFIG}"
 echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-all visible devices}"
-echo "Processes: ${visible_gpu_count} (DDP when two GPUs are selected)"
+echo "Processes: ${visible_gpu_count} (DDP when more than one GPU is selected)"
 echo "Log: ${log_file}"
 
 train_args=(--config "${CONFIG}")
@@ -75,10 +75,10 @@ case "${OVERWRITE_OUTPUT_DIR:-false}" in
     ;;
 esac
 
-if [[ "${visible_gpu_count}" == "2" ]]; then
+if (( visible_gpu_count > 1 )); then
   "${PYTHON_BIN}" -m torch.distributed.run \
     --standalone \
-    --nproc_per_node=2 \
+    --nproc_per_node="${visible_gpu_count}" \
     "${T5GEMMA_ROOT}/scripts/train_full.py" \
     "${train_args[@]}" \
     2>&1 | tee "${log_file}"

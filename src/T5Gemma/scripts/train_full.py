@@ -107,7 +107,7 @@ def initialize_distributed() -> bool:
     if world_size == 1:
         return False
     if not torch.cuda.is_available():
-        raise RuntimeError("Two-GPU T5Gemma fine-tuning requires CUDA")
+        raise RuntimeError("Multi-GPU T5Gemma fine-tuning requires CUDA")
     if not dist.is_available():
         raise RuntimeError("This PyTorch build does not include torch.distributed")
     local_rank = int(os.environ.get("LOCAL_RANK", distributed_rank()))
