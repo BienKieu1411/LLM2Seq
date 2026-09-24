@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff==0.15.20"]
+data_filter = ["lingua-language-detector==2.2.0"]
 
 [project.scripts]
 eviseq-afmr = "eviseq_afmr.cli:main"

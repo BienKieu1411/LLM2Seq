@@ -1,4 +1,4 @@
-"""Audit and filter a balanced Vietnamese summarization JSONL without changing its input."""
+"""Audit and filter a prepared Vietnamese summarization JSONL without changing its input."""
 
 from __future__ import annotations
 
@@ -9,12 +9,14 @@ import re
 import tempfile
 import unicodedata
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 WORD = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)?|\d+(?:[.,]\d+)*", re.UNICODE)
 VI_MARK = re.compile(r"[ăâđêôơưĂÂĐÊÔƠƯàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵ]", re.I)
+VI_UNIQUE = re.compile(r"[ăđơưằắẳẵặờớởỡợừứửữựĂĐƠƯ]", re.I)
 FOREIGN_SCRIPT = re.compile(
     r"[\u0370-\u03ff\u0400-\u052f\u0590-\u08ff\u0900-\u0dff\u0e00-\u0eff\u1100-\u11ff"
     r"\u3040-\u30ff\u3400-\u9fff\uac00-\ud7ff]"
@@ -111,7 +113,33 @@ def clean_symbols(text: str, junk_domains: set[str]) -> tuple[str, int, int]:
     return cleaned.strip(), count, removed_markdown + removed_urls
 
 
-def inspect_text(text: str, junk_domains: set[str]) -> dict[str, float | int]:
+@lru_cache(maxsize=1)
+def language_detector() -> tuple[Any, Any]:
+    try:
+        from lingua import Language, LanguageDetectorBuilder
+    except ImportError as exc:
+        raise SystemExit("Missing language detector: install lingua-language-detector==2.2.0") from exc
+    return LanguageDetectorBuilder.from_all_spoken_languages().build(), Language.VIETNAMESE
+
+
+def detect_text_language(text: str) -> tuple[str, float, float]:
+    text = URL.sub(" ", text)
+    if len(text) > 3000:
+        middle = (len(text) - 1000) // 2
+        text = " ".join((text[:1000], text[middle : middle + 1000], text[-1000:]))
+    if len(WORD.findall(text)) < 8:
+        return "unknown", 0.0, 0.0
+    detector, vietnamese = language_detector()
+    detected = detector.compute_language_confidence_values(text)
+    if not detected:
+        return "unknown", 0.0, 0.0
+    top = detected[0]
+    vi_confidence = next((item.value for item in detected if item.language == vietnamese), 0.0)
+    return top.language.name.lower(), round(top.value, 4), round(vi_confidence, 4)
+
+
+def inspect_text(text: str, junk_domains: set[str]) -> dict[str, float | int | str]:
+    text = unicodedata.normalize("NFC", text)
     words = WORD.findall(text)
     lower = [word.lower() for word in words if word.isalpha()]
     letters = sum(char.isalpha() for char in text)
@@ -129,15 +157,21 @@ def inspect_text(text: str, junk_domains: set[str]) -> dict[str, float | int]:
     junk_urls = sum(junk_url(url, junk_domains) for url in urls)
     foreign_passages = english_passages(text)
     vi_marks = len(VI_MARK.findall(text))
+    vi_unique = len(VI_UNIQUE.findall(text))
     en_words = sum(word in EN_WORDS for word in lower)
     vi_words = sum(word in VI_WORDS for word in lower)
+    language, language_probability, vi_probability = detect_text_language(text)
     return {
         "words": len(words),
+        "language": language,
+        "language_probability": language_probability,
+        "vietnamese_probability": vi_probability,
         "digit_ratio": round(digits / max(1, alnum), 4),
         "numeric_token_ratio": round(numeric_tokens / max(1, len(words)), 4),
         "foreign_script_ratio": round(foreign_letters / max(1, letters), 4),
         "foreign_script_chars": foreign_letters,
         "vi_mark_ratio": round(vi_marks / max(1, letters), 4),
+        "vi_unique_char_ratio": round(vi_unique / max(1, letters), 4),
         "en_stopword_ratio": round(en_words / max(1, len(lower)), 4),
         "vi_stopword_ratio": round(vi_words / max(1, len(lower)), 4),
         "placeholder_runs": len(placeholder_runs),
@@ -153,10 +187,15 @@ def inspect_text(text: str, junk_domains: set[str]) -> dict[str, float | int]:
     }
 
 
-def classify(source: dict[str, float | int], target: dict[str, float | int]) -> tuple[list[str], list[str]]:
+def classify(
+    source: dict[str, float | int | str], target: dict[str, float | int | str] | None = None
+) -> tuple[list[str], list[str]]:
     drop: list[str] = []
     review: list[str] = []
-    for name, stats in (("source", source), ("target", target)):
+    fields = [("source", source)]
+    if target is not None:
+        fields.append(("target", target))
+    for name, stats in fields:
         words = int(stats["words"])
         digit_ratio = float(stats["digit_ratio"])
         numeric_ratio = float(stats["numeric_token_ratio"])
@@ -165,6 +204,7 @@ def classify(source: dict[str, float | int], target: dict[str, float | int]) -> 
         en_ratio = float(stats["en_stopword_ratio"])
         vi_ratio = float(stats["vi_stopword_ratio"])
         vi_mark_ratio = float(stats["vi_mark_ratio"])
+        vi_unique_ratio = float(stats["vi_unique_char_ratio"])
         placeholders = int(stats["placeholder_runs"])
         placeholder_chars = int(stats["placeholder_chars"])
         tables = int(stats["table_rows"]) + int(stats["tabular_lines"])
@@ -174,22 +214,35 @@ def classify(source: dict[str, float | int], target: dict[str, float | int]) -> 
         junk_urls = int(stats["junk_url_count"])
         foreign_passages = int(stats["english_passages"])
         url_char_ratio = float(stats["url_char_ratio"])
+        language = str(stats["language"])
+        language_probability = float(stats["language_probability"])
         if name == "source" and words < 12:
             review.append(f"{name}:very_short")
         if foreign_chars >= 20 and foreign_ratio >= 0.04:
             drop.append(f"{name}:foreign_script")
         elif foreign_chars >= 5:
             review.append(f"{name}:mixed_script")
-        english_threshold = 0.24 if name == "target" else 0.12
         minimum_words = 12 if name == "target" else 25
-        if words >= minimum_words and en_ratio >= english_threshold and en_ratio >= 2.5 * max(vi_ratio, 0.01):
-            drop.append(f"{name}:english_dominant")
-        elif words >= 40 and en_ratio >= 0.07 and vi_mark_ratio < 0.01 and vi_ratio < 0.04:
-            review.append(f"{name}:language_uncertain")
+        clear_non_vietnamese = (
+            words >= minimum_words
+            and language not in {"vietnamese", "unknown"}
+            and language_probability >= 0.99
+            and vi_unique_ratio < 0.005
+            and vi_ratio < 0.04
+        )
+        if clear_non_vietnamese:
+            drop.append(f"{name}:non_vietnamese_{language}")
+        elif language not in {"vietnamese", "unknown"} and words >= 8:
+            review.append(f"{name}:language_uncertain_{language}")
+        if words >= 40 and en_ratio >= 0.07 and vi_mark_ratio < 0.01 and vi_ratio < 0.04:
+            review.append(f"{name}:english_terms")
         elif words >= 40 and vi_mark_ratio < 0.005 and vi_ratio < 0.02:
             review.append(f"{name}:latin_language_uncertain")
         if foreign_passages >= 2:
-            drop.append(f"{name}:english_passages")
+            if clear_non_vietnamese:
+                drop.append(f"{name}:english_passages")
+            else:
+                review.append(f"{name}:english_passages")
         elif foreign_passages == 1:
             review.append(f"{name}:english_passage")
         if words >= 40 and (digit_ratio >= 0.30 or numeric_ratio >= 0.38):
@@ -227,6 +280,31 @@ def atomic_writer(path: Path):
     return os.fdopen(descriptor, "w", encoding="utf-8"), Path(name)
 
 
+def validate_schema(input_path: Path, source_field: str, target_field: str) -> None:
+    with input_path.open("r", encoding="utf-8-sig") as source_file:
+        for line_number, raw in enumerate(source_file, 1):
+            if not raw.strip():
+                continue
+            try:
+                row = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            try:
+                text_field(row, source_field)
+                text_field(row, target_field)
+            except ValueError as exc:
+                fields = ", ".join(map(str, row.keys()))
+                raise ValueError(
+                    f"Schema mismatch at {input_path}:{line_number}: {exc}; "
+                    f"available fields: {fields}. Prepared data uses text/summary; "
+                    "for other schemas, set --source-field and --target-field."
+                ) from exc
+            return
+    raise ValueError(f"No valid JSON object rows found in {input_path}")
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     input_path = args.input.expanduser().resolve()
     output = args.output.expanduser().resolve() if args.output else None
@@ -237,6 +315,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("input, output, decisions, and report must be different paths")
     if not input_path.is_file():
         raise FileNotFoundError(input_path)
+    validate_schema(input_path, args.source_field, args.target_field)
+    language_detector()
     junk_domains = set() if args.no_default_junk_domains else set(DEFAULT_JUNK_DOMAINS)
     junk_domains.update(domain.lower().removeprefix("www.") for domain in args.junk_domain)
     handles = {}
@@ -269,10 +349,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 else:
                     identifier = row.get(args.id_field)
                     source_stats = inspect_text(source, junk_domains)
-                    target_stats = inspect_text(target, junk_domains)
-                    drop_reasons, review_reasons = classify(source_stats, target_stats)
+                    target_stats = inspect_text(target, junk_domains) if args.check_summary else {}
+                    drop_reasons, review_reasons = classify(source_stats, target_stats if args.check_summary else None)
                     cleaned_source, source_icons, source_urls = clean_symbols(source, junk_domains)
-                    cleaned_target, target_icons, target_urls = clean_symbols(target, junk_domains)
+                    if args.check_summary:
+                        cleaned_target, target_icons, target_urls = clean_symbols(target, junk_domains)
+                    else:
+                        cleaned_target, target_icons, target_urls = target, 0, 0
                     counts["removed_icons"] += source_icons + target_icons
                     counts["removed_urls"] += source_urls + target_urls
                     if not cleaned_source.strip() or not cleaned_target.strip():
@@ -281,7 +364,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     detail = ""
                     if status == "keep" or (status == "review" and args.keep_review):
                         set_text_field(row, args.source_field, cleaned_source)
-                        set_text_field(row, args.target_field, cleaned_target)
+                        if args.check_summary:
+                            set_text_field(row, args.target_field, cleaned_target)
                         if "output" in handles:
                             handles["output"].write(json.dumps(row, ensure_ascii=False) + "\n")
                         counts["written"] += 1
@@ -322,7 +406,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "input": str(input_path),
         "output": str(output) if output else None,
         "decisions": str(decisions) if decisions else None,
+        "source_field": args.source_field,
+        "target_field": args.target_field,
+        "language_detector": "lingua-language-detector==2.2.0",
         "keep_review": args.keep_review,
+        "check_summary": args.check_summary,
         "junk_domains": sorted(junk_domains),
         "counts": dict(counts),
         "reasons": dict(reasons),
@@ -335,14 +423,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path, help="Balanced input JSONL; never modified")
+    parser.add_argument("input", type=Path, help="Prepared JSONL with text/summary; never modified")
     parser.add_argument("--output", type=Path, help="Clean output JSONL; omitted means audit only")
     parser.add_argument("--decisions", type=Path, help="One decision and preview per input row")
     parser.add_argument("--report", type=Path, help="Summary counts by decision and reason")
-    parser.add_argument("--source-field", default="input")
-    parser.add_argument("--target-field", default="output")
+    parser.add_argument("--source-field", default="text")
+    parser.add_argument("--target-field", default="summary")
     parser.add_argument("--id-field", default="id")
     parser.add_argument("--keep-review", action="store_true", help="Include review rows in output")
+    parser.add_argument(
+        "--check-summary", action="store_true", help="Also classify and clean summary; default only checks it exists"
+    )
     parser.add_argument("--junk-domain", action="append", default=[], help="Additional junk domain to remove")
     parser.add_argument("--no-default-junk-domains", action="store_true")
     parser.add_argument("--preview-chars", type=int, default=160)
