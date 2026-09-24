@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import random
 import time
 from contextlib import nullcontext
@@ -19,6 +20,7 @@ from .checkpoint import load_checkpoint, save_checkpoint
 from .optimizer import build_optimizer, set_stage_trainability
 
 LOGGER = logging.getLogger("eviseq_afmr.train")
+STARTUP_LOGGER = logging.getLogger("eviseq_afmr.startup")
 
 
 def seed_everything(seed: int) -> None:
@@ -121,7 +123,17 @@ class AFMRTrainer:
         if train and self.device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(self.device)
         epoch_started_at = time.monotonic()
+        trace_first_step = (
+            train
+            and self.global_step == self._fit_start_global_step
+            and os.environ.get("AFMR_TRACE_FIRST_STEP", "0").lower() in {"1", "true", "yes"}
+        )
+        if trace_first_step:
+            STARTUP_LOGGER.info("[first-step] rank=%d reading %d microbatches", self.rank, accum)
         while window := list(islice(iterator, accum if train else 1)):
+            trace_window = trace_first_step and epoch_step == 0
+            if trace_window:
+                STARTUP_LOGGER.info("[first-step] rank=%d loaded %d microbatches", self.rank, len(window))
             started = time.monotonic()
             counts = [int(raw["labels"][:, 1:].ne(-100).sum()) for raw in window]
             window_tokens = sum(counts)
@@ -132,7 +144,16 @@ class AFMRTrainer:
             if train:
                 optimizer.zero_grad(set_to_none=True)
             step_loss = torch.zeros_like(ce_sum)
-            for raw_batch, tokens in zip(window, counts):
+            for micro_index, (raw_batch, tokens) in enumerate(zip(window, counts), start=1):
+                if trace_window:
+                    STARTUP_LOGGER.info(
+                        "[first-step] rank=%d microbatch=%d/%d source=%s target=%s forward starting",
+                        self.rank,
+                        micro_index,
+                        len(window),
+                        tuple(raw_batch["input_ids"].shape),
+                        tuple(raw_batch["decoder_input_ids"].shape),
+                    )
                 batch = _move(raw_batch, self.device)
                 with torch.set_grad_enabled(train):
                     with torch.autocast("cuda", dtype=torch.bfloat16) if self.use_bf16 else nullcontext():
@@ -158,8 +179,22 @@ class AFMRTrainer:
                         if self.distributed:
                             scale *= self.world_size
                         loss = output.loss_ce * scale
+                    if trace_window:
+                        STARTUP_LOGGER.info(
+                            "[first-step] rank=%d microbatch=%d/%d forward complete",
+                            self.rank,
+                            micro_index,
+                            len(window),
+                        )
                     if train:
                         loss.backward()
+                        if trace_window:
+                            STARTUP_LOGGER.info(
+                                "[first-step] rank=%d microbatch=%d/%d backward complete",
+                                self.rank,
+                                micro_index,
+                                len(window),
+                            )
                 step_loss += output.loss_ce.detach() * log_scale
                 ce_sum += output.loss_ce.detach() * tokens
                 token_total += tokens
@@ -174,6 +209,8 @@ class AFMRTrainer:
                     )
                 )
                 optimizer.step()
+                if trace_window:
+                    STARTUP_LOGGER.info("[first-step] rank=%d optimizer step complete", self.rank)
                 if self.scheduler is not None:
                     self.scheduler.step()
                 optimizer.zero_grad(set_to_none=True)

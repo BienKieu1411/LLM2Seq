@@ -10,6 +10,7 @@ concurrently and merge their indexed JSONL outputs.
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import logging
 import os
@@ -59,7 +60,10 @@ def _is_main_process() -> bool:
 
 def _barrier() -> None:
     if _distributed_active():
-        dist.barrier()
+        if dist.get_backend() == "nccl":
+            dist.barrier(device_ids=[torch.cuda.current_device()])
+        else:
+            dist.barrier()
 
 
 def _init_distributed(device: str | None) -> tuple[torch.device, bool]:
@@ -80,7 +84,10 @@ def _init_distributed(device: str | None) -> tuple[torch.device, bool]:
     torch.cuda.set_device(local_rank)
     initialized_here = False
     if not _distributed_active():
-        dist.init_process_group(backend="nccl", init_method="env://")
+        init_kwargs = {"backend": "nccl", "init_method": "env://"}
+        if "device_id" in inspect.signature(dist.init_process_group).parameters:
+            init_kwargs["device_id"] = torch.device("cuda", local_rank)
+        dist.init_process_group(**init_kwargs)
         initialized_here = True
     return torch.device("cuda", local_rank), initialized_here
 
@@ -317,7 +324,34 @@ def train(
             max_train_examples=max_train_examples,
             max_validation_examples=max_validation_examples,
         )
-        model = EviSeqAFMR(config).to(device=selected_device, dtype=torch.float32)
+        rank = _distributed_rank()
+        model_started = time.monotonic()
+        serial_load = _distributed_active() and os.environ.get("AFMR_SERIAL_MODEL_LOAD", "0").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        model = None
+        for loading_rank in range(_distributed_world_size() if serial_load else 1):
+            if not serial_load or rank == loading_rank:
+                LOGGER.info("[startup] rank=%d constructing model", rank)
+                rank_started = time.monotonic()
+                model = EviSeqAFMR(config)
+                LOGGER.info(
+                    "[startup] rank=%d model constructed in %.1fs; moving to %s",
+                    rank,
+                    time.monotonic() - rank_started,
+                    selected_device,
+                )
+                model = model.to(device=selected_device, dtype=torch.float32)
+                LOGGER.info(
+                    "[startup] rank=%d model on %s in %.1fs", rank, selected_device, time.monotonic() - rank_started
+                )
+            if serial_load:
+                _barrier()
+        if model is None:
+            raise RuntimeError("Model construction did not run on this rank")
+        LOGGER.info("[startup] rank=%d model loading complete in %.1fs", rank, time.monotonic() - model_started)
         counts = {
             name: sum(p.numel() for p in module.parameters())
             for name, module in (("encoder", model.encoder), ("bridge", model.bridge), ("decoder", model.decoder))
@@ -331,6 +365,7 @@ def train(
                 _distributed_world_size(),
             )
         if _distributed_active():
+            LOGGER.info("[startup] rank=%d synchronizing DDP parameters", rank)
             model = DistributedDataParallel(
                 model,
                 device_ids=[selected_device.index],
@@ -341,6 +376,7 @@ def train(
                 # between stages.
                 find_unused_parameters=True,
             )
+            LOGGER.info("[startup] rank=%d DDP ready in %.1fs", rank, time.monotonic() - model_started)
         trainer = AFMRTrainer(model, config, selected_device)
         if checkpoint and _is_main_process():
             LOGGER.info("resumed AFMR checkpoint: %s", checkpoint)

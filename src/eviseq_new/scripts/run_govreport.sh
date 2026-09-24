@@ -17,6 +17,8 @@ export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export TOKENIZERS_PARALLELISM=false
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
+export AFMR_SERIAL_MODEL_LOAD="${AFMR_SERIAL_MODEL_LOAD:-0}"
+export AFMR_TRACE_FIRST_STEP="${AFMR_TRACE_FIRST_STEP:-1}"
 
 RUN_MODE="${RUN_MODE:-all}"
 CONFIG_TEMPLATE="${AFMR_GOVREPORT_CONFIG:-${ROOT}/configs/afmr_govreport.yaml}"
@@ -31,6 +33,7 @@ VALIDATION_BATCH_SIZE="${VALIDATION_BATCH_SIZE:-2}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-4}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 VALIDATION_NUM_WORKERS="${VALIDATION_NUM_WORKERS:-2}"
+LOG_EVERY_STEPS="${LOG_EVERY_STEPS:-1}"
 INTERFACE_WARMUP_EPOCHS="${INTERFACE_WARMUP_EPOCHS:-1}"
 FULL_FINETUNE_EPOCHS="${FULL_FINETUNE_EPOCHS:-4}"
 MAX_SOURCE_LENGTH="${MAX_SOURCE_LENGTH:-16384}"
@@ -97,6 +100,7 @@ positive_int MAX_NEW_TOKENS "${MAX_NEW_TOKENS}"
 nonnegative_int MIN_NEW_TOKENS "${MIN_NEW_TOKENS}"
 nonnegative_int NUM_WORKERS "${NUM_WORKERS}"
 nonnegative_int VALIDATION_NUM_WORKERS "${VALIDATION_NUM_WORKERS}"
+positive_int LOG_EVERY_STEPS "${LOG_EVERY_STEPS}"
 nonnegative_int INTERFACE_WARMUP_EPOCHS "${INTERFACE_WARMUP_EPOCHS}"
 nonnegative_int FULL_FINETUNE_EPOCHS "${FULL_FINETUNE_EPOCHS}"
 (( MIN_NEW_TOKENS < MAX_NEW_TOKENS )) || die "MIN_NEW_TOKENS must be less than MAX_NEW_TOKENS"
@@ -135,7 +139,7 @@ if [[ "${RUN_MODE}" != eval ]]; then
   "${PYTHON_BIN}" - "${CONFIG_TEMPLATE}" "${GENERATED_CONFIG}" "${ENCODER_MODEL}" \
     "${DECODER_MODEL}" "${OUTPUT_DIR}" "${DATA_DIR}" "${TRAIN_BATCH_SIZE}" \
     "${GRADIENT_ACCUMULATION_STEPS}" "${VALIDATION_BATCH_SIZE}" "${EVAL_BATCH_SIZE}" \
-    "${NUM_WORKERS}" "${VALIDATION_NUM_WORKERS}" "${INTERFACE_WARMUP_EPOCHS}" \
+    "${NUM_WORKERS}" "${VALIDATION_NUM_WORKERS}" "${LOG_EVERY_STEPS}" "${INTERFACE_WARMUP_EPOCHS}" \
     "${FULL_FINETUNE_EPOCHS}" "${MAX_SOURCE_LENGTH}" "${MAX_TARGET_LENGTH}" \
     "${MAX_NEW_TOKENS}" "${MIN_NEW_TOKENS}" <<'PY'
 import sys
@@ -158,6 +162,7 @@ from eviseq_afmr.config import load_config, validate_config
     eval_batch,
     workers,
     validation_workers,
+    log_every_steps,
     warmup_epochs,
     full_epochs,
     max_source,
@@ -192,6 +197,7 @@ config["training"].update(
         "validation_batch_size": int(validation_batch),
         "num_workers": int(workers),
         "validation_num_workers": int(validation_workers),
+        "log_every_steps": int(log_every_steps),
         "interface_warmup_epochs": int(warmup_epochs),
         "full_finetune_epochs": int(full_epochs),
     }
@@ -213,6 +219,7 @@ PY
 
   echo "GPU: ${CUDA_VISIBLE_DEVICES}; train batch/GPU: ${TRAIN_BATCH_SIZE}; accumulation: ${GRADIENT_ACCUMULATION_STEPS}; global effective batch: $((GPU_COUNT * TRAIN_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS))"
   echo "Source/target budget: ${MAX_SOURCE_LENGTH}/${MAX_TARGET_LENGTH}; warmup/full epochs: ${INTERFACE_WARMUP_EPOCHS}/${FULL_FINETUNE_EPOCHS}"
+  echo "Serial model load: ${AFMR_SERIAL_MODEL_LOAD}; first-step trace: ${AFMR_TRACE_FIRST_STEP}; log interval: ${LOG_EVERY_STEPS} optimizer steps"
   echo "Output: ${OUTPUT_DIR}"
   [[ "${RUN_MODE}" == config ]] && exit 0
 
