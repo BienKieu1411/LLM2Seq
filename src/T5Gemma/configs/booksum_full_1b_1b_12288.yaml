@@ -1,7 +1,7 @@
 project:
-  name: t5gemma2_1b_1b_govreport_full_finetune_16384
+  name: t5gemma2_1b_1b_booksum_full_finetune_12288
   task: summarization
-  output_dir: runs/t5gemma2_1b_1b_full_govreport_16384
+  output_dir: runs/t5gemma2_1b_1b_full_booksum_12288
 
 huggingface:
   enabled: false
@@ -22,10 +22,10 @@ model:
 
 training:
   mode: full_finetune
-  num_train_epochs: 5
+  num_train_epochs: 3
   per_device_train_batch_size: 2
   per_device_eval_batch_size: 2
-  gradient_accumulation_steps: 12
+  gradient_accumulation_steps: 24
   learning_rate: 3.0e-5
   adam_beta1: 0.9
   adam_beta2: 0.95
@@ -51,17 +51,17 @@ training:
   ddp_backend: nccl
 
 data:
-  train_file: eviseq_new/datasets/govreport/train.jsonl
-  eval_file: eviseq_new/datasets/govreport/validation.jsonl
-  validation_file: eviseq_new/datasets/govreport/validation.jsonl
-  test_file: eviseq_new/datasets/govreport/test.jsonl
+  train_file: eviseq_new/datasets/booksum/train.jsonl
+  eval_file: eviseq_new/datasets/booksum/validation.jsonl
+  validation_file: eviseq_new/datasets/booksum/validation.jsonl
+  test_file: eviseq_new/datasets/booksum/test.jsonl
   source_field: text
   target_field: summary
   id_field: id
   list_separator: "\n"
   detokenize: true
-  source_prefix: "Summarize the following government report into a concise, factual summary. Preserve the main objectives, findings, evidence, and recommendations; do not add information.\nReport:\n"
-  max_source_length: 16384
+  source_prefix: "Summarize the following literary narrative into a coherent, faithful summary. Preserve the main characters, key events, causal and temporal relationships, and important outcomes; do not add information.\nNarrative:\n"
+  max_source_length: 12288
   max_target_length: 1024
 
 generation:

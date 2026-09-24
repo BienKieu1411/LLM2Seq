@@ -1,18 +1,18 @@
 _base_: afmr_base.yaml
 
 experiment:
-  name: afmr_govreport
-  output_dir: runs/afmr/govreport_value_anchor_copy
+  name: afmr_booksum
+  output_dir: runs/afmr/booksum_value_anchor_copy
 
 data:
-  train_file: datasets/govreport/train.jsonl
-  validation_file: datasets/govreport/validation.jsonl
-  test_file: datasets/govreport/test.jsonl
+  train_file: datasets/booksum/train.jsonl
+  validation_file: datasets/booksum/validation.jsonl
+  test_file: datasets/booksum/test.jsonl
   source_field: text
   target_field: summary
   id_field: id
-  encoder_prefix: "Summarize the following government report into a concise, factual summary. Preserve the main objectives, findings, evidence, and recommendations; do not add information.\nReport:\n"
-  decoder_prompt: "Write a concise, factual summary of the encoded government report. Preserve the main objectives, findings, evidence, and recommendations when supported. Do not add unsupported information. Output only the summary."
+  encoder_prefix: "Summarize the following literary narrative into a coherent, faithful summary. Preserve the main characters, key events, causal and temporal relationships, and important outcomes; do not add information.\nNarrative:\n"
+  decoder_prompt: "Write a coherent, faithful summary of the encoded literary narrative. Preserve the main characters, key events, causal and temporal relationships, and important outcomes when supported. Do not add unsupported information. Output only the summary."
   decoder_prefix: "Summary:\n"
   detokenize: true
   max_source_length: 12288
