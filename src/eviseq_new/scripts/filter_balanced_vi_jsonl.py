@@ -77,10 +77,18 @@ def set_text_field(row: dict[str, Any], field: str, text: str) -> None:
 
 
 def junk_url(url: str, junk_domains: set[str]) -> bool:
-    normalized = url.rstrip(r".,;:!?)\]")
+    normalized = url.rstrip(".,;:!?)")
+    if normalized.endswith("]") and "[" not in normalized:
+        normalized = normalized[:-1]
     if not re.match(r"^[a-z]+://", normalized, re.I):
         normalized = "https://" + normalized
-    host = (urlsplit(normalized).hostname or "").lower().removeprefix("www.")
+    try:
+        host = urlsplit(normalized).hostname
+    except ValueError:
+        return True
+    if not host:
+        return True
+    host = host.lower().removeprefix("www.")
     return any(host == domain or host.endswith("." + domain) for domain in junk_domains)
 
 
