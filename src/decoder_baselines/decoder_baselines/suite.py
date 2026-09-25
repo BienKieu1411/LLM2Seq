@@ -175,7 +175,18 @@ def build_run_config(
             "test_file": str(data_dir / str(dataset_spec.get("test_file", "test.jsonl"))),
         }
     )
-    training = _merge(defaults.get("training", {}), model_spec.get("training", {}), dataset_spec.get("training", {}))
+    training_by_dataset = model_spec.get("training_by_dataset", {})
+    if not isinstance(training_by_dataset, dict):
+        raise ValueError(f"models.{model_name}.training_by_dataset must be a mapping")
+    dataset_training = training_by_dataset.get(dataset_name, {})
+    if not isinstance(dataset_training, dict):
+        raise ValueError(f"models.{model_name}.training_by_dataset.{dataset_name} must be a mapping")
+    training = _merge(
+        defaults.get("training", {}),
+        model_spec.get("training", {}),
+        dataset_spec.get("training", {}),
+        dataset_training,
+    )
     limits = {
         "max_train_examples": int(max_train_examples),
         "max_validation_examples": int(max_validation_examples),

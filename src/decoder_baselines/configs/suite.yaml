@@ -87,6 +87,13 @@ models:
     training:
       per_device_train_batch_size: 2
       gradient_accumulation_steps: 16
+    training_by_dataset:
+      pubmed:
+        per_device_train_batch_size: 2
+        gradient_accumulation_steps: 16
+      arxiv:
+        per_device_train_batch_size: 2
+        gradient_accumulation_steps: 16
     generation:
       batch_size: 4
   qwen3_8b:

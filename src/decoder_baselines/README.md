@@ -84,6 +84,10 @@ cache loop. For vLLM runs, `generation.batch_size` is the number of tokenized
 prompts sent in one HTTP request; `VLLM_BATCH_SIZE` or `--vllm-batch-size`
 overrides it without editing the YAML. Nemotron's local generation processes
 exactly the resolved batch size per batch and preserves dataset order.
+For Qwen3-1.7B, edit `models.qwen3_1_7b.training_by_dataset.pubmed` and
+`models.qwen3_1_7b.training_by_dataset.arxiv` in `configs/suite.yaml` to set
+different `per_device_train_batch_size` and `gradient_accumulation_steps` for
+those datasets. Unlisted datasets inherit the model-level `training` values.
 Each run is written to `runs/decoder_baselines/<model>__<dataset>/` with its
 resolved config, `final_model/`, `trainer_state.json`, predictions and metrics.
 Training enables length-grouped sampling by default, so examples with similar
