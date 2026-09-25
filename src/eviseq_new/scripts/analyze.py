@@ -27,7 +27,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 from transformers import AutoTokenizer
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = next(
+    (
+        parent
+        for parent in Path(__file__).resolve().parents
+        if (parent / "src/eviseq_new/eviseq_afmr/config.py").is_file()
+    ),
+    None,
+)
+if ROOT is None:
+    raise RuntimeError("Could not find the LLM2Seq project root above this script")
 sys.path.insert(0, str(ROOT / "src" / "eviseq_new"))
 from eviseq_afmr.config import load_config  # noqa: E402
 from eviseq_afmr.data.normalization import detokenize  # noqa: E402
