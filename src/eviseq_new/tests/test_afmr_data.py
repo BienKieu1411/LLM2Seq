@@ -27,6 +27,26 @@ def test_length_buckets_reduce_padding_and_resume_by_epoch():
     assert list(recreated) != first
 
 
+def test_distributed_length_buckets_pair_similar_work_across_ranks():
+    from eviseq_afmr.data.sampling import DistributedBatchSampler
+
+    lengths = list(range(1000, 4200))
+    samplers = [DistributedBatchSampler(lengths, 32, 2, rank, seed=7, multiplier=50) for rank in (0, 1)]
+    for sampler in samplers:
+        sampler.set_epoch(2)
+    rank_batches = [list(sampler) for sampler in samplers]
+
+    assert len(rank_batches[0]) == len(rank_batches[1]) == 50
+    assert sorted(index for batches in rank_batches for batch in batches for index in batch) == list(range(3200))
+    for batch_left, batch_right in zip(*rank_batches):
+        costs = [max(lengths[index] for index in batch) * len(batch) for batch in (batch_left, batch_right)]
+        assert max(costs) / min(costs) < 1.1
+
+    replay = DistributedBatchSampler(lengths, 32, 2, 0, seed=7, multiplier=50)
+    replay.set_epoch(2)
+    assert list(replay) == rank_batches[0]
+
+
 def test_preparation_preserves_text_and_discards_external_labels(tmp_path):
     source = tmp_path / "raw.jsonl"
     source.write_text(
