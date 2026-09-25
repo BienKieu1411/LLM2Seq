@@ -159,12 +159,12 @@ def test_generation_batch_matrix_tracks_dataset_length() -> None:
             assert not isinstance(config["generation"]["batch_size"], dict)
 
 
-def test_qwen3_17b_training_batch_can_vary_by_dataset_without_changing_other_models() -> None:
+def test_qwen3_17b_training_settings_can_vary_by_dataset_without_changing_other_models() -> None:
     suite_path = Path(__file__).parents[1] / "configs" / "suite.yaml"
     suite = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
     overrides = suite["models"]["qwen3_1_7b"]["training_by_dataset"]
-    overrides["pubmed"].update(per_device_train_batch_size=4, gradient_accumulation_steps=8)
-    overrides["arxiv"].update(per_device_train_batch_size=1, gradient_accumulation_steps=32)
+    overrides["pubmed"].update(num_train_epochs=3, per_device_train_batch_size=4, gradient_accumulation_steps=8)
+    overrides["arxiv"].update(num_train_epochs=2, per_device_train_batch_size=1, gradient_accumulation_steps=32)
 
     pubmed, _ = build_run_config(suite, suite_path, "qwen3_1_7b", "pubmed")
     arxiv, _ = build_run_config(suite, suite_path, "qwen3_1_7b", "arxiv")
@@ -174,10 +174,13 @@ def test_qwen3_17b_training_batch_can_vary_by_dataset_without_changing_other_mod
         assert "training_by_dataset" not in config["data"]
     assert pubmed["training"]["per_device_train_batch_size"] == 4
     assert pubmed["training"]["gradient_accumulation_steps"] == 8
+    assert pubmed["training"]["num_train_epochs"] == 3
     assert arxiv["training"]["per_device_train_batch_size"] == 1
     assert arxiv["training"]["gradient_accumulation_steps"] == 32
+    assert arxiv["training"]["num_train_epochs"] == 2
     assert other["training"]["per_device_train_batch_size"] == 2
     assert other["training"]["gradient_accumulation_steps"] == 16
+    assert other["training"]["num_train_epochs"] == 4
 
 
 def test_llama3_3b_uses_instruct_checkpoint() -> None:
