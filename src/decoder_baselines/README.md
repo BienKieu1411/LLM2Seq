@@ -27,13 +27,14 @@ writes for both paths.
 cd src/decoder_baselines
 GPU_ID=0,1 \
 QWEN3_0_6B_PATH=/models/Qwen3-0.6B \
+QWEN3_1_7B_PATH=/models/Qwen3-1.7B \
 QWEN3_8B_PATH=/models/Qwen3-8B \
 QWEN3_4B_PATH=/models/Qwen3-4B \
 LLAMA3_8B_PATH=/models/Llama-3.1-8B \
 LLAMA3_3B_PATH=/models/Llama-3.2-3B-Instruct \
 NEMOTRON_DIFFUSION_8B_PATH=/models/Nemotron-Labs-Diffusion-8B-Base \
 NEMOTRON_DIFFUSION_3B_PATH=/models/Nemotron-Labs-Diffusion-3B \
-bash scripts/run_suite.sh --models qwen3_0_6b,qwen3_8b,qwen3_4b,llama3_8b,llama3_3b,nemotron_diffusion_8b,nemotron_diffusion_3b --datasets pubmed,arxiv,booksum,govreport
+bash scripts/run_suite.sh --models qwen3_0_6b,qwen3_1_7b,qwen3_8b,qwen3_4b,llama3_8b,llama3_3b,nemotron_diffusion_8b,nemotron_diffusion_3b --datasets pubmed,arxiv,booksum,govreport
 ```
 
 For one GPU, use `GPU_ID=0`. For two GPUs, use `GPU_ID=0,1`; the script
@@ -138,8 +139,8 @@ it does not write a temporary config. For an existing service, replace
 the in-process Transformers evaluator; Nemotron is selected automatically for
 the local native AR path.
 
-The seven model IDs in the bundled matrix are `Qwen/Qwen3-0.6B`, `Qwen/Qwen3-8B`,
-`Qwen/Qwen3-4B`, `meta-llama/Llama-3.1-8B`, `meta-llama/Llama-3.2-3B-Instruct`,
+The eight model IDs in the bundled matrix are `Qwen/Qwen3-0.6B`, `Qwen/Qwen3-1.7B`,
+`Qwen/Qwen3-8B`, `Qwen/Qwen3-4B`, `meta-llama/Llama-3.1-8B`, `meta-llama/Llama-3.2-3B-Instruct`,
 `nvidia/Nemotron-Labs-Diffusion-8B-Base` and
 `nvidia/Nemotron-Labs-Diffusion-3B`. If a local directory uses another
 name, set the corresponding `*_PATH` variable; the suite records both the

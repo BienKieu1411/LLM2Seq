@@ -7,6 +7,7 @@ output_root: "../../../runs/decoder_baselines"
 data_root: "../../eviseq_new/datasets"
 model_order:
   - qwen3_0_6b
+  - qwen3_1_7b
   - qwen3_8b
   - qwen3_4b
   - llama3_8b
@@ -79,6 +80,15 @@ models:
       gradient_accumulation_steps: 8
     generation:
       batch_size: 8
+  qwen3_1_7b:
+    model_id: Qwen/Qwen3-1.7B
+    path_env: QWEN3_1_7B_PATH
+    local_dir: Qwen3-1.7B
+    training:
+      per_device_train_batch_size: 2
+      gradient_accumulation_steps: 16
+    generation:
+      batch_size: 4
   qwen3_8b:
     model_id: Qwen/Qwen3-8B
     path_env: QWEN3_8B_PATH
@@ -148,6 +158,7 @@ datasets:
     generation:
       batch_size_by_model:
         qwen3_0_6b: 8
+        qwen3_1_7b: 4
         qwen3_8b: 2
         qwen3_4b: 4
         llama3_8b: 2
@@ -163,6 +174,7 @@ datasets:
     generation:
       batch_size_by_model:
         qwen3_0_6b: 4
+        qwen3_1_7b: 2
         qwen3_8b: 1
         qwen3_4b: 2
         llama3_8b: 1
@@ -179,6 +191,7 @@ datasets:
       max_new_tokens: 1024
       batch_size_by_model:
         qwen3_0_6b: 2
+        qwen3_1_7b: 1
         qwen3_8b: 1
         qwen3_4b: 1
         llama3_8b: 1
@@ -195,6 +208,7 @@ datasets:
       max_new_tokens: 1024
       batch_size_by_model:
         qwen3_0_6b: 2
+        qwen3_1_7b: 1
         qwen3_8b: 1
         qwen3_4b: 1
         llama3_8b: 1
