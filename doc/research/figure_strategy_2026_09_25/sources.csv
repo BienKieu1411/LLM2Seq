@@ -1,0 +1,15 @@
+id,short_title,type,primary_url,credibility_5,recency_5,low_bias_5,note
+01,Ravaut context,ACL 2024,https://aclanthology.org/2024.acl-long.153/,5,4,3,sources/01_ravaut_context.md
+02,LongT5,Findings NAACL 2022,https://aclanthology.org/2022.findings-naacl.55/,5,3,3,sources/02_longt5.md
+03,Rahimi attribution,Findings EMNLP 2025,https://aclanthology.org/2025.findings-emnlp.846/,5,5,4,sources/03_rahimi_attribution.md
+04,Guo metric length,EMNLP 2023,https://aclanthology.org/2023.emnlp-main.984/,5,4,4,sources/04_guo_metric_length.md
+05,LongDocFACTScore,LREC-COLING 2024,https://aclanthology.org/2024.lrec-main.941/,5,4,3,sources/05_bishop_longdocfact.md
+06,Metric stress test,ACL 2026,https://aclanthology.org/2026.acl-long.1472/,5,5,4,sources/06_mujahid_stress.md
+07,LongEval,EACL 2023,https://aclanthology.org/2023.eacl-main.121/,5,4,4,sources/07_krishna_longeval.md
+08,Local SEAM protocol,First-party files,local,5,5,3,sources/08_local_protocol.md
+09,Entity SpanCopy,CODI 2023,https://aclanthology.org/2023.codi-1.9/,5,4,3,sources/09_spancopy.md
+10,PROM,LREC-COLING 2024,https://aclanthology.org/2024.lrec-main.1148/,5,4,3,sources/10_prom.md
+11,Copying and context,EMNLP 2018,https://aclanthology.org/D18-1339/,5,2,4,sources/11_knowles_copy.md
+12,Cross-tokenizer spans,arXiv 2026,https://arxiv.org/abs/2601.11865,4,5,3,sources/12_ctpd_cross_tokenizer.md
+13,Positional faithfulness,NAACL 2025,https://aclanthology.org/2025.naacl-long.442/,5,5,4,sources/13_wan_position.md
+14,Long-document evaluator input,arXiv 2024,https://arxiv.org/abs/2309.07382,4,4,3,sources/14_wu_evaluator.md
