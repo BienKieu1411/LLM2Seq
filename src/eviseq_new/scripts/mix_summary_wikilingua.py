@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create one shuffled training split; keep WikiLingua validation/test unchanged."""
+"""Combine batch, prepared, and WikiLingua train rows into one canonical dataset."""
 
 from __future__ import annotations
 
@@ -10,13 +10,25 @@ import os
 import random
 import shutil
 import tempfile
+from contextlib import ExitStack
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from eviseq_afmr.data.schema import CanonicalRecord
 
 
-def _records(path: Path, *, source_field: str, target_field: str, id_field: str):
-    with path.open("rb") as handle:
+@dataclass(frozen=True)
+class TrainSource:
+    label: str
+    path: Path
+    source_field: str
+    target_field: str
+    id_field: str
+
+
+def _records(source: TrainSource):
+    with source.path.open("rb") as handle:
         line_number = 0
         while True:
             offset = handle.tell()
@@ -31,10 +43,13 @@ def _records(path: Path, *, source_field: str, target_field: str, id_field: str)
                 if not isinstance(row, dict):
                     raise ValueError("record must be an object")
                 record = CanonicalRecord.from_mapping(
-                    row, source_field=source_field, target_field=target_field, id_field=id_field
+                    row,
+                    source_field=source.source_field,
+                    target_field=source.target_field,
+                    id_field=source.id_field,
                 )
             except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-                raise ValueError(f"Invalid record at {path}:{line_number}: {exc}") from exc
+                raise ValueError(f"Invalid record at {source.path}:{line_number}: {exc}") from exc
             yield offset, line_number, record
 
 
@@ -56,69 +71,66 @@ def _write_atomic(destination: Path, write) -> None:
 
 
 def mix(
-    other_train: Path,
     wiki_dir: Path,
     output_dir: Path,
     *,
     seed: int,
-    source_field: str,
-    target_field: str,
-    id_field: str,
-) -> dict:
-    other_train = other_train.expanduser().resolve()
+    extra_sources: list[TrainSource],
+) -> dict[str, Any]:
     wiki_dir = wiki_dir.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
     wiki_paths = {split: wiki_dir / f"{split}.jsonl" for split in ("train", "validation", "test")}
-    for path in (other_train, *wiki_paths.values()):
+    for path in (*wiki_paths.values(), *(source.path for source in extra_sources)):
         if not path.is_file():
             raise FileNotFoundError(path)
-    if other_train == wiki_paths["train"]:
-        raise ValueError("The other training file must differ from WikiLingua train")
-    if output_dir in {wiki_dir, other_train.parent}:
-        raise ValueError("Output directory must differ from both input directories")
+    if output_dir == wiki_dir or any(output_dir == source.path.parent for source in extra_sources):
+        raise ValueError("Output directory must differ from every input directory")
+    all_sources = [
+        *extra_sources,
+        TrainSource("wikilingua", wiki_paths["train"], "text", "summary", "id"),
+    ]
 
     held_out_sources = {
         _source_key(record.source)
         for split in ("validation", "test")
-        for _, _, record in _records(wiki_paths[split], source_field="text", target_field="summary", id_field="id")
+        for _, _, record in _records(TrainSource(split, wiki_paths[split], "text", "summary", "id"))
     }
-    # Keep only file offsets in memory; long sources are read again while writing.
-    entries: list[tuple[str, int, int]] = []
-    counts = {"other": 0, "wiki": 0}
-    skipped_overlap = {"other": 0, "wiki": 0}
-    for origin, path, fields in (
-        ("other", other_train, (source_field, target_field, id_field)),
-        ("wiki", wiki_paths["train"], ("text", "summary", "id")),
-    ):
-        for offset, line_number, record in _records(
-            path, source_field=fields[0], target_field=fields[1], id_field=fields[2]
-        ):
+    # Store offsets rather than long documents; shuffled rows are read from their
+    # original files only when the canonical output is written.
+    entries: list[tuple[int, int, int]] = []
+    counts = {source.label: 0 for source in all_sources}
+    skipped_overlap = {source.label: 0 for source in all_sources}
+    for source_index, source in enumerate(all_sources):
+        for offset, line_number, record in _records(source):
             if _source_key(record.source) in held_out_sources:
-                skipped_overlap[origin] += 1
+                skipped_overlap[source.label] += 1
                 continue
-            entries.append((origin, offset, line_number))
-            counts[origin] += 1
-    if not counts["other"] or not counts["wiki"]:
-        raise ValueError(f"Both train sources must have usable rows; counts={counts}")
+            entries.append((source_index, offset, line_number))
+            counts[source.label] += 1
+    if not any(counts[source.label] for source in extra_sources):
+        raise ValueError("No usable records remain in the additional training sources")
+    if not counts["wikilingua"]:
+        raise ValueError("No usable WikiLingua training records remain")
+
     random.Random(seed).shuffle(entries)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     def write_train(temporary: Path) -> None:
-        with (
-            other_train.open("rb") as other_handle,
-            wiki_paths["train"].open("rb") as wiki_handle,
-            temporary.open("w", encoding="utf-8") as handle,
-        ):
-            for origin, offset, line_number in entries:
-                source_handle = other_handle if origin == "other" else wiki_handle
-                source_handle.seek(offset)
-                row_data = json.loads(source_handle.readline())
-                fields = (source_field, target_field, id_field) if origin == "other" else ("text", "summary", "id")
+        with ExitStack() as stack, temporary.open("w", encoding="utf-8") as handle:
+            input_handles = [stack.enter_context(source.path.open("rb")) for source in all_sources]
+            for source_index, offset, line_number in entries:
+                source = all_sources[source_index]
+                input_handle = input_handles[source_index]
+                input_handle.seek(offset)
+                row_data = json.loads(input_handle.readline())
                 record = CanonicalRecord.from_mapping(
-                    row_data, source_field=fields[0], target_field=fields[1], id_field=fields[2]
+                    row_data,
+                    source_field=source.source_field,
+                    target_field=source.target_field,
+                    id_field=source.id_field,
                 )
                 row = {
-                    "id": f"{origin}:{line_number}:{record.example_id or line_number}",
+                    "id": f"{source.label}:{line_number}:{record.example_id or line_number}",
                     "text": record.source,
                     "summary": record.target,
                 }
@@ -130,11 +142,18 @@ def mix(
             output_dir / f"{split}.jsonl", lambda temporary, split=split: shutil.copyfile(wiki_paths[split], temporary)
         )
     report = {
-        "other_train": str(other_train),
-        "wiki_dir": str(wiki_dir),
         "seed": seed,
-        "train_counts": counts,
-        "skipped_train_sources_matching_wiki_validation_or_test": skipped_overlap,
+        "train_sources": [
+            {
+                "label": source.label,
+                "path": str(source.path),
+                "source_field": source.source_field,
+                "target_field": source.target_field,
+                "records_kept": counts[source.label],
+                "records_skipped_for_exact_wiki_validation_or_test_source_match": skipped_overlap[source.label],
+            }
+            for source in all_sources
+        ],
         "train_total": len(entries),
         "validation_test": "byte-identical copies of WikiLingua splits",
     }
@@ -147,25 +166,79 @@ def mix(
     return report
 
 
+def _source_from_file(
+    path: Path,
+    *,
+    label: str,
+    source_field: str,
+    target_field: str,
+    id_field: str,
+) -> TrainSource:
+    return TrainSource(label, path.expanduser().resolve(), source_field, target_field, id_field)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--other-train", type=Path, required=True)
+    parser.add_argument("--batch-dir", type=Path, help="Directory containing batch*.jsonl with input/output fields")
+    parser.add_argument("--batch-pattern", default="batch*.jsonl")
+    parser.add_argument("--prepared-train", type=Path, help="Previously prepared train JSONL")
+    parser.add_argument(
+        "--other-train", type=Path, action="append", default=[], help="Additional train JSONL (can be repeated)"
+    )
     parser.add_argument("--wikilingua-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--source-field", default="text")
-    parser.add_argument("--target-field", default="summary")
-    parser.add_argument("--id-field", default="id")
+    parser.add_argument("--batch-source-field", default="input")
+    parser.add_argument("--batch-target-field", default="output")
+    parser.add_argument("--batch-id-field", default="id")
+    parser.add_argument("--prepared-source-field", default="text")
+    parser.add_argument("--prepared-target-field", default="summary")
+    parser.add_argument("--prepared-id-field", default="id")
+    parser.add_argument("--source-field", default="text", help=argparse.SUPPRESS)
+    parser.add_argument("--target-field", default="summary", help=argparse.SUPPRESS)
+    parser.add_argument("--id-field", default="id", help=argparse.SUPPRESS)
     args = parser.parse_args()
-    report = mix(
-        args.other_train,
-        args.wikilingua_dir,
-        args.output_dir,
-        seed=args.seed,
-        source_field=args.source_field,
-        target_field=args.target_field,
-        id_field=args.id_field,
-    )
+
+    extras: list[TrainSource] = []
+    if args.batch_dir:
+        batch_dir = args.batch_dir.expanduser().resolve()
+        batch_files = sorted(batch_dir.glob(args.batch_pattern))
+        if not batch_files:
+            raise FileNotFoundError(f"No files matching {args.batch_pattern!r} in {batch_dir}")
+        for batch_path in batch_files:
+            extras.append(
+                _source_from_file(
+                    batch_path,
+                    label=f"batch:{batch_path.stem}",
+                    source_field=args.batch_source_field,
+                    target_field=args.batch_target_field,
+                    id_field=args.batch_id_field,
+                )
+            )
+    if args.prepared_train:
+        extras.append(
+            _source_from_file(
+                args.prepared_train,
+                label="prepared_train",
+                source_field=args.prepared_source_field,
+                target_field=args.prepared_target_field,
+                id_field=args.prepared_id_field,
+            )
+        )
+    for index, path in enumerate(args.other_train):
+        extras.append(
+            _source_from_file(
+                path,
+                label=f"other_train_{index + 1}",
+                source_field=args.source_field,
+                target_field=args.target_field,
+                id_field=args.id_field,
+            )
+        )
+    if not extras:
+        parser.error("provide at least one of --batch-dir, --prepared-train, or --other-train")
+
+    report = mix(args.wikilingua_dir, args.output_dir, seed=args.seed, extra_sources=extras)
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
