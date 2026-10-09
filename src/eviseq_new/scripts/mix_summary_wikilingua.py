@@ -27,7 +27,13 @@ class TrainSource:
     id_field: str
 
 
-def _records(source: TrainSource):
+def _records(
+    source: TrainSource,
+    *,
+    skip_empty: bool = False,
+    empty_counts: dict[str, int] | None = None,
+    empty_lines: dict[str, list[int]] | None = None,
+):
     with source.path.open("rb") as handle:
         line_number = 0
         while True:
@@ -49,6 +55,12 @@ def _records(source: TrainSource):
                     id_field=source.id_field,
                 )
             except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                if skip_empty and isinstance(exc, ValueError) and str(exc) == "source and target must be non-empty":
+                    if empty_counts is not None:
+                        empty_counts[source.label] = empty_counts.get(source.label, 0) + 1
+                    if empty_lines is not None and len(empty_lines.setdefault(source.label, [])) < 20:
+                        empty_lines[source.label].append(line_number)
+                    continue
                 raise ValueError(f"Invalid record at {source.path}:{line_number}: {exc}") from exc
             yield offset, line_number, record
 
@@ -100,8 +112,15 @@ def mix(
     entries: list[tuple[int, int, int]] = []
     counts = {source.label: 0 for source in all_sources}
     skipped_overlap = {source.label: 0 for source in all_sources}
+    skipped_empty = {source.label: 0 for source in all_sources}
+    empty_line_numbers: dict[str, list[int]] = {}
     for source_index, source in enumerate(all_sources):
-        for offset, line_number, record in _records(source):
+        for offset, line_number, record in _records(
+            source,
+            skip_empty=True,
+            empty_counts=skipped_empty,
+            empty_lines=empty_line_numbers,
+        ):
             if _source_key(record.source) in held_out_sources:
                 skipped_overlap[source.label] += 1
                 continue
@@ -150,6 +169,8 @@ def mix(
                 "source_field": source.source_field,
                 "target_field": source.target_field,
                 "records_kept": counts[source.label],
+                "records_skipped_empty_source_or_target": skipped_empty[source.label],
+                "first_empty_line_numbers": empty_line_numbers.get(source.label, []),
                 "records_skipped_for_exact_wiki_validation_or_test_source_match": skipped_overlap[source.label],
             }
             for source in all_sources
