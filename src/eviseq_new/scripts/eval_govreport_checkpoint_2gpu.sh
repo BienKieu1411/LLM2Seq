@@ -9,6 +9,8 @@ RUN_DIR=""
 CHECKPOINT="epoch_003.pt"
 OUTPUT=""
 ROUGE155_SCRIPT="${ROUGE155_SCRIPT:-}"
+RESUME=false
+FRESH=false
 
 usage() {
   cat <<'EOF'
@@ -27,6 +29,8 @@ Options:
   --batch-size N       Eval batch size per GPU (default: 1)
   --split SPLIT        train, validation, or test (default: test)
   --rouge155 PATH      Optional ROUGE-1.5.5 evaluator script
+  --resume             Continue existing shard files; only use for the same run/split
+  --fresh              Remove existing shard files and start a new evaluation
   -h, --help           Show this message
 EOF
 }
@@ -45,6 +49,8 @@ while (($#)); do
     --batch-size) (($# >= 2)) || die "Missing value for --batch-size"; BATCH_SIZE="$2"; shift 2 ;;
     --split) (($# >= 2)) || die "Missing value for --split"; SPLIT="$2"; shift 2 ;;
     --rouge155) (($# >= 2)) || die "Missing value for --rouge155"; ROUGE155_SCRIPT="$2"; shift 2 ;;
+    --resume) RESUME=true; shift ;;
+    --fresh) FRESH=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
@@ -85,6 +91,13 @@ SHARD0="${OUTPUT%.jsonl}.shard0.jsonl"
 SHARD1="${OUTPUT%.jsonl}.shard1.jsonl"
 LOG0="${OUTPUT%.jsonl}.shard0.log"
 LOG1="${OUTPUT%.jsonl}.shard1.log"
+
+[[ "${RESUME}" == false || "${FRESH}" == false ]] || die "Choose only one of --resume and --fresh"
+if [[ "${FRESH}" == true ]]; then
+  rm -f "${SHARD0}" "${SHARD1}"
+elif [[ "${RESUME}" == false ]] && { [[ -e "${SHARD0}" ]] || [[ -e "${SHARD1}" ]]; }; then
+  die "Shard prediction files already exist: ${SHARD0}, ${SHARD1}. Use --fresh to restart or --resume only if they belong to this exact evaluation."
+fi
 
 export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONUNBUFFERED=1
