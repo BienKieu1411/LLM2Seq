@@ -19,7 +19,9 @@ BATCH_DIR="${BATCH_DIR:-}"
 PREPARED_TRAIN="${PREPARED_TRAIN:-${SUMMARY_TRAIN:-${ROOT}/datasets/90k/train.jsonl}}"
 WIKI_DIR="${WIKILINGUA_DIR:-${ROOT}/datasets/wikilingua}"
 MIXED_DIR="${MIXED_DATA_DIR:-${ROOT}/datasets/summary_wikilingua_mixed}"
-OUTPUT_DIR="${AFMR_OUTPUT_DIR:-${ROOT}/runs/afmr/summary_wikilingua_mixed}"
+OUTPUT_DIR="${AFMR_OUTPUT_DIR:-${ROOT}/runs/afmr/summary_wikilingua_mixed_nemotron_copy}"
+ENCODER_MODEL="${ENCODER_MODEL:-${NEMOTRON_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/Nemotron-3-Embed-1B-BF16}}"
+DECODER_MODEL="${DECODER_MODEL:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-0.6B}"
 PREPARED_SOURCE_FIELD="${PREPARED_SOURCE_FIELD:-text}"
 PREPARED_TARGET_FIELD="${PREPARED_TARGET_FIELD:-summary}"
 PREPARED_ID_FIELD="${PREPARED_ID_FIELD:-id}"
@@ -54,8 +56,8 @@ validation/test unchanged, train once, then evaluate the validation-best model.
   --gradient-accumulation N
   --validation-batch-size N
   --eval-batch-size N
-  --encoder-model PATH     Local encoder model
-  --decoder-model PATH     Local decoder model
+  --encoder-model PATH     Local Nemotron embedding checkpoint (default: server Nemotron-3-Embed-1B-BF16 path)
+  --decoder-model PATH     Local decoder checkpoint (default: server Qwen3-0.6B path)
   --cuda-visible-devices IDS  One or two GPU IDs, e.g. 0,1
   --overwrite-output-dir  Intentionally rerun in an existing output directory
   -h, --help               Show this message
@@ -106,6 +108,8 @@ done
 
 [[ "${EPOCHS}" =~ ^[1-9][0-9]*$ ]] || { echo "--epochs must be a positive integer" >&2; exit 2; }
 [[ "${SEED}" =~ ^-?[0-9]+$ ]] || { echo "--seed must be an integer" >&2; exit 2; }
+[[ -d "${ENCODER_MODEL}" ]] || { echo "Nemotron encoder not found: ${ENCODER_MODEL}; pass --encoder-model PATH or set ENCODER_MODEL" >&2; exit 1; }
+[[ -d "${DECODER_MODEL}" ]] || { echo "Decoder not found: ${DECODER_MODEL}; pass --decoder-model PATH or set DECODER_MODEL" >&2; exit 1; }
 if [[ "${OVERWRITE}" != 1 && "${OVERWRITE}" != true && "${OVERWRITE}" != yes ]] &&
   compgen -G "${OUTPUT_DIR}/*.pt" > /dev/null; then
   echo "Checkpoints already exist in ${OUTPUT_DIR}; choose a new output directory or pass --overwrite-output-dir" >&2
@@ -129,9 +133,15 @@ echo "=== Preparing one mixed train split ==="
   --seed "${SEED}"
 
 echo "=== Training once; WikiLingua validation selects best.pt ==="
+echo "Encoder: ${ENCODER_MODEL}"
+echo "Decoder: ${DECODER_MODEL}"
+echo "Objective: token-level CE only (no contrastive loss)"
+echo "Grounded copy: enabled"
+echo "LR scheduler: cosine"
 export WIKILINGUA_DATA_DIR="${MIXED_DIR}"
 export AFMR_OUTPUT_DIR="${OUTPUT_DIR}"
 export AFMR_CONFIG="${ROOT}/configs/afmr_summary_wikilingua.yaml"
+export ENCODER_MODEL DECODER_MODEL
 export INTERFACE_WARMUP_EPOCHS=0
 export FULL_FINETUNE_EPOCHS="${EPOCHS}"
 export OVERWRITE_OUTPUT_DIR="${OVERWRITE}"

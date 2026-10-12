@@ -34,12 +34,17 @@ generation:
   top_p: 1.0
 
 model:
-  encoder_name: /absolute/path/to/pplx-embed-v1-0.6b
+  encoder_name: /workspace/storage-shared/nlp/dungdx4/BERT/Nemotron-3-Embed-1B-BF16
   decoder_name: /absolute/path/to/Qwen3-0.6B
+
+decoder:
+  grounded_copy:
+    enabled: true
 
 training:
   interface_warmup_epochs: 0
   full_finetune_epochs: 4
+  lr_scheduler: cosine
   save_best: false
   save_each_epoch: true
   resume_checkpoint: ""
