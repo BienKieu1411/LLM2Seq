@@ -237,6 +237,7 @@ def validate_config(config: dict[str, Any], *, train_only: bool = False) -> None
             "save_best",
             "resume_checkpoint",
             "resume_scheduler",
+            "lr_scheduler",
             "length_bucketing",
             "length_bucket_multiplier",
             "persistent_workers",
@@ -245,6 +246,9 @@ def validate_config(config: dict[str, Any], *, train_only: bool = False) -> None
         },
         "training",
     )
+    lr_scheduler = str(training.get("lr_scheduler", "cosine")).lower()
+    if lr_scheduler not in {"linear", "cosine"}:
+        raise ValueError("training.lr_scheduler must be 'linear' or 'cosine'")
     for name in ("interface_warmup_epochs", "full_finetune_epochs", "batch_size", "gradient_accumulation_steps"):
         if int(training.get(name, 0)) < 0:
             raise ValueError(f"training.{name} must be non-negative")

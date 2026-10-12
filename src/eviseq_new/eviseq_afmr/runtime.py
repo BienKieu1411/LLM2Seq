@@ -284,6 +284,7 @@ def train(
     *,
     device: str | None = None,
     resume_checkpoint: str | None = None,
+    init_checkpoint: str | None = None,
     train_file: str | Path | None = None,
     train_only: bool = False,
     max_train_examples: int = 0,
@@ -302,6 +303,8 @@ def train(
         if train_file is not None:
             config["data"]["train_file"] = str(Path(train_file).expanduser().resolve())
         checkpoint = resume_checkpoint or str(config["training"].get("resume_checkpoint", "")).strip()
+        if checkpoint and init_checkpoint:
+            raise ValueError("Choose either --resume-checkpoint or --init-checkpoint, not both")
         if overwrite_output_dir and checkpoint:
             raise ValueError("--overwrite-output-dir cannot be combined with --resume-checkpoint")
         output_dir = resolve_path(config["experiment"]["output_dir"], config)
@@ -380,10 +383,13 @@ def train(
         trainer = AFMRTrainer(model, config, selected_device)
         if checkpoint and _is_main_process():
             LOGGER.info("resumed AFMR checkpoint: %s", checkpoint)
+        if init_checkpoint and _is_main_process():
+            LOGGER.info("initialized AFMR weights from checkpoint: %s", init_checkpoint)
         trainer.fit(
             loaders["train"],
             None if train_only else loaders.get("validation"),
             resume_checkpoint=checkpoint or None,
+            init_checkpoint=init_checkpoint,
         )
         _barrier()
     finally:

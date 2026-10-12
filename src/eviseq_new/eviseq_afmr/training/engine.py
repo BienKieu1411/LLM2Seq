@@ -58,6 +58,15 @@ def _stage_label(stage: str) -> str:
     return {"interface_warmup": "warmup", "full_finetune": "full"}.get(stage, stage)
 
 
+def _lr_multiplier(step: int, total_steps: int, schedule: str) -> float:
+    progress = min(1.0, max(0.0, step / max(1, total_steps)))
+    if schedule == "cosine":
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+    if schedule == "linear":
+        return 1.0 - progress
+    raise ValueError(f"Unsupported learning-rate schedule: {schedule}")
+
+
 def _peak_vram_gib(device: torch.device) -> float | None:
     if device.type != "cuda":
         return None
@@ -329,7 +338,15 @@ class AFMRTrainer:
             ce = float(ce_sum) / max(1, token_total)
         return {"loss": ce, "ce": ce}
 
-    def fit(self, train_loader, validation_loader=None, resume_checkpoint: str | None = None) -> None:
+    def fit(
+        self,
+        train_loader,
+        validation_loader=None,
+        resume_checkpoint: str | None = None,
+        init_checkpoint: str | None = None,
+    ) -> None:
+        if resume_checkpoint and init_checkpoint:
+            raise ValueError("Choose either resume_checkpoint or init_checkpoint, not both")
         resume_info = None
         if resume_checkpoint:
             resume_info = load_checkpoint(resume_checkpoint, self.model, config=self.config)
@@ -338,6 +355,13 @@ class AFMRTrainer:
             self._elapsed_before_fit = float(resume_info.get("elapsed_train_seconds") or 0.0)
         else:
             self._elapsed_before_fit = 0.0
+        if init_checkpoint:
+            # In-domain fine-tuning starts from the selected model weights but
+            # gets a fresh optimizer, LR schedule, epoch counter, and validation
+            # best score for the target dataset.
+            load_checkpoint(init_checkpoint, self.model, config=self.config, restore_rng=False)
+            self.global_step = 0
+            self.best_metric = None
         self._fit_start_global_step = self.global_step
         self._fit_started_at = time.monotonic()
         training = self.config["training"]
@@ -365,7 +389,10 @@ class AFMRTrainer:
             carried_state = {}
             total_steps = max(1, steps_per_epoch * epochs)
             self.scheduler = torch.optim.lr_scheduler.LambdaLR(
-                optimizer, lambda step, total=total_steps: max(0.0, 1.0 - step / total)
+                optimizer,
+                lambda step, total=total_steps, schedule=str(training.get("lr_scheduler", "cosine")).lower(): (
+                    _lr_multiplier(step, total, schedule)
+                ),
             )
             start_epoch = 1
             self.stage_optimizer_step = 0

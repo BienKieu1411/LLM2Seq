@@ -5,8 +5,8 @@ import torch
 from eviseq_afmr.config import load_config
 from eviseq_afmr.modeling.model import EviSeqAFMR
 from eviseq_afmr.runtime import _write_resolved_config, build_loaders, evaluate
-from eviseq_afmr.training.checkpoint import load_checkpoint
-from eviseq_afmr.training.engine import AFMRTrainer
+from eviseq_afmr.training.checkpoint import load_checkpoint, save_checkpoint
+from eviseq_afmr.training.engine import AFMRTrainer, _lr_multiplier
 
 
 def _config(tmp_path: Path) -> dict:
@@ -48,3 +48,38 @@ def test_tiny_runtime_trains_saves_best_and_streams_eval(tmp_path: Path, grounde
     assert len(predictions.read_text(encoding="utf-8").splitlines()) == 2
     resumed = evaluate(config_path, output_dir / "last.pt", predictions, split="test", batch_size=2, device="cpu")
     assert resumed == result
+
+
+def test_init_checkpoint_starts_fresh_epoch_and_validation_selection(tmp_path: Path):
+    config = _config(tmp_path)
+    config["experiment"]["output_dir"] = str(tmp_path / "finetune")
+    config["training"]["interface_warmup_epochs"] = 0
+    config["training"]["full_finetune_epochs"] = 1
+    assert config["training"]["lr_scheduler"] == "cosine"
+
+    source_model = EviSeqAFMR(config)
+    source_checkpoint = tmp_path / "source_best.pt"
+    save_checkpoint(
+        source_checkpoint,
+        source_model,
+        None,
+        config,
+        epoch=5,
+        step=123,
+        best_metric=-1e9,
+        stage="full_finetune",
+        stage_epoch=5,
+    )
+    loaders = build_loaders(config, max_train_examples=4, max_validation_examples=2)
+    trainer = AFMRTrainer(EviSeqAFMR(config), config, torch.device("cpu"))
+    trainer.fit(loaders["train"], loaders["validation"], init_checkpoint=str(source_checkpoint))
+
+    output_dir = Path(config["experiment"]["output_dir"])
+    state = torch.load(output_dir / "best.pt", map_location="cpu", weights_only=False)
+    assert state["epoch"] == 1
+    assert state["stage_epoch"] == 1
+    assert state["step"] > 0
+    assert state["best_metric"] > -1e9
+    assert _lr_multiplier(0, 10, "cosine") == 1.0
+    assert _lr_multiplier(5, 10, "cosine") == pytest.approx(0.5)
+    assert _lr_multiplier(10, 10, "cosine") == pytest.approx(0.0)

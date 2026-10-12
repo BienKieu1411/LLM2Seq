@@ -75,6 +75,7 @@ training:
   save_best: false
   resume_checkpoint: ""
   resume_scheduler: true
+  lr_scheduler: cosine
 
 data:
   train_file: datasets/pubmed/train.jsonl

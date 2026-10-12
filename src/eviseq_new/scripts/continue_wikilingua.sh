@@ -125,8 +125,9 @@ data["test_file"] = str(dataset_dir / "test.jsonl")
 config["experiment"]["output_dir"] = str(output_dir)
 config["training"]["resume_checkpoint"] = ""
 # WikiLingua has a different number of optimizer steps. Keep model and
-# optimizer moments, but rebuild the LR schedule for this continuation run.
+# optimizer moments, but rebuild a cosine LR schedule for this continuation.
 config["training"]["resume_scheduler"] = False
+config["training"]["lr_scheduler"] = "cosine"
 
 # The trainer interprets stage epoch counts as totals when resuming. Extend
 # the active stage by the requested number of WikiLingua epochs so a completed

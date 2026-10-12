@@ -26,6 +26,11 @@ def main(argv: list[str] | None = None) -> None:
     train.add_argument("config")
     train.add_argument("--device", default=None)
     train.add_argument("--resume-checkpoint", default=None)
+    train.add_argument(
+        "--init-checkpoint",
+        default=None,
+        help="Initialize model weights from a checkpoint and start a fresh optimizer, scheduler, and epoch count",
+    )
     train.add_argument("--train-file", default=None, help="Override data.train_file with one JSONL file")
     train.add_argument(
         "--train-only",
@@ -90,6 +95,7 @@ def main(argv: list[str] | None = None) -> None:
             args.config,
             device=args.device,
             resume_checkpoint=args.resume_checkpoint,
+            init_checkpoint=args.init_checkpoint,
             train_file=args.train_file,
             train_only=args.train_only,
             max_train_examples=args.max_train_examples,
