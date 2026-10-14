@@ -114,6 +114,7 @@ def _embedding_shape_mismatches(
     mismatches = []
     for key in (
         "encoder.model.embed_tokens.weight",
+        "encoder.model.language_model.embed_tokens.weight",
         "decoder.backbone.embed_tokens.weight",
         "decoder.lm_head.weight",
     ):

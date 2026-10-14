@@ -98,6 +98,12 @@ Each input record contains the configured source and target fields (strings or l
 
 The source instruction is part of `data.encoder_prefix`, so the same instruction is used for every row and travels through the encoder. The decoder-side `data.decoder_prompt` is a short generation instruction; it does not duplicate the source text. Prompt text is not read from dataset rows. `configs/8192_avg.yaml` includes the full summarization instruction in its encoder prefix and uses an 8,192-token source budget.
 
+## EmbeddingGemma-2 text encoder
+
+AFMR can use a local `google/embeddinggemma-2` checkpoint as a text encoder. This model has a nested text configuration and returns token states in its 768-dimensional embedding space, so the adapter reads `text_config.embedding_dim` and projects intermediate depth taps through the model's final normalization and embedding projection before passing them to AFMR. Since AFMR supplies text only, the adapter disables the unused audio and vision towers at load time. It rejects `float16`; use `bfloat16` or `float32`. Install `transformers>=5.19.0`, which includes the model implementation.
+
+Set `model.encoder_name` to the local checkpoint directory and keep the decoder path local as usual. The encoder tokenizer remains the source of token IDs and offsets; grounded copy still aligns its offsets to the decoder tokenizer. No extra processor or sentence-transformers dependency is used by AFMR. The [Transformers model documentation](https://huggingface.co/docs/transformers/en/model_doc/embedding_gemma2) describes the token-state projection, text-only use, context limit, and supported precision.
+
 `decoder_chat_template: true` sends the fixed decoder instruction as a user message to the decoder tokenizer and appends its assistant generation marker. With `decoder_chat_template: false`, the decoder instruction is tokenized as literal text. When changing either prompt for a comparison, use a fresh prediction filename so an existing JSONL resume prefix cannot be mistaken for generations made with the new instruction.
 
 PubMed, ArXiv and CNNDM preparation detokenizes punctuation, brackets, quotes and contractions using the T5Gemma sentence-level rules, preserving sentence newlines. Their recipes also enable `data.detokenize: true`, so already-prepared files receive the same idempotent normalization when read. No full-corpus cache or repeated copy is required. This applies to both source and target, including test references. Legacy resolved configs without this key retain their previous text handling; do not mix old partial predictions with newly normalized references. The WikiLingua continuation recipe now uses the same normalization and plain-summary prompt.
@@ -210,6 +216,31 @@ bash scripts/run_summary_then_wikilingua.sh \
 The summary JSONL defaults to `text`, `summary`, and `id` fields; override
 them with `--source-field`, `--target-field`, and `--id-field` when needed.
 Use `CUDA_VISIBLE_DEVICES=0,1` to launch the two stages with DDP.
+
+To use EmbeddingGemma-2 for the same mixed-summary + WikiLingua run, provide
+its local checkpoint directory. This uses the same prompts, 3,072-token source
+limit, 512-token target limit, cosine schedule, grounded copy, and WikiLingua
+validation-based `best.pt` selection. The mixed dataset and run get separate
+directories from the other encoder recipe:
+
+```bash
+cd src/eviseq_new
+PYTHON=/absolute/path/to/bienkieu_env/bin/python \
+CUDA_VISIBLE_DEVICES=0,1 \
+bash scripts/run_mixed_wikilingua_embeddinggemma2.sh \
+  --encoder-model /path/to/local/embeddinggemma-2 \
+  --decoder-model /path/to/Qwen3-0.6B \
+  --batch-dir /path/to/batch_jsonls \
+  --prepared-train datasets/90k/train.jsonl \
+  --wikilingua-dir datasets/wikilingua \
+  --train-batch-size 4 \
+  --gradient-accumulation 8 \
+  --epochs 4
+```
+
+The wrapper also accepts `EMBEDDINGGEMMA2_MODEL=/path/to/local/embeddinggemma-2`
+instead of `--encoder-model`. It uses offline loading and will not download a
+checkpoint. The server environment must provide `transformers>=5.19.0`.
 
 For a one-GPU PubMed queue that prepares data, trains the PPLX
 encoder recipe, then trains a Qwen3-Embedding control and evaluates both

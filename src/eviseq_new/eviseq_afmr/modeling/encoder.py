@@ -33,6 +33,7 @@ class PretrainedEncoderAdapter(nn.Module):
 
         self.model_name = str(name)
         self.depth_taps = int(depth_taps)
+        self._embedding_gemma2 = False
         if self.model_name == "__tiny__":
             from transformers import Qwen3Config, Qwen3Model
 
@@ -51,8 +52,31 @@ class PretrainedEncoderAdapter(nn.Module):
                 eos_token_id=2,
             )
             self.model = Qwen3Model(raw_config).to(dtype=dtype)
+            self.hidden_size = int(raw_config.hidden_size)
         else:
-            raw_config = AutoConfig.from_pretrained(name, trust_remote_code=trust_remote_code)
+            try:
+                raw_config = AutoConfig.from_pretrained(name, trust_remote_code=trust_remote_code)
+            except ValueError as exc:
+                if "embedding_gemma2" in str(exc).lower():
+                    raise RuntimeError(
+                        "This checkpoint uses EmbeddingGemma-2, which requires transformers>=5.19.0"
+                    ) from exc
+                raise
+            self._embedding_gemma2 = str(getattr(raw_config, "model_type", "")) == "embedding_gemma2"
+            if self._embedding_gemma2:
+                if dtype == torch.float16:
+                    raise ValueError("EmbeddingGemma-2 encoder supports bfloat16 or float32, not float16")
+                text_config = getattr(raw_config, "text_config", None)
+                if text_config is None:
+                    raise ValueError("EmbeddingGemma-2 config is missing text_config")
+                self.hidden_size = int(getattr(text_config, "embedding_dim", 0))
+                if self.hidden_size <= 0:
+                    raise ValueError("EmbeddingGemma-2 text_config.embedding_dim must be positive")
+                # AFMR consumes text token states only. Omit unused modality towers
+                # instead of loading their weights into every training process.
+                for modality_config in ("vision_config", "audio_config"):
+                    if getattr(raw_config, modality_config, None) is not None:
+                        setattr(raw_config, modality_config, None)
             self.model = AutoModel.from_pretrained(
                 name,
                 config=raw_config,
@@ -60,7 +84,17 @@ class PretrainedEncoderAdapter(nn.Module):
                 trust_remote_code=trust_remote_code,
                 attn_implementation=attention_implementation,
             )
-        self.hidden_size = int(getattr(raw_config, "hidden_size", getattr(raw_config, "d_model", 0)))
+            if self._embedding_gemma2:
+                text_model = getattr(self.model, "language_model", None)
+                if text_model is None or not all(
+                    hasattr(text_model, attribute) for attribute in ("norm", "embedding_projection")
+                ):
+                    raise ValueError(
+                        "This Transformers version does not expose the expected EmbeddingGemma-2 text model; "
+                        "install transformers>=5.19.0"
+                    )
+            else:
+                self.hidden_size = int(getattr(raw_config, "hidden_size", getattr(raw_config, "d_model", 0)))
         if self.hidden_size <= 0:
             raise ValueError("Could not infer encoder hidden size")
         self.model.config.output_hidden_states = False
@@ -69,7 +103,10 @@ class PretrainedEncoderAdapter(nn.Module):
         self._tap_layers: tuple[nn.Module, ...] = ()
         if self.depth_taps > 1:
             layers = None
-            for path in ("layers", "encoder.layer", "encoder.layers", "model.layers"):
+            layer_paths = ["layers", "encoder.layer", "encoder.layers", "model.layers"]
+            if self._embedding_gemma2:
+                layer_paths.insert(0, "language_model.layers")
+            for path in layer_paths:
                 current = self.model
                 for part in path.split("."):
                     current = getattr(current, part, None)
@@ -115,7 +152,13 @@ class PretrainedEncoderAdapter(nn.Module):
         if self.depth_taps:
             if len(captured) != self.depth_taps - 1:
                 raise ValueError("Encoder depth hooks did not execute exactly once per requested layer")
-            taps = tuple(captured[index] for index in range(self.depth_taps - 1)) + (final,)
+            tapped_states = tuple(captured[index] for index in range(self.depth_taps - 1))
+            if self._embedding_gemma2:
+                text_model = self.model.language_model
+                tapped_states = tuple(
+                    text_model.embedding_projection(text_model.norm(state)) for state in tapped_states
+                )
+            taps = tapped_states + (final,)
         else:
             taps = ()
         return EncoderState(final, taps, attention_mask.bool(), content_mask.bool())
