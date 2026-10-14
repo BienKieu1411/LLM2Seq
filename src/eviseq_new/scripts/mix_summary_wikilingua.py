@@ -65,6 +65,44 @@ def _records(
             yield offset, line_number, record
 
 
+def _external_records(source: TrainSource):
+    """Read a validation JSON array/object or JSONL file as canonical records."""
+
+    if source.path.suffix.lower() == ".json":
+        try:
+            with source.path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except json.JSONDecodeError:
+            # Some prepared files use the .json extension for newline-delimited JSON.
+            payload = None
+        if payload is not None:
+            if isinstance(payload, dict):
+                for key in ("data", "examples", "records"):
+                    if isinstance(payload.get(key), list):
+                        payload = payload[key]
+                        break
+                else:
+                    payload = [payload]
+            if not isinstance(payload, list):
+                raise ValueError(f"Validation JSON must contain an object or list of objects: {source.path}")
+            for line_number, row in enumerate(payload, start=1):
+                try:
+                    if not isinstance(row, dict):
+                        raise ValueError("record must be an object")
+                    record = CanonicalRecord.from_mapping(
+                        row,
+                        source_field=source.source_field,
+                        target_field=source.target_field,
+                        id_field=source.id_field,
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError(f"Invalid validation record at {source.path}: item {line_number}: {exc}") from exc
+                yield line_number, record
+            return
+    for _, line_number, record in _records(source):
+        yield line_number, record
+
+
 def _source_key(source: str) -> bytes:
     return hashlib.sha256(source.strip().encode("utf-8")).digest()
 
@@ -89,17 +127,44 @@ def mix(
     seed: int,
     extra_sources: list[TrainSource],
     validation_fraction: float | None = None,
+    validation_file: Path | None = None,
+    validation_source_field: str = "text",
+    validation_target_field: str = "summary",
+    validation_id_field: str = "id",
 ) -> dict[str, Any]:
     wiki_dir = wiki_dir.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
     wiki_paths = {split: wiki_dir / f"{split}.jsonl" for split in ("train", "validation", "test")}
     if validation_fraction is not None and not 0.0 < validation_fraction < 1.0:
         raise ValueError("WikiLingua validation fraction must be between 0 and 1")
-    required_wiki_splits = ("train", "test") if validation_fraction is not None else ("train", "validation", "test")
+    if validation_fraction is not None and validation_file is not None:
+        raise ValueError("Choose either --wikilingua-validation-fraction or --validation-file, not both")
+    external_validation = (
+        TrainSource(
+            "external_validation",
+            validation_file.expanduser().resolve(),
+            validation_source_field,
+            validation_target_field,
+            validation_id_field,
+        )
+        if validation_file is not None
+        else None
+    )
+    required_wiki_splits = (
+        ("train", "test")
+        if validation_fraction is not None or external_validation is not None
+        else ("train", "validation", "test")
+    )
     for path in (*(wiki_paths[split] for split in required_wiki_splits), *(source.path for source in extra_sources)):
         if not path.is_file():
             raise FileNotFoundError(path)
-    if output_dir == wiki_dir or any(output_dir == source.path.parent for source in extra_sources):
+    if external_validation is not None and not external_validation.path.is_file():
+        raise FileNotFoundError(external_validation.path)
+    if (
+        output_dir == wiki_dir
+        or any(output_dir == source.path.parent for source in extra_sources)
+        or (external_validation is not None and output_dir == external_validation.path.parent)
+    ):
         raise ValueError("Output directory must differ from every input directory")
     all_sources = [
         *extra_sources,
@@ -108,7 +173,27 @@ def mix(
 
     validation_entries: list[tuple[int, int]] = []
     validation_source = "wikilingua_validation"
-    if validation_fraction is None:
+    external_validation_count: int | None = None
+    external_validation_source: TrainSource | None = None
+    if external_validation is not None:
+        test_sources = {
+            _source_key(record.source)
+            for _, _, record in _records(TrainSource("test", wiki_paths["test"], "text", "summary", "id"))
+        }
+        validation_sources: set[bytes] = set()
+        external_validation_count = 0
+        for _, record in _external_records(external_validation):
+            validation_sources.add(_source_key(record.source))
+            external_validation_count += 1
+        if not external_validation_count:
+            raise ValueError(f"Validation file is empty: {external_validation.path}")
+        overlap = validation_sources & test_sources
+        if overlap:
+            raise ValueError(f"Validation file shares {len(overlap)} exact source document(s) with WikiLingua test")
+        held_out_sources = validation_sources | test_sources
+        external_validation_source = external_validation
+        validation_source = str(external_validation.path)
+    elif validation_fraction is None:
         held_out_sources = {
             _source_key(record.source)
             for split in ("validation", "test")
@@ -197,7 +282,20 @@ def mix(
                 handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     _write_atomic(output_dir / "train.jsonl", write_train)
-    if validation_fraction is None:
+    if external_validation_source is not None:
+
+        def write_external_validation(temporary: Path) -> None:
+            with temporary.open("w", encoding="utf-8") as handle:
+                for line_number, record in _external_records(external_validation_source):
+                    row = {
+                        "id": f"external_validation:{line_number}:{record.example_id or line_number}",
+                        "text": record.source,
+                        "summary": record.target,
+                    }
+                    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+        _write_atomic(output_dir / "validation.jsonl", write_external_validation)
+    elif validation_fraction is None:
         _write_atomic(
             output_dir / "validation.jsonl", lambda temporary: shutil.copyfile(wiki_paths["validation"], temporary)
         )
@@ -227,7 +325,7 @@ def mix(
         "seed": seed,
         "validation_source": validation_source,
         "validation_fraction_requested": validation_fraction,
-        "validation_records": len(validation_entries) if validation_fraction is not None else None,
+        "validation_records": len(validation_entries) if validation_fraction is not None else external_validation_count,
         "validation_fraction_realized": len(validation_entries) / eligible_count
         if validation_fraction is not None
         else None,
@@ -287,6 +385,10 @@ def main() -> None:
         type=float,
         help="derive validation from this fraction of WikiLingua train, grouped by exact source text",
     )
+    parser.add_argument("--validation-file", type=Path, help="use an external validation JSON/JSONL file")
+    parser.add_argument("--validation-source-field", default="text")
+    parser.add_argument("--validation-target-field", default="summary")
+    parser.add_argument("--validation-id-field", default="id")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batch-source-field", default="input")
     parser.add_argument("--batch-target-field", default="output")
@@ -344,6 +446,10 @@ def main() -> None:
         seed=args.seed,
         extra_sources=extras,
         validation_fraction=args.wikilingua_validation_fraction,
+        validation_file=args.validation_file,
+        validation_source_field=args.validation_source_field,
+        validation_target_field=args.validation_target_field,
+        validation_id_field=args.validation_id_field,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
 

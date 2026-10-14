@@ -30,6 +30,10 @@ SEED="${MIX_SEED:-42}"
 EPOCHS="${FULL_FINETUNE_EPOCHS:-4}"
 OVERWRITE="${OVERWRITE_OUTPUT_DIR:-false}"
 WIKI_VALIDATION_FRACTION="${WIKILINGUA_VALIDATION_FRACTION:-}"
+VALIDATION_FILE="${MIXED_VALIDATION_FILE:-}"
+VALIDATION_SOURCE_FIELD="${MIXED_VALIDATION_SOURCE_FIELD:-text}"
+VALIDATION_TARGET_FIELD="${MIXED_VALIDATION_TARGET_FIELD:-summary}"
+VALIDATION_ID_FIELD="${MIXED_VALIDATION_ID_FIELD:-id}"
 
 usage() {
   cat <<'EOF'
@@ -43,8 +47,12 @@ WikiLingua train split. Train once, then evaluate the validation-best model.
   --batch-dir PATH         Directory containing batch*.jsonl (required)
   --batch-pattern GLOB     Batch filename pattern (default: batch*.jsonl)
   --prepared-train PATH    Existing prepared train file (default: datasets/90k/train.jsonl)
-  --wikilingua-dir PATH    WikiLingua train/validation/test directory
+  --wikilingua-dir PATH    WikiLingua train/test directory (validation also required by default)
   --wikilingua-validation-fraction F  Derive validation from WikiLingua train (e.g. 0.05)
+  --validation-file PATH   Use an external validation JSON/JSONL instead
+  --validation-source-field NAME  External validation source key (default: text)
+  --validation-target-field NAME  External validation target key (default: summary)
+  --validation-id-field NAME      External validation ID key (default: id)
   --mixed-dir PATH         Directory for the new combined dataset
   --output-dir PATH        Training checkpoints, config, and test predictions
   --batch-source-field NAME   Batch source key (default: input)
@@ -90,6 +98,10 @@ while (($#)); do
     --prepared-id-field) value "$@"; PREPARED_ID_FIELD="$2"; shift 2 ;;
     --wikilingua-dir) value "$@"; WIKI_DIR="$2"; shift 2 ;;
     --wikilingua-validation-fraction) value "$@"; WIKI_VALIDATION_FRACTION="$2"; shift 2 ;;
+    --validation-file) value "$@"; VALIDATION_FILE="$2"; shift 2 ;;
+    --validation-source-field) value "$@"; VALIDATION_SOURCE_FIELD="$2"; shift 2 ;;
+    --validation-target-field) value "$@"; VALIDATION_TARGET_FIELD="$2"; shift 2 ;;
+    --validation-id-field) value "$@"; VALIDATION_ID_FIELD="$2"; shift 2 ;;
     --mixed-dir) value "$@"; MIXED_DIR="$2"; shift 2 ;;
     --output-dir) value "$@"; OUTPUT_DIR="$2"; shift 2 ;;
     --source-field) value "$@"; PREPARED_SOURCE_FIELD="$2"; shift 2 ;;
@@ -138,6 +150,14 @@ mix_args=( \
 )
 if [[ -n "${WIKI_VALIDATION_FRACTION}" ]]; then
   mix_args+=(--wikilingua-validation-fraction "${WIKI_VALIDATION_FRACTION}")
+fi
+if [[ -n "${VALIDATION_FILE}" ]]; then
+  mix_args+=(
+    --validation-file "${VALIDATION_FILE}"
+    --validation-source-field "${VALIDATION_SOURCE_FIELD}"
+    --validation-target-field "${VALIDATION_TARGET_FIELD}"
+    --validation-id-field "${VALIDATION_ID_FIELD}"
+  )
 fi
 "${PYTHON_BIN}" "${ROOT}/scripts/mix_summary_wikilingua.py" "${mix_args[@]}"
 

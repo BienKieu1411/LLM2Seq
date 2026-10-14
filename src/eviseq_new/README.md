@@ -247,6 +247,14 @@ the original test split unchanged. This option does not require a pre-existing
 WikiLingua validation file. The realized fraction can differ slightly from 5%
 because duplicate source documents are kept together.
 
+To select the checkpoint using an existing validation file such as
+`datasets/200k/val_clean.json`, pass `--validation-file datasets/200k/val_clean.json`
+instead of the fraction option. JSON arrays, single JSON objects, and JSONL are
+accepted. The default fields are `text` and `summary`; if the file uses
+`input`/`output`, pass `--validation-source-field input
+--validation-target-field output`. Validation sources that overlap WikiLingua
+test cause an error, and matching rows are excluded from mixed train.
+
 The wrapper also accepts `EMBEDDINGGEMMA2_MODEL=/path/to/local/embeddinggemma-2`
 instead of `--encoder-model`. It uses offline loading and will not download a
 checkpoint. The server environment must provide `transformers>=5.19.0`.
