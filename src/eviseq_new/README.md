@@ -238,6 +238,15 @@ bash scripts/run_mixed_wikilingua_embeddinggemma2.sh \
   --epochs 4
 ```
 
+By default, the runner copies the existing WikiLingua `validation.jsonl` and
+`test.jsonl`. If you instead want to reserve about 5% of WikiLingua train for
+validation, add `--wikilingua-validation-fraction 0.05`. It groups identical
+source documents before splitting, removes the held-out rows from mixed train,
+filters extra training rows that duplicate validation/test sources, and leaves
+the original test split unchanged. This option does not require a pre-existing
+WikiLingua validation file. The realized fraction can differ slightly from 5%
+because duplicate source documents are kept together.
+
 The wrapper also accepts `EMBEDDINGGEMMA2_MODEL=/path/to/local/embeddinggemma-2`
 instead of `--encoder-model`. It uses offline loading and will not download a
 checkpoint. The server environment must provide `transformers>=5.19.0`.

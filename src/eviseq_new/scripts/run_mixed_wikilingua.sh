@@ -29,19 +29,22 @@ BATCH_PATTERN="${BATCH_PATTERN:-batch*.jsonl}"
 SEED="${MIX_SEED:-42}"
 EPOCHS="${FULL_FINETUNE_EPOCHS:-4}"
 OVERWRITE="${OVERWRITE_OUTPUT_DIR:-false}"
+WIKI_VALIDATION_FRACTION="${WIKILINGUA_VALIDATION_FRACTION:-}"
 
 usage() {
   cat <<'EOF'
 Usage: bash scripts/run_mixed_wikilingua.sh [options]
 
 Create one shuffled train.jsonl from batch*.jsonl (input/output), an existing
-prepared train.jsonl (text/summary), and WikiLingua train. Copy WikiLingua
-validation/test unchanged, train once, then evaluate the validation-best model.
+prepared train.jsonl (text/summary), and WikiLingua train. By default, copy
+WikiLingua validation/test unchanged; optionally derive validation from the
+WikiLingua train split. Train once, then evaluate the validation-best model.
 
   --batch-dir PATH         Directory containing batch*.jsonl (required)
   --batch-pattern GLOB     Batch filename pattern (default: batch*.jsonl)
   --prepared-train PATH    Existing prepared train file (default: datasets/90k/train.jsonl)
   --wikilingua-dir PATH    WikiLingua train/validation/test directory
+  --wikilingua-validation-fraction F  Derive validation from WikiLingua train (e.g. 0.05)
   --mixed-dir PATH         Directory for the new combined dataset
   --output-dir PATH        Training checkpoints, config, and test predictions
   --batch-source-field NAME   Batch source key (default: input)
@@ -86,6 +89,7 @@ while (($#)); do
     --prepared-target-field) value "$@"; PREPARED_TARGET_FIELD="$2"; shift 2 ;;
     --prepared-id-field) value "$@"; PREPARED_ID_FIELD="$2"; shift 2 ;;
     --wikilingua-dir) value "$@"; WIKI_DIR="$2"; shift 2 ;;
+    --wikilingua-validation-fraction) value "$@"; WIKI_VALIDATION_FRACTION="$2"; shift 2 ;;
     --mixed-dir) value "$@"; MIXED_DIR="$2"; shift 2 ;;
     --output-dir) value "$@"; OUTPUT_DIR="$2"; shift 2 ;;
     --source-field) value "$@"; PREPARED_SOURCE_FIELD="$2"; shift 2 ;;
@@ -118,7 +122,7 @@ fi
 
 echo "=== Preparing one mixed train split ==="
 [[ -n "${BATCH_DIR}" ]] || { echo "Pass --batch-dir PATH for the input/output batch JSONLs" >&2; exit 2; }
-"${PYTHON_BIN}" "${ROOT}/scripts/mix_summary_wikilingua.py" \
+mix_args=( \
   --batch-dir "${BATCH_DIR}" \
   --batch-pattern "${BATCH_PATTERN}" \
   --prepared-train "${PREPARED_TRAIN}" \
@@ -130,7 +134,12 @@ echo "=== Preparing one mixed train split ==="
   --prepared-source-field "${PREPARED_SOURCE_FIELD}" \
   --prepared-target-field "${PREPARED_TARGET_FIELD}" \
   --prepared-id-field "${PREPARED_ID_FIELD}" \
-  --seed "${SEED}"
+  --seed "${SEED}" \
+)
+if [[ -n "${WIKI_VALIDATION_FRACTION}" ]]; then
+  mix_args+=(--wikilingua-validation-fraction "${WIKI_VALIDATION_FRACTION}")
+fi
+"${PYTHON_BIN}" "${ROOT}/scripts/mix_summary_wikilingua.py" "${mix_args[@]}"
 
 echo "=== Training once; WikiLingua validation selects best.pt ==="
 echo "Encoder: ${ENCODER_MODEL}"

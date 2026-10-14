@@ -88,11 +88,15 @@ def mix(
     *,
     seed: int,
     extra_sources: list[TrainSource],
+    validation_fraction: float | None = None,
 ) -> dict[str, Any]:
     wiki_dir = wiki_dir.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
     wiki_paths = {split: wiki_dir / f"{split}.jsonl" for split in ("train", "validation", "test")}
-    for path in (*wiki_paths.values(), *(source.path for source in extra_sources)):
+    if validation_fraction is not None and not 0.0 < validation_fraction < 1.0:
+        raise ValueError("WikiLingua validation fraction must be between 0 and 1")
+    required_wiki_splits = ("train", "test") if validation_fraction is not None else ("train", "validation", "test")
+    for path in (*(wiki_paths[split] for split in required_wiki_splits), *(source.path for source in extra_sources)):
         if not path.is_file():
             raise FileNotFoundError(path)
     if output_dir == wiki_dir or any(output_dir == source.path.parent for source in extra_sources):
@@ -102,11 +106,48 @@ def mix(
         TrainSource("wikilingua", wiki_paths["train"], "text", "summary", "id"),
     ]
 
-    held_out_sources = {
-        _source_key(record.source)
-        for split in ("validation", "test")
-        for _, _, record in _records(TrainSource(split, wiki_paths[split], "text", "summary", "id"))
-    }
+    validation_entries: list[tuple[int, int]] = []
+    validation_source = "wikilingua_validation"
+    if validation_fraction is None:
+        held_out_sources = {
+            _source_key(record.source)
+            for split in ("validation", "test")
+            for _, _, record in _records(TrainSource(split, wiki_paths[split], "text", "summary", "id"))
+        }
+    else:
+        test_sources = {
+            _source_key(record.source)
+            for _, _, record in _records(TrainSource("test", wiki_paths["test"], "text", "summary", "id"))
+        }
+        # Split at the source-document level so duplicate source documents cannot
+        # appear in both WikiLingua train and the derived validation set.
+        train_groups: dict[bytes, list[tuple[int, int]]] = {}
+        for offset, line_number, record in _records(
+            TrainSource("wikilingua", wiki_paths["train"], "text", "summary", "id"),
+            skip_empty=True,
+        ):
+            key = _source_key(record.source)
+            if key not in test_sources:
+                train_groups.setdefault(key, []).append((offset, line_number))
+        eligible_count = sum(len(group) for group in train_groups.values())
+        if eligible_count < 2 or len(train_groups) < 2:
+            raise ValueError(
+                "Cannot create WikiLingua validation: need at least two distinct non-test source documents"
+            )
+        target_count = min(eligible_count - 1, max(1, round(eligible_count * validation_fraction)))
+        shuffled_groups = list(train_groups.items())
+        random.Random(seed).shuffle(shuffled_groups)
+        validation_sources: set[bytes] = set()
+        for key, group in shuffled_groups:
+            if len(validation_entries) >= target_count:
+                break
+            if len(validation_entries) + len(group) < eligible_count:
+                validation_sources.add(key)
+                validation_entries.extend(group)
+        if not validation_entries:
+            raise ValueError("Could not select WikiLingua validation records while keeping train non-empty")
+        held_out_sources = test_sources | validation_sources
+        validation_source = "deterministic source-group split from WikiLingua train"
     # Store offsets rather than long documents; shuffled rows are read from their
     # original files only when the canonical output is written.
     entries: list[tuple[int, int, int]] = []
@@ -156,12 +197,40 @@ def mix(
                 handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     _write_atomic(output_dir / "train.jsonl", write_train)
-    for split in ("validation", "test"):
+    if validation_fraction is None:
         _write_atomic(
-            output_dir / f"{split}.jsonl", lambda temporary, split=split: shutil.copyfile(wiki_paths[split], temporary)
+            output_dir / "validation.jsonl", lambda temporary: shutil.copyfile(wiki_paths["validation"], temporary)
         )
+    else:
+
+        def write_validation(temporary: Path) -> None:
+            with wiki_paths["train"].open("rb") as input_handle, temporary.open("w", encoding="utf-8") as output_handle:
+                for offset, line_number in sorted(validation_entries, key=lambda item: item[1]):
+                    input_handle.seek(offset)
+                    row_data = json.loads(input_handle.readline())
+                    record = CanonicalRecord.from_mapping(
+                        row_data,
+                        source_field="text",
+                        target_field="summary",
+                        id_field="id",
+                    )
+                    row = {
+                        "id": f"wikilingua_validation:{line_number}:{record.example_id or line_number}",
+                        "text": record.source,
+                        "summary": record.target,
+                    }
+                    output_handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+        _write_atomic(output_dir / "validation.jsonl", write_validation)
+    _write_atomic(output_dir / "test.jsonl", lambda temporary: shutil.copyfile(wiki_paths["test"], temporary))
     report = {
         "seed": seed,
+        "validation_source": validation_source,
+        "validation_fraction_requested": validation_fraction,
+        "validation_records": len(validation_entries) if validation_fraction is not None else None,
+        "validation_fraction_realized": len(validation_entries) / eligible_count
+        if validation_fraction is not None
+        else None,
         "train_sources": [
             {
                 "label": source.label,
@@ -176,7 +245,12 @@ def mix(
             for source in all_sources
         ],
         "train_total": len(entries),
-        "validation_test": "byte-identical copies of WikiLingua splits",
+        "validation_split": (
+            "byte-identical copy of WikiLingua validation"
+            if validation_fraction is None
+            else "source-group holdout from WikiLingua train"
+        ),
+        "test_split": "byte-identical copy of WikiLingua test",
     }
     _write_atomic(
         output_dir / "mix_report.json",
@@ -208,6 +282,11 @@ def main() -> None:
     )
     parser.add_argument("--wikilingua-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--wikilingua-validation-fraction",
+        type=float,
+        help="derive validation from this fraction of WikiLingua train, grouped by exact source text",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batch-source-field", default="input")
     parser.add_argument("--batch-target-field", default="output")
@@ -259,7 +338,13 @@ def main() -> None:
     if not extras:
         parser.error("provide at least one of --batch-dir, --prepared-train, or --other-train")
 
-    report = mix(args.wikilingua_dir, args.output_dir, seed=args.seed, extra_sources=extras)
+    report = mix(
+        args.wikilingua_dir,
+        args.output_dir,
+        seed=args.seed,
+        extra_sources=extras,
+        validation_fraction=args.wikilingua_validation_fraction,
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
