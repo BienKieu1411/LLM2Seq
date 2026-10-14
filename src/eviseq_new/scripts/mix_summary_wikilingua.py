@@ -338,13 +338,15 @@ def mix(
                 "records_kept": counts[source.label],
                 "records_skipped_empty_source_or_target": skipped_empty[source.label],
                 "first_empty_line_numbers": empty_line_numbers.get(source.label, []),
-                "records_skipped_for_exact_wiki_validation_or_test_source_match": skipped_overlap[source.label],
+                "records_skipped_for_exact_held_out_source_match": skipped_overlap[source.label],
             }
             for source in all_sources
         ],
         "train_total": len(entries),
         "validation_split": (
-            "byte-identical copy of WikiLingua validation"
+            "external validation file"
+            if external_validation_source is not None
+            else "byte-identical copy of WikiLingua validation"
             if validation_fraction is None
             else "source-group holdout from WikiLingua train"
         ),

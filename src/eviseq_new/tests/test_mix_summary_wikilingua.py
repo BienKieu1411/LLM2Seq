@@ -165,6 +165,8 @@ def test_external_validation_json_is_canonicalized_and_excluded_from_train(tmp_p
         text=True,
     )
     mixed = tmp_path / "mixed"
+    report = json.loads((mixed / "mix_report.json").read_text(encoding="utf-8"))
+    assert report["validation_split"] == "external validation file"
     assert _read_jsonl(mixed / "validation.jsonl") == [
         {"id": "external_validation:1:val-1", "text": "validation source", "summary": "validation summary"}
     ]
