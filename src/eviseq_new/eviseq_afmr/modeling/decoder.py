@@ -1,8 +1,9 @@
-"""Qwen causal decoder with one copied cross-attention in every layer."""
+"""HF causal decoder with one copied cross-attention in every decoder layer."""
 
 from __future__ import annotations
 
 import copy
+import inspect
 import math
 from typing import Any, Optional
 
@@ -55,6 +56,35 @@ def _load_decoder(
     return model, config
 
 
+def _decoder_backbone(causal_lm: nn.Module) -> tuple[nn.Module, str]:
+    """Find a standard Transformers causal-LM backbone and its decoder blocks."""
+
+    backbone = None
+    for attribute in ("model", "transformer", "gpt_neox"):
+        candidate = getattr(causal_lm, attribute, None)
+        if candidate is not None:
+            backbone = candidate
+            break
+    if backbone is None:
+        raise ValueError(
+            f"Unsupported causal LM {type(causal_lm).__name__}: expected a model/transformer/gpt_neox backbone"
+        )
+    for attribute in ("layers", "h", "blocks"):
+        if isinstance(getattr(backbone, attribute, None), (nn.ModuleList, list, tuple)):
+            return backbone, attribute
+    raise ValueError(
+        f"Unsupported causal LM backbone {type(backbone).__name__}: expected decoder layers at .layers, .h, or .blocks"
+    )
+
+
+def _required_config_int(config: Any, names: tuple[str, ...], description: str) -> int:
+    for name in names:
+        value = getattr(config, name, None)
+        if value is not None:
+            return int(value)
+    raise ValueError(f"Decoder config is missing {description} ({', '.join(names)})")
+
+
 class CopiedCrossAttention(nn.Module):
     def __init__(self, self_attention: nn.Module, input_norm: nn.Module, config: Any, dropout: float):
         super().__init__()
@@ -62,12 +92,19 @@ class CopiedCrossAttention(nn.Module):
         self.num_heads = int(config.num_attention_heads)
         self.num_kv_heads = int(config.num_key_value_heads)
         self.head_dim = int(getattr(config, "head_dim", self.hidden_size // self.num_heads))
+        if self.num_heads % self.num_kv_heads != 0:
+            raise ValueError("Decoder attention heads must be divisible by key/value heads")
         self.q_proj = copy.deepcopy(self_attention.q_proj)
         self.k_proj = copy.deepcopy(self_attention.k_proj)
         self.v_proj = copy.deepcopy(self_attention.v_proj)
         self.o_proj = copy.deepcopy(self_attention.o_proj)
         self.q_norm = copy.deepcopy(getattr(self_attention, "q_norm", nn.Identity()))
         self.k_norm = copy.deepcopy(getattr(self_attention, "k_norm", nn.Identity()))
+        # Gemma-style attention can use a non-standard query scale. Multiplying
+        # Q before SDPA preserves that scale while retaining the fused kernel.
+        raw_attention_scale = getattr(self_attention, "scaling", None)
+        attention_scale = self.head_dim**-0.5 if raw_attention_scale is None else float(raw_attention_scale)
+        self.query_scale = attention_scale * math.sqrt(self.head_dim)
         self.memory_norm = copy.deepcopy(input_norm)
         self.dropout = float(dropout)
         self._cache: Optional[tuple[torch.Tensor, torch.Tensor]] = None
@@ -96,6 +133,8 @@ class CopiedCrossAttention(nn.Module):
         query = self.q_norm(
             self.q_proj(query_states).view(batch, query_length, self.num_heads, self.head_dim)
         ).transpose(1, 2)
+        if self.query_scale != 1.0:
+            query = query * self.query_scale
         key, value = (
             self._cache if self._cache is not None and not self.training else self._memory_kv(memory, value_memory)
         )
@@ -165,11 +204,48 @@ class DecoderLayerWithCross(GradientCheckpointingLayer):
         self.cross_gate = nn.Parameter(torch.tensor(math.log(gate_init / (gate_max - gate_init)), dtype=torch.float32))
         self.cross_gate_max = float(gate_max)
         self.index = int(index)
+        attention_parameters = inspect.signature(base.self_attn.forward).parameters
+        self._attention_parameters = frozenset(attention_parameters)
+        self._attention_accepts_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in attention_parameters.values()
+        )
+        self._gemma2_feedforward_norms = all(
+            hasattr(base, name) for name in ("pre_feedforward_layernorm", "post_feedforward_layernorm")
+        )
+
+    def _run_self_attention(
+        self,
+        hidden_states: torch.Tensor,
+        *,
+        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]],
+        attention_mask: Optional[torch.Tensor],
+        position_ids: Optional[torch.Tensor],
+        past_key_values: Optional[Any],
+        use_cache: bool,
+        kwargs: dict[str, Any],
+    ) -> torch.Tensor:
+        attention_kwargs = dict(kwargs)
+        attention_kwargs.update(
+            {
+                "hidden_states": hidden_states,
+                "position_embeddings": position_embeddings,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+                "past_key_values": past_key_values,
+                "use_cache": use_cache,
+            }
+        )
+        if not self._attention_accepts_kwargs:
+            attention_kwargs = {
+                key: value for key, value in attention_kwargs.items() if key in self._attention_parameters
+            }
+        result = self.base.self_attn(**attention_kwargs)
+        return result[0] if isinstance(result, (tuple, list)) else result
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
         past_key_values: Optional[Any] = None,
@@ -177,18 +253,22 @@ class DecoderLayerWithCross(GradientCheckpointingLayer):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         encoder_attention_bias: Optional[torch.Tensor] = None,
         encoder_value_states: Optional[torch.Tensor] = None,
+        use_cache: bool = False,
         **kwargs: Any,
     ) -> torch.Tensor:
         residual = hidden_states
         normalized = self.base.input_layernorm(hidden_states)
-        self_states, _ = self.base.self_attn(
-            hidden_states=normalized,
+        self_states = self._run_self_attention(
+            normalized,
             position_embeddings=position_embeddings,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,
-            **kwargs,
+            use_cache=use_cache,
+            kwargs=kwargs,
         )
+        if self._gemma2_feedforward_norms:
+            self_states = self.base.post_attention_layernorm(self_states)
         hidden_states = residual + self_states
         if encoder_hidden_states is not None:
             cross = self.cross(
@@ -202,8 +282,14 @@ class DecoderLayerWithCross(GradientCheckpointingLayer):
                 hidden_states + self.cross_gate_max * torch.sigmoid(self.cross_gate).to(hidden_states.dtype) * cross
             )
         residual = hidden_states
-        hidden_states = self.base.post_attention_layernorm(hidden_states)
-        return residual + self.base.mlp(hidden_states)
+        if self._gemma2_feedforward_norms:
+            hidden_states = self.base.pre_feedforward_layernorm(hidden_states)
+            hidden_states = self.base.mlp(hidden_states)
+            hidden_states = self.base.post_feedforward_layernorm(hidden_states)
+        else:
+            hidden_states = self.base.post_attention_layernorm(hidden_states)
+            hidden_states = self.base.mlp(hidden_states)
+        return residual + hidden_states
 
     @torch.no_grad()
     def prepare_cache(self, memory: torch.Tensor, value_memory: Optional[torch.Tensor] = None) -> None:
@@ -213,7 +299,7 @@ class DecoderLayerWithCross(GradientCheckpointingLayer):
         self.cross.clear_cache()
 
 
-class QwenCrossDecoder(nn.Module):
+class CausalLMWithCrossAttention(nn.Module):
     def __init__(
         self,
         name: str,
@@ -227,17 +313,66 @@ class QwenCrossDecoder(nn.Module):
         causal_lm, model_config = _load_decoder(name, dtype, trust_remote_code, attention_implementation)
         self.model_name = str(name)
         self.config = model_config
+        self.model_type = str(getattr(model_config, "model_type", "unknown"))
         self.ce_chunk_size = int(config.get("ce_chunk_size", 1024))
         if self.ce_chunk_size <= 0:
             raise ValueError("ce_chunk_size must be positive")
-        self.backbone = causal_lm.model
-        self.lm_head = causal_lm.lm_head
+        self.backbone, self._layer_attribute = _decoder_backbone(causal_lm)
+        layer_stack = getattr(self.backbone, self._layer_attribute)
+        self._embedding_attribute = next(
+            (name for name in ("embed_tokens", "wte", "word_embeddings") if hasattr(self.backbone, name)), None
+        )
+        if self._embedding_attribute is None:
+            raise ValueError(
+                f"Unsupported decoder backbone {type(self.backbone).__name__}: expected input embeddings at "
+                ".embed_tokens, .wte, or .word_embeddings"
+            )
+        self.lm_head = getattr(causal_lm, "lm_head", None)
+        if self.lm_head is None:
+            self.lm_head = causal_lm.get_output_embeddings() if hasattr(causal_lm, "get_output_embeddings") else None
+        if self.lm_head is None:
+            raise ValueError(f"Unsupported causal LM {type(causal_lm).__name__}: output projection was not found")
+        hidden_size = _required_config_int(model_config, ("hidden_size", "d_model", "n_embd"), "hidden size")
+        final_logit_softcap = getattr(model_config, "final_logit_softcapping", None)
+        if final_logit_softcap not in (None, 0, 0.0):
+            raise ValueError(
+                f"Unsupported decoder model_type={self.model_type!r}: final-logit softcapping is not implemented "
+                "by AFMR's custom language-model head"
+            )
+        num_heads = _required_config_int(
+            model_config, ("num_attention_heads", "n_head", "num_heads"), "attention head count"
+        )
+        num_kv_heads = _required_config_int(
+            model_config,
+            ("num_key_value_heads", "num_kv_heads", "num_attention_heads", "n_head", "num_heads"),
+            "key/value head count",
+        )
+        head_dim = (
+            _required_config_int(model_config, ("head_dim",), "head dimension")
+            if getattr(model_config, "head_dim", None) is not None
+            else hidden_size // num_heads
+        )
+        if min(hidden_size, num_heads, num_kv_heads, head_dim) <= 0 or hidden_size % num_heads != 0:
+            raise ValueError(
+                f"Invalid decoder dimensions for model_type={self.model_type!r}: hidden={hidden_size}, "
+                f"heads={num_heads}, kv_heads={num_kv_heads}, head_dim={head_dim}"
+            )
+        attention_config = type(
+            "DecoderAttentionConfig",
+            (),
+            {
+                "hidden_size": hidden_size,
+                "num_attention_heads": num_heads,
+                "num_key_value_heads": num_kv_heads,
+                "head_dim": head_dim,
+            },
+        )()
         copy_config = config.get("grounded_copy", {})
         self.grounded_copy = None
         if copy_config.get("enabled", False):
             with torch.random.fork_rng(devices=[]):
                 self.grounded_copy = GroundedCopyHead(
-                    int(model_config.hidden_size),
+                    hidden_size,
                     int(copy_config.get("key_dim", 128)),
                     float(copy_config.get("gate_init", 0.05)),
                 )
@@ -246,17 +381,45 @@ class QwenCrossDecoder(nn.Module):
         gate_init = float(config.get("cross_gate_init", 0.10))
         gate_max = float(config.get("cross_gate_max", 1.0))
         wrapped = []
-        for index, layer in enumerate(list(self.backbone.layers)):
-            if not hasattr(layer, "self_attn"):
-                raise ValueError("AFMR requires decoder layers with self_attn")
+        if not layer_stack:
+            raise ValueError(f"Unsupported decoder model_type={self.model_type!r}: decoder has no layers")
+        for index, layer in enumerate(list(layer_stack)):
+            missing = [
+                name
+                for name in ("self_attn", "input_layernorm", "post_attention_layernorm", "mlp")
+                if not hasattr(layer, name)
+            ]
+            attention_missing = (
+                [name for name in ("q_proj", "k_proj", "v_proj", "o_proj") if not hasattr(layer.self_attn, name)]
+                if hasattr(layer, "self_attn")
+                else ["self_attn"]
+            )
+            if missing or attention_missing:
+                raise ValueError(
+                    f"Unsupported decoder model_type={self.model_type!r}, layer={index}: expected a split-projection "
+                    "pre-norm decoder block with self_attn.{q_proj,k_proj,v_proj,o_proj}, input_layernorm, "
+                    "post_attention_layernorm, and mlp; missing "
+                    f"{sorted(set(missing + attention_missing))}"
+                )
+            attention_softcap = getattr(layer.self_attn, "attn_logit_softcapping", None)
+            if attention_softcap not in (None, 0, 0.0):
+                raise ValueError(
+                    f"Unsupported decoder model_type={self.model_type!r}: attention logit softcapping is not "
+                    "implemented by AFMR cross-attention"
+                )
             if hasattr(layer.self_attn, "layer_idx"):
                 layer.self_attn.layer_idx = index
+            else:
+                raise ValueError(
+                    f"Unsupported decoder model_type={self.model_type!r}, layer={index}: attention must expose "
+                    "layer_idx for cached generation"
+                )
             wrapped.append(
                 DecoderLayerWithCross(
-                    layer, model_config, float(config.get("attention_dropout", 0.0)), gate_init, gate_max, index
+                    layer, attention_config, float(config.get("attention_dropout", 0.0)), gate_init, gate_max, index
                 )
             )
-        self.backbone.layers = nn.ModuleList(wrapped)
+        setattr(self.backbone, self._layer_attribute, nn.ModuleList(wrapped))
         self.cross_attention_indices = tuple(range(len(wrapped)))
         self.backbone.config.use_cache = False
         if gradient_checkpointing and hasattr(self.backbone, "gradient_checkpointing_enable"):
@@ -264,7 +427,11 @@ class QwenCrossDecoder(nn.Module):
 
     @property
     def embed_tokens(self) -> nn.Module:
-        return self.backbone.embed_tokens
+        return getattr(self.backbone, self._embedding_attribute)
+
+    @property
+    def decoder_layers(self) -> nn.ModuleList:
+        return getattr(self.backbone, self._layer_attribute)
 
     def forward(
         self,
@@ -345,17 +512,17 @@ class QwenCrossDecoder(nn.Module):
 
     @torch.no_grad()
     def prepare_cross_cache(self, memory: torch.Tensor, value_memory: Optional[torch.Tensor] = None) -> None:
-        for layer in self.backbone.layers:
+        for layer in self.decoder_layers:
             if isinstance(layer, DecoderLayerWithCross):
                 layer.prepare_cache(memory, value_memory)
 
     def clear_cross_cache(self) -> None:
-        for layer in self.backbone.layers:
+        for layer in self.decoder_layers:
             if isinstance(layer, DecoderLayerWithCross):
                 layer.clear_cache()
 
     def select_cross_cache(self, indices: torch.Tensor) -> None:
-        for layer in self.backbone.layers:
+        for layer in self.decoder_layers:
             if isinstance(layer, DecoderLayerWithCross) and layer.cross._cache is not None:
                 layer.cross._cache = tuple(value.index_select(0, indices) for value in layer.cross._cache)
 
@@ -365,9 +532,13 @@ class QwenCrossDecoder(nn.Module):
         if not trainable:
             if self.grounded_copy is not None:
                 self.grounded_copy.requires_grad_(True)
-            for layer in self.backbone.layers:
+            for layer in self.decoder_layers:
                 if isinstance(layer, DecoderLayerWithCross):
                     for parameter in layer.cross.parameters():
                         parameter.requires_grad = True
                     layer.cross_norm.requires_grad_(True)
                     layer.cross_gate.requires_grad = True
+
+
+# Preserve the old internal import path for checkpoints/scripts that still use it.
+QwenCrossDecoder = CausalLMWithCrossAttention

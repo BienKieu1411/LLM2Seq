@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 
 from .afmr import AdaptiveFullMemoryResidualBridge
-from .decoder import QwenCrossDecoder
+from .decoder import CausalLMWithCrossAttention
 from .encoder import build_encoder, resolve_dtype
 from .outputs import AFMROutput, BridgeState
 
@@ -19,7 +19,7 @@ class EviSeqAFMR(nn.Module):
         self.config = config
         self.encoder = build_encoder(config)
         decoder_cfg = config["model"]
-        self.decoder = QwenCrossDecoder(
+        self.decoder = CausalLMWithCrossAttention(
             str(decoder_cfg["decoder_name"]),
             config["decoder"],
             resolve_dtype(str(decoder_cfg.get("dtype", "float32"))),

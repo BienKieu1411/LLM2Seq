@@ -34,6 +34,7 @@ VALIDATION_FILE="${MIXED_VALIDATION_FILE:-}"
 VALIDATION_SOURCE_FIELD="${MIXED_VALIDATION_SOURCE_FIELD:-text}"
 VALIDATION_TARGET_FIELD="${MIXED_VALIDATION_TARGET_FIELD:-summary}"
 VALIDATION_ID_FIELD="${MIXED_VALIDATION_ID_FIELD:-id}"
+REBUILD_MIXED_DATA=false
 
 usage() {
   cat <<'EOF'
@@ -70,6 +71,7 @@ WikiLingua train split. Train once, then evaluate the validation-best model.
   --encoder-model PATH     Local encoder checkpoint (default: server Nemotron-3-Embed-1B-BF16 path)
   --decoder-model PATH     Local decoder checkpoint (default: server Qwen3-0.6B path)
   --cuda-visible-devices IDS  One or two GPU IDs, e.g. 0,1
+  --rebuild-mixed-data     Recreate mixed train/validation/test even if present
   --overwrite-output-dir  Intentionally rerun in an existing output directory
   -h, --help               Show this message
 
@@ -116,6 +118,7 @@ while (($#)); do
     --encoder-model) value "$@"; export ENCODER_MODEL="$2"; shift 2 ;;
     --decoder-model) value "$@"; export DECODER_MODEL="$2"; shift 2 ;;
     --cuda-visible-devices) value "$@"; export CUDA_VISIBLE_DEVICES="$2"; shift 2 ;;
+    --rebuild-mixed-data) REBUILD_MIXED_DATA=true; shift ;;
     --overwrite-output-dir) OVERWRITE=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -132,34 +135,46 @@ if [[ "${OVERWRITE}" != 1 && "${OVERWRITE}" != true && "${OVERWRITE}" != yes ]] 
   exit 1
 fi
 
-echo "=== Preparing one mixed train split ==="
-[[ -n "${BATCH_DIR}" ]] || { echo "Pass --batch-dir PATH for the input/output batch JSONLs" >&2; exit 2; }
-mix_args=( \
-  --batch-dir "${BATCH_DIR}" \
-  --batch-pattern "${BATCH_PATTERN}" \
-  --prepared-train "${PREPARED_TRAIN}" \
-  --wikilingua-dir "${WIKI_DIR}" \
-  --output-dir "${MIXED_DIR}" \
-  --batch-source-field "${BATCH_SOURCE_FIELD:-input}" \
-  --batch-target-field "${BATCH_TARGET_FIELD:-output}" \
-  --batch-id-field "${BATCH_ID_FIELD:-id}" \
-  --prepared-source-field "${PREPARED_SOURCE_FIELD}" \
-  --prepared-target-field "${PREPARED_TARGET_FIELD}" \
-  --prepared-id-field "${PREPARED_ID_FIELD}" \
-  --seed "${SEED}" \
-)
-if [[ -n "${WIKI_VALIDATION_FRACTION}" ]]; then
-  mix_args+=(--wikilingua-validation-fraction "${WIKI_VALIDATION_FRACTION}")
-fi
-if [[ -n "${VALIDATION_FILE}" ]]; then
-  mix_args+=(
-    --validation-file "${VALIDATION_FILE}"
-    --validation-source-field "${VALIDATION_SOURCE_FIELD}"
-    --validation-target-field "${VALIDATION_TARGET_FIELD}"
-    --validation-id-field "${VALIDATION_ID_FIELD}"
+mixed_data_ready=true
+for split in train validation test; do
+  if [[ ! -s "${MIXED_DIR}/${split}.jsonl" ]]; then
+    mixed_data_ready=false
+    break
+  fi
+done
+
+if [[ "${mixed_data_ready}" == true && "${REBUILD_MIXED_DATA}" != true ]]; then
+  echo "=== Mixed dataset already exists; skipping data preparation: ${MIXED_DIR} ==="
+else
+  echo "=== Preparing one mixed train split ==="
+  [[ -n "${BATCH_DIR}" ]] || { echo "Pass --batch-dir PATH to build mixed data" >&2; exit 2; }
+  mix_args=( \
+    --batch-dir "${BATCH_DIR}" \
+    --batch-pattern "${BATCH_PATTERN}" \
+    --prepared-train "${PREPARED_TRAIN}" \
+    --wikilingua-dir "${WIKI_DIR}" \
+    --output-dir "${MIXED_DIR}" \
+    --batch-source-field "${BATCH_SOURCE_FIELD:-input}" \
+    --batch-target-field "${BATCH_TARGET_FIELD:-output}" \
+    --batch-id-field "${BATCH_ID_FIELD:-id}" \
+    --prepared-source-field "${PREPARED_SOURCE_FIELD}" \
+    --prepared-target-field "${PREPARED_TARGET_FIELD}" \
+    --prepared-id-field "${PREPARED_ID_FIELD}" \
+    --seed "${SEED}" \
   )
+  if [[ -n "${WIKI_VALIDATION_FRACTION}" ]]; then
+    mix_args+=(--wikilingua-validation-fraction "${WIKI_VALIDATION_FRACTION}")
+  fi
+  if [[ -n "${VALIDATION_FILE}" ]]; then
+    mix_args+=(
+      --validation-file "${VALIDATION_FILE}"
+      --validation-source-field "${VALIDATION_SOURCE_FIELD}"
+      --validation-target-field "${VALIDATION_TARGET_FIELD}"
+      --validation-id-field "${VALIDATION_ID_FIELD}"
+    )
+  fi
+  "${PYTHON_BIN}" "${ROOT}/scripts/mix_summary_wikilingua.py" "${mix_args[@]}"
 fi
-"${PYTHON_BIN}" "${ROOT}/scripts/mix_summary_wikilingua.py" "${mix_args[@]}"
 
 echo "=== Training once; WikiLingua validation selects best.pt ==="
 echo "Encoder: ${ENCODER_MODEL}"

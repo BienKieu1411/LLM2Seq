@@ -3,12 +3,16 @@
 AFMR (Adaptive Full-Memory Residual) is a full-source encoder–decoder architecture for general text summarization:
 
 ```text
-pretrained encoder → value-anchored AFMR interface → cross-attention Qwen decoder → contextual copy/LM mixture → greedy
+pretrained encoder → value-anchored AFMR interface → cross-attention causal-LM decoder → contextual copy/LM mixture → greedy
 ```
 
 The bridge preserves every valid source token. A document/prompt/requested-budget controller conditions a low-rank depth residual in encoder space, a low-rank encoder-to-decoder feature residual, and one multi-scale source prior. Depth weights have shape `[batch, source_tokens, depth_taps]`: a shared learned scorer reads each normalized candidate token representation, plus a document-conditioned depth preference. Softmax is over depth, not tokens; selection runs once after the encoder. Residual output factors and the depth/focus scorers start at zero; gates and prior strength are bounded, but learned residual vector norms are not mathematically bounded. The prior is additive `[batch, source_tokens]` and is consumed by every decoder cross-attention layer. There are no banks, hard top-k pruning, per-layer routers, rerankers, beam search, KD, or test-time evidence labels.
 
 Focus regions are overlapping **token windows**, not selected sentences. Decoder memory contains the entire source. The only objective is token-level cross-entropy (CE): depth, feature and focus routes all learn through it. There is no positive-sentence mining, allocation loss, or contrastive head. External evidence labels are ignored.
+
+## Causal decoder compatibility
+
+The decoder adapter loads local Transformers `AutoModelForCausalLM` checkpoints and adds copied cross-attention to each decoder block. It is tested with Llama, Mistral, Qwen2, Qwen3, and Gemma text models whose blocks expose separate `q_proj`/`k_proj`/`v_proj`/`o_proj` layers, `input_layernorm`, `post_attention_layernorm`, an `mlp`, and cache layer indices. Llama 3.2 1B Instruct uses this interface. Unsupported fused-QKV layouts and attention/final-logit softcapping fail at load time with a specific error rather than being treated as compatible. This is structural support for the tested decoder families, not a promise that every Transformers causal LM can be wrapped without an adapter.
 
 ## Value-anchored retrieval adaptation
 
