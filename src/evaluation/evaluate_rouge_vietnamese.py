@@ -138,12 +138,18 @@ def read_references(path: Path) -> list[str]:
     return references
 
 
+def is_empty_text_file(path: Path) -> bool:
+    """Return whether a UTF-8 text file contains only whitespace."""
+    with path.open("r", encoding="utf-8-sig") as handle:
+        return not any(line.strip() for line in handle)
+
+
 def discover_source_pairs(
     source_root: Path,
     reference_root: Path,
     prediction_dir: Path,
     model_name: str,
-) -> tuple[list[Pair], list[str]]:
+) -> tuple[list[Pair], list[str], list[str]]:
     if not source_root.is_dir():
         raise FileNotFoundError(f"Source root not found: {source_root}")
     if not reference_root.is_dir():
@@ -162,11 +168,15 @@ def discover_source_pairs(
 
     pairs: list[Pair] = []
     missing_references: list[str] = []
+    empty_sources: list[str] = []
     for dataset in DATASETS_TO_EVALUATE:
         dataset_source_dir = source_root / dataset
         for source in sorted(dataset_source_dir.rglob("*.txt")):
             relative = source.relative_to(dataset_source_dir)
             if any(part.startswith(".") for part in relative.parts):
+                continue
+            if is_empty_text_file(source):
+                empty_sources.append(str(source))
                 continue
             reference = reference_root / dataset / relative
             if not reference.is_file():
@@ -183,7 +193,7 @@ def discover_source_pairs(
                     reference=reference,
                 )
             )
-    return pairs, missing_references
+    return pairs, missing_references, empty_sources
 
 
 def load_local_generator(
@@ -747,7 +757,7 @@ def main() -> int:
 
     rouge_path = args.rouge_path.expanduser().resolve()
     try:
-        pairs, missing = discover_source_pairs(
+        pairs, missing, empty_sources = discover_source_pairs(
             args.source_root.expanduser().resolve(),
             args.data_ref_root,
             model_dir,
@@ -756,6 +766,13 @@ def main() -> int:
     except OSError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+
+    if empty_sources:
+        print(f"Skipped {len(empty_sources)} empty/whitespace-only source files.", file=sys.stderr)
+        for path in empty_sources[:20]:
+            print(f"  empty: {path}", file=sys.stderr)
+        if len(empty_sources) > 20:
+            print(f"  ... and {len(empty_sources) - 20} more", file=sys.stderr)
 
     if missing:
         print(f"Found {len(missing)} source files without matching references.", file=sys.stderr)

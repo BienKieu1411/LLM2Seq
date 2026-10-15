@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-
 from rouge155.evaluate_rouge import _canonical
 
 _DETAIL_SCHEMA = "eviseq.perl_rouge155_details.v1"
