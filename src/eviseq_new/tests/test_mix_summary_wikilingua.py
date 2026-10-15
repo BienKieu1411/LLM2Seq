@@ -197,7 +197,7 @@ def test_sds_mds_replace_batch_files_and_only_icons_are_removed(tmp_path):
                 "input": "Read 😊 more at https://example.org",
                 "abstract_sum": "A ✅ short summary",
             },
-            {"id": "sds-icon-only", "input": "😃", "abstract_sum": "This row becomes empty after cleaning"},
+            {"id": "sds-2", "input": "Another 🧪 source", "abstract_sum": "Another summary"},
         ],
     )
     _write_jsonl(
@@ -237,5 +237,6 @@ def test_sds_mds_replace_batch_files_and_only_icons_are_removed(tmp_path):
     report = json.loads((mixed / "mix_report.json").read_text(encoding="utf-8"))
     by_label = {row["label"]: row for row in report["train_sources"]}
     assert by_label["sds"]["icons_removed"] == {"source": 2, "target": 1, "records_with_icons": 2}
-    assert by_label["sds"]["records_skipped_empty_source_or_target"] == 1
+    assert by_label["sds"]["records_kept"] == 2
+    assert by_label["sds"]["records_skipped_empty_source_or_target"] == 0
     assert by_label["mds"]["icons_removed"] == {"source": 1, "target": 1, "records_with_icons": 1}

@@ -33,6 +33,7 @@ VALIDATION_FILE="${MIXED_VALIDATION_FILE:-}"
 VALIDATION_SOURCE_FIELD="${MIXED_VALIDATION_SOURCE_FIELD:-text}"
 VALIDATION_TARGET_FIELD="${MIXED_VALIDATION_TARGET_FIELD:-summary}"
 VALIDATION_ID_FIELD="${MIXED_VALIDATION_ID_FIELD:-id}"
+OTHER_TRAIN_FILES=()
 REBUILD_MIXED_DATA=false
 
 usage() {
@@ -48,6 +49,7 @@ WikiLingua train split. Train once, then evaluate the validation-best model.
   --summary-data-dir PATH  Directory containing sds.jsonl and mds.jsonl (required)
   --batch-dir PATH         Alias for --summary-data-dir
   --prepared-train PATH    Existing prepared train file (default: datasets/90k/train.jsonl)
+  --other-train PATH       Additional canonical train JSONL (text/summary/id); repeatable
   --wikilingua-dir PATH    WikiLingua train/test directory (validation also required by default)
   --wikilingua-validation-fraction F  Derive validation from WikiLingua train (e.g. 0.05)
   --validation-file PATH   Use an external validation JSON/JSONL instead
@@ -90,7 +92,8 @@ value() {
 while (($#)); do
   case "$1" in
     --summary-data-dir|--batch-dir) value "$@"; SUMMARY_DATA_DIR="$2"; shift 2 ;;
-    --prepared-train|--other-train|--summary-train) value "$@"; PREPARED_TRAIN="$2"; shift 2 ;;
+    --prepared-train|--summary-train) value "$@"; PREPARED_TRAIN="$2"; shift 2 ;;
+    --other-train) value "$@"; OTHER_TRAIN_FILES+=("$2"); shift 2 ;;
     --summary-source-field|--batch-source-field) value "$@"; export SUMMARY_SOURCE_FIELD="$2"; shift 2 ;;
     --summary-target-field|--batch-target-field) value "$@"; export SUMMARY_TARGET_FIELD="$2"; shift 2 ;;
     --summary-id-field|--batch-id-field) value "$@"; export SUMMARY_ID_FIELD="$2"; shift 2 ;;
@@ -142,6 +145,11 @@ for split in train validation test; do
   fi
 done
 
+if [[ "${mixed_data_ready}" == true && "${REBUILD_MIXED_DATA}" != true ]] && ((${#OTHER_TRAIN_FILES[@]})); then
+  echo "A mixed dataset already exists, and --other-train was supplied. Choose a new --mixed-dir or pass --rebuild-mixed-data so the added records are included." >&2
+  exit 1
+fi
+
 if [[ "${mixed_data_ready}" == true && "${REBUILD_MIXED_DATA}" != true ]]; then
   echo "=== Mixed dataset already exists; skipping data preparation: ${MIXED_DIR} ==="
 else
@@ -160,6 +168,9 @@ else
     --prepared-id-field "${PREPARED_ID_FIELD}" \
     --seed "${SEED}" \
   )
+  for other_train in "${OTHER_TRAIN_FILES[@]}"; do
+    mix_args+=(--other-train "${other_train}")
+  done
   if [[ -n "${WIKI_VALIDATION_FRACTION}" ]]; then
     mix_args+=(--wikilingua-validation-fraction "${WIKI_VALIDATION_FRACTION}")
   fi
