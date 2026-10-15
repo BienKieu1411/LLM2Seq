@@ -15,7 +15,7 @@ else
 fi
 export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
-BATCH_DIR="${BATCH_DIR:-}"
+SUMMARY_DATA_DIR="${SUMMARY_DATA_DIR:-${BATCH_DIR:-}}"
 PREPARED_TRAIN="${PREPARED_TRAIN:-${SUMMARY_TRAIN:-${ROOT}/datasets/90k/train.jsonl}}"
 WIKI_DIR="${WIKILINGUA_DIR:-${ROOT}/datasets/wikilingua}"
 MIXED_DIR="${MIXED_DATA_DIR:-${ROOT}/datasets/summary_wikilingua_mixed}"
@@ -25,7 +25,6 @@ DECODER_MODEL="${DECODER_MODEL:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3
 PREPARED_SOURCE_FIELD="${PREPARED_SOURCE_FIELD:-text}"
 PREPARED_TARGET_FIELD="${PREPARED_TARGET_FIELD:-summary}"
 PREPARED_ID_FIELD="${PREPARED_ID_FIELD:-id}"
-BATCH_PATTERN="${BATCH_PATTERN:-batch*.jsonl}"
 SEED="${MIX_SEED:-42}"
 EPOCHS="${FULL_FINETUNE_EPOCHS:-4}"
 OVERWRITE="${OVERWRITE_OUTPUT_DIR:-false}"
@@ -40,13 +39,14 @@ usage() {
   cat <<'EOF'
 Usage: bash scripts/run_mixed_wikilingua.sh [options]
 
-Create one shuffled train.jsonl from batch*.jsonl (input/output), an existing
-prepared train.jsonl (text/summary), and WikiLingua train. By default, copy
+Create one shuffled train.jsonl from sds.jsonl and mds.jsonl (input/output), an
+existing prepared train.jsonl (text/summary), and WikiLingua train. Icons are
+removed from the two summary-data files. By default, copy
 WikiLingua validation/test unchanged; optionally derive validation from the
 WikiLingua train split. Train once, then evaluate the validation-best model.
 
-  --batch-dir PATH         Directory containing batch*.jsonl (required)
-  --batch-pattern GLOB     Batch filename pattern (default: batch*.jsonl)
+  --summary-data-dir PATH  Directory containing sds.jsonl and mds.jsonl (required)
+  --batch-dir PATH         Alias for --summary-data-dir
   --prepared-train PATH    Existing prepared train file (default: datasets/90k/train.jsonl)
   --wikilingua-dir PATH    WikiLingua train/test directory (validation also required by default)
   --wikilingua-validation-fraction F  Derive validation from WikiLingua train (e.g. 0.05)
@@ -56,9 +56,9 @@ WikiLingua train split. Train once, then evaluate the validation-best model.
   --validation-id-field NAME      External validation ID key (default: id)
   --mixed-dir PATH         Directory for the new combined dataset
   --output-dir PATH        Training checkpoints, config, and test predictions
-  --batch-source-field NAME   Batch source key (default: input)
-  --batch-target-field NAME   Batch target key (default: output)
-  --batch-id-field NAME       Batch ID key (default: id)
+  --batch-source-field NAME   SDS/MDS source key (default: input)
+  --batch-target-field NAME   SDS/MDS target key (default: output)
+  --batch-id-field NAME       SDS/MDS ID key (default: id)
   --prepared-source-field NAME  Prepared train source key (default: text)
   --prepared-target-field NAME  Prepared train target key (default: summary)
   --prepared-id-field NAME      Prepared train ID key (default: id)
@@ -89,8 +89,7 @@ value() {
 
 while (($#)); do
   case "$1" in
-    --batch-dir) value "$@"; BATCH_DIR="$2"; shift 2 ;;
-    --batch-pattern) value "$@"; BATCH_PATTERN="$2"; shift 2 ;;
+    --summary-data-dir|--batch-dir) value "$@"; SUMMARY_DATA_DIR="$2"; shift 2 ;;
     --prepared-train|--other-train|--summary-train) value "$@"; PREPARED_TRAIN="$2"; shift 2 ;;
     --batch-source-field) value "$@"; export BATCH_SOURCE_FIELD="$2"; shift 2 ;;
     --batch-target-field) value "$@"; export BATCH_TARGET_FIELD="$2"; shift 2 ;;
@@ -147,10 +146,9 @@ if [[ "${mixed_data_ready}" == true && "${REBUILD_MIXED_DATA}" != true ]]; then
   echo "=== Mixed dataset already exists; skipping data preparation: ${MIXED_DIR} ==="
 else
   echo "=== Preparing one mixed train split ==="
-  [[ -n "${BATCH_DIR}" ]] || { echo "Pass --batch-dir PATH to build mixed data" >&2; exit 2; }
+  [[ -n "${SUMMARY_DATA_DIR}" ]] || { echo "Pass --summary-data-dir PATH (or --batch-dir PATH) to build mixed data" >&2; exit 2; }
   mix_args=( \
-    --batch-dir "${BATCH_DIR}" \
-    --batch-pattern "${BATCH_PATTERN}" \
+    --summary-data-dir "${SUMMARY_DATA_DIR}" \
     --prepared-train "${PREPARED_TRAIN}" \
     --wikilingua-dir "${WIKI_DIR}" \
     --output-dir "${MIXED_DIR}" \

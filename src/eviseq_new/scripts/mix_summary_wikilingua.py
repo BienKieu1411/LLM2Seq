@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Combine batch, prepared, and WikiLingua train rows into one canonical dataset."""
+"""Combine SDS/MDS, prepared, and WikiLingua train rows into one dataset."""
 
 from __future__ import annotations
 
@@ -8,14 +8,18 @@ import hashlib
 import json
 import os
 import random
+import re
 import shutil
 import tempfile
+import unicodedata
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from eviseq_afmr.data.schema import CanonicalRecord
+
+ICON = re.compile("[\\U0001f000-\\U0001faff\\u2600-\\u27bf\\ufe0f\\u200d▲▶►◆★☆●■□◉☑✓✔]")
 
 
 @dataclass(frozen=True)
@@ -25,6 +29,43 @@ class TrainSource:
     source_field: str
     target_field: str
     id_field: str
+    strip_icons: bool = False
+
+
+def _strip_icons(text: str) -> tuple[str, int]:
+    """Remove emoji/icon characters while preserving word boundaries and newlines."""
+    normalized = unicodedata.normalize("NFC", text)
+    cleaned, removed = ICON.subn(" ", normalized)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r" *\n *", "\n", cleaned).strip()
+    return cleaned, removed
+
+
+def _record_from_mapping(
+    row: dict[str, Any],
+    source: TrainSource,
+    *,
+    icon_counts: dict[str, dict[str, int]] | None = None,
+) -> CanonicalRecord:
+    record = CanonicalRecord.from_mapping(
+        row,
+        source_field=source.source_field,
+        target_field=source.target_field,
+        id_field=source.id_field,
+    )
+    if not source.strip_icons:
+        return record
+
+    clean_source, source_count = _strip_icons(record.source)
+    clean_target, target_count = _strip_icons(record.target)
+    if icon_counts is not None:
+        counts = icon_counts.setdefault(source.label, {"source": 0, "target": 0, "records_with_icons": 0})
+        counts["source"] += source_count
+        counts["target"] += target_count
+        counts["records_with_icons"] += int(source_count > 0 or target_count > 0)
+    if not clean_source or not clean_target:
+        raise ValueError("source and target must be non-empty")
+    return CanonicalRecord(record.example_id, clean_source, clean_target)
 
 
 def _records(
@@ -33,6 +74,7 @@ def _records(
     skip_empty: bool = False,
     empty_counts: dict[str, int] | None = None,
     empty_lines: dict[str, list[int]] | None = None,
+    icon_counts: dict[str, dict[str, int]] | None = None,
 ):
     with source.path.open("rb") as handle:
         line_number = 0
@@ -48,12 +90,7 @@ def _records(
                 row = json.loads(raw)
                 if not isinstance(row, dict):
                     raise ValueError("record must be an object")
-                record = CanonicalRecord.from_mapping(
-                    row,
-                    source_field=source.source_field,
-                    target_field=source.target_field,
-                    id_field=source.id_field,
-                )
+                record = _record_from_mapping(row, source, icon_counts=icon_counts)
             except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
                 if skip_empty and isinstance(exc, ValueError) and str(exc) == "source and target must be non-empty":
                     if empty_counts is not None:
@@ -239,6 +276,7 @@ def mix(
     counts = {source.label: 0 for source in all_sources}
     skipped_overlap = {source.label: 0 for source in all_sources}
     skipped_empty = {source.label: 0 for source in all_sources}
+    icon_counts: dict[str, dict[str, int]] = {}
     empty_line_numbers: dict[str, list[int]] = {}
     for source_index, source in enumerate(all_sources):
         for offset, line_number, record in _records(
@@ -246,6 +284,7 @@ def mix(
             skip_empty=True,
             empty_counts=skipped_empty,
             empty_lines=empty_line_numbers,
+            icon_counts=icon_counts,
         ):
             if _source_key(record.source) in held_out_sources:
                 skipped_overlap[source.label] += 1
@@ -268,12 +307,7 @@ def mix(
                 input_handle = input_handles[source_index]
                 input_handle.seek(offset)
                 row_data = json.loads(input_handle.readline())
-                record = CanonicalRecord.from_mapping(
-                    row_data,
-                    source_field=source.source_field,
-                    target_field=source.target_field,
-                    id_field=source.id_field,
-                )
+                record = _record_from_mapping(row_data, source)
                 row = {
                     "id": f"{source.label}:{line_number}:{record.example_id or line_number}",
                     "text": record.source,
@@ -339,6 +373,7 @@ def mix(
                 "records_skipped_empty_source_or_target": skipped_empty[source.label],
                 "first_empty_line_numbers": empty_line_numbers.get(source.label, []),
                 "records_skipped_for_exact_held_out_source_match": skipped_overlap[source.label],
+                "icons_removed": icon_counts.get(source.label, {"source": 0, "target": 0, "records_with_icons": 0}),
             }
             for source in all_sources
         ],
@@ -368,14 +403,20 @@ def _source_from_file(
     source_field: str,
     target_field: str,
     id_field: str,
+    strip_icons: bool = False,
 ) -> TrainSource:
-    return TrainSource(label, path.expanduser().resolve(), source_field, target_field, id_field)
+    return TrainSource(label, path.expanduser().resolve(), source_field, target_field, id_field, strip_icons)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--batch-dir", type=Path, help="Directory containing batch*.jsonl with input/output fields")
-    parser.add_argument("--batch-pattern", default="batch*.jsonl")
+    parser.add_argument(
+        "--summary-data-dir",
+        "--batch-dir",
+        dest="summary_data_dir",
+        type=Path,
+        help="Directory containing sds.jsonl and mds.jsonl (input/output fields)",
+    )
     parser.add_argument("--prepared-train", type=Path, help="Previously prepared train JSONL")
     parser.add_argument(
         "--other-train", type=Path, action="append", default=[], help="Additional train JSONL (can be repeated)"
@@ -404,19 +445,20 @@ def main() -> None:
     args = parser.parse_args()
 
     extras: list[TrainSource] = []
-    if args.batch_dir:
-        batch_dir = args.batch_dir.expanduser().resolve()
-        batch_files = sorted(batch_dir.glob(args.batch_pattern))
-        if not batch_files:
-            raise FileNotFoundError(f"No files matching {args.batch_pattern!r} in {batch_dir}")
-        for batch_path in batch_files:
+    if args.summary_data_dir:
+        summary_data_dir = args.summary_data_dir.expanduser().resolve()
+        for filename in ("sds.jsonl", "mds.jsonl"):
+            batch_path = summary_data_dir / filename
+            if not batch_path.is_file():
+                raise FileNotFoundError(f"Expected training data file: {batch_path}")
             extras.append(
                 _source_from_file(
                     batch_path,
-                    label=f"batch:{batch_path.stem}",
+                    label=batch_path.stem,
                     source_field=args.batch_source_field,
                     target_field=args.batch_target_field,
                     id_field=args.batch_id_field,
+                    strip_icons=True,
                 )
             )
     if args.prepared_train:
@@ -440,7 +482,7 @@ def main() -> None:
             )
         )
     if not extras:
-        parser.error("provide at least one of --batch-dir, --prepared-train, or --other-train")
+        parser.error("provide at least one of --summary-data-dir, --prepared-train, or --other-train")
 
     report = mix(
         args.wikilingua_dir,

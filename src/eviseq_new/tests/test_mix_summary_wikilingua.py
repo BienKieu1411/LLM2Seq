@@ -172,3 +172,66 @@ def test_external_validation_json_is_canonicalized_and_excluded_from_train(tmp_p
     ]
     assert not any(row["text"] == "validation source" for row in _read_jsonl(mixed / "train.jsonl"))
     assert not any(row["text"] == "test source" for row in _read_jsonl(mixed / "train.jsonl"))
+
+
+def test_sds_mds_replace_batch_files_and_only_icons_are_removed(tmp_path):
+    wiki_dir = tmp_path / "wikilingua"
+    wiki_dir.mkdir()
+    _write_jsonl(
+        wiki_dir / "train.jsonl",
+        [
+            {"id": f"wiki-{index}", "text": f"wiki source {index}", "summary": f"wiki summary {index}"}
+            for index in range(5)
+        ],
+    )
+    _write_jsonl(wiki_dir / "validation.jsonl", [{"id": "val", "text": "val source", "summary": "val summary"}])
+    _write_jsonl(wiki_dir / "test.jsonl", [{"id": "test", "text": "test source", "summary": "test summary"}])
+
+    data_dir = tmp_path / "summary_data"
+    data_dir.mkdir()
+    _write_jsonl(
+        data_dir / "sds.jsonl",
+        [
+            {"id": "sds-1", "input": "Read 😊 more at https://example.org", "output": "A ✅ short summary"},
+            {"id": "sds-icon-only", "input": "😃", "output": "This row becomes empty after cleaning"},
+        ],
+    )
+    _write_jsonl(
+        data_dir / "mds.jsonl",
+        [{"id": "mds-1", "input": "Multi-document 📚 source", "output": "Combined ★ result"}],
+    )
+    # The old batch-file convention is deliberately ignored.
+    _write_jsonl(data_dir / "batch1.jsonl", [{"input": "legacy source", "output": "legacy summary"}])
+
+    mixed = tmp_path / "mixed"
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--summary-data-dir",
+            str(data_dir),
+            "--wikilingua-dir",
+            str(wiki_dir),
+            "--output-dir",
+            str(mixed),
+        ],
+        check=True,
+        capture_output=True,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join((str(SCRIPT.parents[1]), os.environ.get("PYTHONPATH", "")))},
+        text=True,
+    )
+
+    train = _read_jsonl(mixed / "train.jsonl")
+    sds = next(row for row in train if row["id"].startswith("sds:"))
+    mds = next(row for row in train if row["id"].startswith("mds:"))
+    assert sds["text"] == "Read more at https://example.org"
+    assert sds["summary"] == "A short summary"
+    assert mds["text"] == "Multi-document source"
+    assert mds["summary"] == "Combined result"
+    assert not any("legacy" in row["text"] for row in train)
+
+    report = json.loads((mixed / "mix_report.json").read_text(encoding="utf-8"))
+    by_label = {row["label"]: row for row in report["train_sources"]}
+    assert by_label["sds"]["icons_removed"] == {"source": 2, "target": 1, "records_with_icons": 2}
+    assert by_label["sds"]["records_skipped_empty_source_or_target"] == 1
+    assert by_label["mds"]["icons_removed"] == {"source": 1, "target": 1, "records_with_icons": 1}

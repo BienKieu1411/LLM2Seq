@@ -246,7 +246,7 @@ CUDA_VISIBLE_DEVICES=0,1 \
 bash scripts/run_mixed_wikilingua_embeddinggemma2.sh \
   --encoder-model /path/to/local/embeddinggemma-2 \
   --decoder-model /path/to/Qwen3-0.6B \
-  --batch-dir /path/to/batch_jsonls \
+  --summary-data-dir /path/to/sds_mds_jsonls \
   --prepared-train datasets/90k/train.jsonl \
   --wikilingua-dir datasets/wikilingua \
   --train-batch-size 4 \
@@ -270,6 +270,14 @@ accepted. The default fields are `text` and `summary`; if the file uses
 `input`/`output`, pass `--validation-source-field input
 --validation-target-field output`. Validation sources that overlap WikiLingua
 test cause an error, and matching rows are excluded from mixed train.
+
+The summary data directory must contain exactly the training inputs
+`sds.jsonl` and `mds.jsonl`, with `input` and `output` fields by default.
+The mixed-data preparation reads these two files instead of the former
+`batch*.jsonl` collection, removes emoji/icon characters from their input and
+output text, and records removal counts in `mix_report.json`. It does not
+remove URLs. Existing prepared training data and WikiLingua files are left as
+they are.
 
 The wrapper also accepts `EMBEDDINGGEMMA2_MODEL=/path/to/local/embeddinggemma-2`
 instead of `--encoder-model`. It uses offline loading and will not download a
