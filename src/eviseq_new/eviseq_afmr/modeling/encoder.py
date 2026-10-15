@@ -34,6 +34,7 @@ class PretrainedEncoderAdapter(nn.Module):
         self.model_name = str(name)
         self.depth_taps = int(depth_taps)
         self._embedding_gemma2 = False
+        self._qwen3_5 = False
         if self.model_name == "__tiny__":
             from transformers import Qwen3Config, Qwen3Model
 
@@ -61,8 +62,14 @@ class PretrainedEncoderAdapter(nn.Module):
                     raise RuntimeError(
                         "This checkpoint uses EmbeddingGemma-2, which requires transformers>=5.19.0"
                     ) from exc
+                if "qwen3_5" in str(exc).lower():
+                    raise RuntimeError(
+                        "This checkpoint uses Qwen3.5; install the project's supported Transformers version "
+                        "(transformers>=5.19.0)"
+                    ) from exc
                 raise
             self._embedding_gemma2 = str(getattr(raw_config, "model_type", "")) == "embedding_gemma2"
+            self._qwen3_5 = str(getattr(raw_config, "model_type", "")) == "qwen3_5"
             if self._embedding_gemma2:
                 if dtype == torch.float16:
                     raise ValueError("EmbeddingGemma-2 encoder supports bfloat16 or float32, not float16")
@@ -77,6 +84,13 @@ class PretrainedEncoderAdapter(nn.Module):
                 for modality_config in ("vision_config", "audio_config"):
                     if getattr(raw_config, modality_config, None) is not None:
                         setattr(raw_config, modality_config, None)
+            elif self._qwen3_5:
+                text_config = getattr(raw_config, "text_config", None)
+                if text_config is None:
+                    raise ValueError("Qwen3.5 encoder config is missing text_config")
+                self.hidden_size = int(getattr(text_config, "hidden_size", 0))
+                if self.hidden_size <= 0:
+                    raise ValueError("Qwen3.5 text_config.hidden_size must be positive")
             self.model = AutoModel.from_pretrained(
                 name,
                 config=raw_config,
@@ -93,6 +107,18 @@ class PretrainedEncoderAdapter(nn.Module):
                         "This Transformers version does not expose the expected EmbeddingGemma-2 text model; "
                         "install transformers>=5.19.0"
                     )
+            elif self._qwen3_5:
+                text_model = getattr(self.model, "language_model", None)
+                if text_model is None or not isinstance(getattr(text_model, "layers", None), nn.ModuleList):
+                    raise ValueError("Qwen3.5 encoder must expose its text stack as model.language_model.layers")
+                # The AFMR input contract is text-only. Qwen3.5's wrapper calls the
+                # visual tower only when pixel inputs are supplied, so release it.
+                if getattr(self.model, "visual", None) is not None:
+                    self.model.visual = None
+                text_config = getattr(getattr(self.model, "config", None), "text_config", None)
+                if text_config is not None:
+                    text_config.use_cache = False
+                    text_config.output_hidden_states = False
             else:
                 self.hidden_size = int(getattr(raw_config, "hidden_size", getattr(raw_config, "d_model", 0)))
         if self.hidden_size <= 0:
@@ -104,7 +130,7 @@ class PretrainedEncoderAdapter(nn.Module):
         if self.depth_taps > 1:
             layers = None
             layer_paths = ["layers", "encoder.layer", "encoder.layers", "model.layers"]
-            if self._embedding_gemma2:
+            if self._embedding_gemma2 or self._qwen3_5:
                 layer_paths.insert(0, "language_model.layers")
             for path in layer_paths:
                 current = self.model
@@ -149,6 +175,10 @@ class PretrainedEncoderAdapter(nn.Module):
             for handle in handles:
                 handle.remove()
         final = output.last_hidden_state
+        if final.ndim != 3 or final.shape[-1] != self.hidden_size:
+            raise ValueError(
+                f"Encoder must return token states with width {self.hidden_size}; got shape {tuple(final.shape)}"
+            )
         if self.depth_taps:
             if len(captured) != self.depth_taps - 1:
                 raise ValueError("Encoder depth hooks did not execute exactly once per requested layer")

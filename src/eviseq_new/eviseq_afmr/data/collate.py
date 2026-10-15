@@ -60,7 +60,13 @@ class SummarizationCollator:
         self._prompt_ids = self._prompt_ids_for() if self.decoder_prompt.strip() else []
         self.max_source_length = int(data_config.get("max_source_length", 4096))
         self.max_target_length = int(data_config.get("max_target_length", 512))
-        self.encoder_prefix = str(data_config.get("encoder_prefix", ""))
+        encoder_prefix = str(data_config.get("encoder_prefix", ""))
+        encoder_task_marker = str(data_config.get("encoder_task_marker", ""))
+        self.encoder_prefix = (
+            encoder_prefix
+            if not encoder_task_marker or encoder_prefix.startswith(encoder_task_marker)
+            else encoder_task_marker + encoder_prefix
+        )
         self.pad_encoder = int(getattr(encoder_tokenizer, "pad_token_id", 0) or 0)
         self.pad_decoder = int(getattr(decoder_tokenizer, "pad_token_id", 0) or 0)
 

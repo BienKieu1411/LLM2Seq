@@ -102,6 +102,18 @@ Each input record contains the configured source and target fields (strings or l
 
 The source instruction is part of `data.encoder_prefix`, so the same instruction is used for every row and travels through the encoder. The decoder-side `data.decoder_prompt` is a short generation instruction; it does not duplicate the source text. Prompt text is not read from dataset rows. `configs/8192_avg.yaml` includes the full summarization instruction in its encoder prefix and uses an 8,192-token source budget.
 
+### PPLX Embed V2 Late encoder
+
+The local Transformers adapter supports the text tower in `pplx-embed-v2-late-0.6b` and other compatible Qwen3.5 checkpoints. It uses the Qwen3.5 text model's 1,024-dimensional token states and depth taps from `language_model.layers`; after loading, it releases the unused visual tower because AFMR passes text only. It does not run the Sentence Transformers retrieval head (`Dense`, `MultiVectorMask`, or `Normalize`). This gives AFMR token-level backbone states for summarization rather than the model's 128-dimensional MaxSim retrieval vectors. The model card's document marker can be configured before the summarization instruction:
+
+```yaml
+data:
+  encoder_task_marker: "[D] "
+  encoder_prefix: "Summarize this document faithfully.\nDocument:\n"
+```
+
+The collator places `encoder_task_marker` before `encoder_prefix` and excludes both from the source-content mask and copy alignment. Keep this setting identical for training and evaluation. The project already requires `transformers>=5.19.0`; use a local checkpoint path for offline runs.
+
 ## EmbeddingGemma-2 text encoder
 
 AFMR can use a local `google/embeddinggemma-2` checkpoint as a text encoder. This model has a nested text configuration and returns token states in its 768-dimensional embedding space, so the adapter reads `text_config.embedding_dim` and projects intermediate depth taps through the model's final normalization and embedding projection before passing them to AFMR. Since AFMR supplies text only, the adapter disables the unused audio and vision towers at load time. It rejects `float16`; use `bfloat16` or `float32`. Install `transformers>=5.19.0`, which includes the model implementation.

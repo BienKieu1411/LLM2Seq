@@ -272,6 +272,7 @@ def validate_config(config: dict[str, Any], *, train_only: bool = False) -> None
             "id_field",
             "list_separator",
             "encoder_prefix",
+            "encoder_task_marker",
             "decoder_prompt",
             "decoder_chat_template",
             "decoder_prefix",

@@ -61,6 +61,12 @@ def test_sampling_config_requires_positive_temperature():
         validate_config(config)
 
 
+def test_encoder_task_marker_is_an_allowed_data_setting():
+    config = load_config(Path(__file__).parents[1] / "configs" / "afmr_smoke.yaml")
+    config["data"]["encoder_task_marker"] = "[D] "
+    validate_config(config)
+
+
 def test_direct_projection_bridge_ablation_is_valid_and_checkpoint_distinguishable():
     from eviseq_afmr.training.checkpoint import architecture_spec
 

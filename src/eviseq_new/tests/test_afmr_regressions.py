@@ -308,6 +308,45 @@ def test_full_source_offsets_and_truncation():
     assert batch["source_content_mask"][0, 2:].any()
 
 
+def test_encoder_task_marker_precedes_instruction_and_is_not_duplicated():
+    class RecordingTokenizer(_TinyTokenizer):
+        def __init__(self):
+            self.seen = []
+
+        def __call__(self, text, **kwargs):
+            self.seen.append(text)
+            return super().__call__(text, **kwargs)
+
+    tokenizer = RecordingTokenizer()
+    collator = SummarizationCollator(
+        tokenizer,
+        _TinyTokenizer(),
+        {
+            "encoder_task_marker": "[D] ",
+            "encoder_prefix": "Summarize:\n",
+            "decoder_prompt": "sum:",
+            "max_source_length": 16,
+            "max_target_length": 8,
+        },
+    )
+    record = CanonicalRecord("x", "source text", "summary")
+    batch = collator([record])
+    assert tokenizer.seen[0] == "[D] Summarize:\nsource text"
+    assert not batch["source_content_mask"][0, :2].any()
+    assert batch["source_content_mask"][0, 2:].any()
+
+    already_marked = SummarizationCollator(
+        tokenizer,
+        _TinyTokenizer(),
+        {
+            "encoder_task_marker": "[D] ",
+            "encoder_prefix": "[D] Summarize:\n",
+            "decoder_prompt": "sum:",
+        },
+    )
+    assert already_marked.encoder_prefix == "[D] Summarize:\n"
+
+
 def test_partial_accumulation_matches_large_batch():
     cfg = config()
     cfg["training"]["batch_size"] = 1

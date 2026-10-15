@@ -25,8 +25,18 @@ data_filter = ["lingua-language-detector==2.2.0"]
 [project.scripts]
 eviseq-afmr = "eviseq_afmr.cli:main"
 
+[project.entry-points."vllm.general_plugins"]
+seam = "seam_vllm.plugin:register"
+
 [tool.setuptools]
-packages = ["eviseq_afmr", "eviseq_afmr.data", "eviseq_afmr.evaluation", "eviseq_afmr.modeling", "eviseq_afmr.training"]
+packages = [
+  "eviseq_afmr",
+  "eviseq_afmr.data",
+  "eviseq_afmr.evaluation",
+  "eviseq_afmr.modeling",
+  "eviseq_afmr.training",
+  "seam_vllm",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
