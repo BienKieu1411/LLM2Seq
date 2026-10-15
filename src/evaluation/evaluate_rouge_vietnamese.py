@@ -166,6 +166,8 @@ def discover_source_pairs(
         dataset_source_dir = source_root / dataset
         for source in sorted(dataset_source_dir.rglob("*.txt")):
             relative = source.relative_to(dataset_source_dir)
+            if any(part.startswith(".") for part in relative.parts):
+                continue
             reference = reference_root / dataset / relative
             if not reference.is_file():
                 missing_references.append(str(reference))
