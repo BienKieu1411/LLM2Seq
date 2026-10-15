@@ -24,7 +24,8 @@ Usage: EMBEDDINGGEMMA2_MODEL=/local/path bash scripts/run_mixed_wikilingua_embed
 
 Runs the existing mixed-summary + WikiLingua training flow with a local
 EmbeddingGemma-2 checkpoint as the encoder. All options from
-run_mixed_wikilingua.sh are accepted, including --summary-data-dir, --decoder-model,
+run_mixed_wikilingua.sh are accepted, including --summary-data-dir, --summary-target-field,
+--decoder-model,
 --train-batch-size, --epochs, --cuda-visible-devices, and --output-dir.
 
 The encoder must already be downloaded on the machine. The runner is offline

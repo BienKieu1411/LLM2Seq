@@ -39,7 +39,7 @@ usage() {
   cat <<'EOF'
 Usage: bash scripts/run_mixed_wikilingua.sh [options]
 
-Create one shuffled train.jsonl from sds.jsonl and mds.jsonl (input/output), an
+Create one shuffled train.jsonl from sds.jsonl and mds.jsonl (input/abstract_sum), an
 existing prepared train.jsonl (text/summary), and WikiLingua train. Icons are
 removed from the two summary-data files. By default, copy
 WikiLingua validation/test unchanged; optionally derive validation from the
@@ -56,9 +56,9 @@ WikiLingua train split. Train once, then evaluate the validation-best model.
   --validation-id-field NAME      External validation ID key (default: id)
   --mixed-dir PATH         Directory for the new combined dataset
   --output-dir PATH        Training checkpoints, config, and test predictions
-  --batch-source-field NAME   SDS/MDS source key (default: input)
-  --batch-target-field NAME   SDS/MDS target key (default: output)
-  --batch-id-field NAME       SDS/MDS ID key (default: id)
+  --summary-source-field NAME SDS/MDS source key (default: input)
+  --summary-target-field NAME SDS/MDS target key (default: abstract_sum)
+  --summary-id-field NAME     SDS/MDS ID key (default: id)
   --prepared-source-field NAME  Prepared train source key (default: text)
   --prepared-target-field NAME  Prepared train target key (default: summary)
   --prepared-id-field NAME      Prepared train ID key (default: id)
@@ -91,9 +91,9 @@ while (($#)); do
   case "$1" in
     --summary-data-dir|--batch-dir) value "$@"; SUMMARY_DATA_DIR="$2"; shift 2 ;;
     --prepared-train|--other-train|--summary-train) value "$@"; PREPARED_TRAIN="$2"; shift 2 ;;
-    --batch-source-field) value "$@"; export BATCH_SOURCE_FIELD="$2"; shift 2 ;;
-    --batch-target-field) value "$@"; export BATCH_TARGET_FIELD="$2"; shift 2 ;;
-    --batch-id-field) value "$@"; export BATCH_ID_FIELD="$2"; shift 2 ;;
+    --summary-source-field|--batch-source-field) value "$@"; export SUMMARY_SOURCE_FIELD="$2"; shift 2 ;;
+    --summary-target-field|--batch-target-field) value "$@"; export SUMMARY_TARGET_FIELD="$2"; shift 2 ;;
+    --summary-id-field|--batch-id-field) value "$@"; export SUMMARY_ID_FIELD="$2"; shift 2 ;;
     --prepared-source-field) value "$@"; PREPARED_SOURCE_FIELD="$2"; shift 2 ;;
     --prepared-target-field) value "$@"; PREPARED_TARGET_FIELD="$2"; shift 2 ;;
     --prepared-id-field) value "$@"; PREPARED_ID_FIELD="$2"; shift 2 ;;
@@ -152,9 +152,9 @@ else
     --prepared-train "${PREPARED_TRAIN}" \
     --wikilingua-dir "${WIKI_DIR}" \
     --output-dir "${MIXED_DIR}" \
-    --batch-source-field "${BATCH_SOURCE_FIELD:-input}" \
-    --batch-target-field "${BATCH_TARGET_FIELD:-output}" \
-    --batch-id-field "${BATCH_ID_FIELD:-id}" \
+    --summary-source-field "${SUMMARY_SOURCE_FIELD:-${BATCH_SOURCE_FIELD:-input}}" \
+    --summary-target-field "${SUMMARY_TARGET_FIELD:-${BATCH_TARGET_FIELD:-abstract_sum}}" \
+    --summary-id-field "${SUMMARY_ID_FIELD:-${BATCH_ID_FIELD:-id}}" \
     --prepared-source-field "${PREPARED_SOURCE_FIELD}" \
     --prepared-target-field "${PREPARED_TARGET_FIELD}" \
     --prepared-id-field "${PREPARED_ID_FIELD}" \

@@ -271,8 +271,9 @@ accepted. The default fields are `text` and `summary`; if the file uses
 --validation-target-field output`. Validation sources that overlap WikiLingua
 test cause an error, and matching rows are excluded from mixed train.
 
-The summary data directory must contain exactly the training inputs
-`sds.jsonl` and `mds.jsonl`, with `input` and `output` fields by default.
+The summary data directory must contain the training inputs `sds.jsonl` and
+`mds.jsonl`, with `input` and `abstract_sum` fields by default. Use
+`--summary-source-field` or `--summary-target-field` to select different keys.
 The mixed-data preparation reads these two files instead of the former
 `batch*.jsonl` collection, removes emoji/icon characters from their input and
 output text, and records removal counts in `mix_report.json`. It does not

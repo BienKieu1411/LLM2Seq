@@ -192,13 +192,17 @@ def test_sds_mds_replace_batch_files_and_only_icons_are_removed(tmp_path):
     _write_jsonl(
         data_dir / "sds.jsonl",
         [
-            {"id": "sds-1", "input": "Read 😊 more at https://example.org", "output": "A ✅ short summary"},
-            {"id": "sds-icon-only", "input": "😃", "output": "This row becomes empty after cleaning"},
+            {
+                "id": "sds-1",
+                "input": "Read 😊 more at https://example.org",
+                "abstract_sum": "A ✅ short summary",
+            },
+            {"id": "sds-icon-only", "input": "😃", "abstract_sum": "This row becomes empty after cleaning"},
         ],
     )
     _write_jsonl(
         data_dir / "mds.jsonl",
-        [{"id": "mds-1", "input": "Multi-document 📚 source", "output": "Combined ★ result"}],
+        [{"id": "mds-1", "input": "Multi-document 📚 source", "abstract_sum": "Combined ★ result"}],
     )
     # The old batch-file convention is deliberately ignored.
     _write_jsonl(data_dir / "batch1.jsonl", [{"input": "legacy source", "output": "legacy summary"}])

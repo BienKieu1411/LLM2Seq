@@ -415,7 +415,7 @@ def main() -> None:
         "--batch-dir",
         dest="summary_data_dir",
         type=Path,
-        help="Directory containing sds.jsonl and mds.jsonl (input/output fields)",
+        help="Directory containing sds.jsonl and mds.jsonl (input/abstract_sum fields by default)",
     )
     parser.add_argument("--prepared-train", type=Path, help="Previously prepared train JSONL")
     parser.add_argument(
@@ -433,9 +433,14 @@ def main() -> None:
     parser.add_argument("--validation-target-field", default="summary")
     parser.add_argument("--validation-id-field", default="id")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--batch-source-field", default="input")
-    parser.add_argument("--batch-target-field", default="output")
-    parser.add_argument("--batch-id-field", default="id")
+    parser.add_argument("--summary-source-field", "--batch-source-field", dest="batch_source_field", default="input")
+    parser.add_argument(
+        "--summary-target-field",
+        "--batch-target-field",
+        dest="batch_target_field",
+        default="abstract_sum",
+    )
+    parser.add_argument("--summary-id-field", "--batch-id-field", dest="batch_id_field", default="id")
     parser.add_argument("--prepared-source-field", default="text")
     parser.add_argument("--prepared-target-field", default="summary")
     parser.add_argument("--prepared-id-field", default="id")
