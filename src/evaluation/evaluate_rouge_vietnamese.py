@@ -15,14 +15,17 @@ Sources, references, and generated predictions use this tree contract::
     data_sum/<model>/<dataset>/<file>.txt
 
 Pass a local Hugging Face checkpoint with ``--model-path``. Model files are
-loaded offline; this script never downloads a checkpoint. It supports both
-causal and encoder-decoder Transformers models. ROUGE preprocessing and flags
-match the historical evaluator.
+loaded offline; this script never downloads a checkpoint. For the repository's
+custom SEAM/AFMR model, pass ``--backend afmr`` with its resolved config and
+checkpoint; this runs the AFMR PyTorch inference path directly, without vLLM.
+ROUGE preprocessing and flags match the historical evaluator.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
 import json
 import os
 import re
@@ -314,6 +317,159 @@ def generate_predictions(
         print(f"[predict] {min(start + len(batch), len(pending))}/{len(pending)} summaries written")
 
 
+def _afmr_example_id(pair: Pair) -> str:
+    return f"{pair.dataset}/{pair.relative_file}"
+
+
+def _afmr_work_key(config_path: Path, checkpoint_path: Path, pairs: list[Pair]) -> str:
+    """Build a stable cache key so AFMR evaluation can safely resume."""
+    digest = hashlib.sha256()
+    for path in (config_path, checkpoint_path):
+        resolved = path.expanduser().resolve()
+        stat = resolved.stat()
+        digest.update(str(resolved).encode("utf-8"))
+        digest.update(f"{stat.st_size}:{stat.st_mtime_ns}".encode("ascii"))
+    for pair in pairs:
+        digest.update(_afmr_example_id(pair).encode("utf-8"))
+        for path in (pair.source, pair.reference):
+            stat = path.stat()
+            digest.update(f"{stat.st_size}:{stat.st_mtime_ns}".encode("ascii"))
+    return digest.hexdigest()[:20]
+
+
+def generate_afmr_predictions(
+    pairs: list[Pair],
+    model_dir: Path,
+    config_path: Path,
+    checkpoint_path: Path,
+    *,
+    batch_size: int,
+    device: str,
+    max_input_tokens: int | None,
+    max_new_tokens: int | None,
+    overwrite: bool,
+) -> None:
+    """Generate file predictions through the local AFMR model, without vLLM."""
+    pending = [
+        pair for pair in pairs if overwrite or not pair.prediction.is_file() or pair.prediction.stat().st_size == 0
+    ]
+    if not pending:
+        print("All predictions already exist; skipping AFMR generation.")
+        return
+    if batch_size < 1:
+        raise ValueError("batch size must be positive")
+
+    afmr_root = Path(__file__).resolve().parents[1] / "eviseq_new"
+    if not afmr_root.is_dir():
+        raise FileNotFoundError(f"AFMR source package not found: {afmr_root}")
+    if str(afmr_root) not in sys.path:
+        sys.path.insert(0, str(afmr_root))
+
+    import yaml
+    from eviseq_afmr.config import load_config, resolve_path
+    from eviseq_afmr.runtime import evaluate as evaluate_afmr
+
+    config_path = config_path.expanduser().resolve()
+    checkpoint_path = checkpoint_path.expanduser().resolve()
+    if not config_path.is_file():
+        raise FileNotFoundError(f"AFMR resolved config not found: {config_path}")
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"AFMR checkpoint not found: {checkpoint_path}")
+
+    model_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = model_dir / ".afmr_work" / _afmr_work_key(config_path, checkpoint_path, pending)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    input_jsonl = work_dir / "input.jsonl"
+    output_jsonl = work_dir / "predictions.jsonl"
+    temporary_config_path = work_dir / "resolved_config.yaml"
+
+    rows: list[dict[str, str]] = []
+    pair_by_id: dict[str, Pair] = {}
+    for pair in pending:
+        example_id = _afmr_example_id(pair)
+        if example_id in pair_by_id:
+            raise ValueError(f"Duplicate source ID for AFMR prediction: {example_id}")
+        source = pair.source.read_text(encoding="utf-8-sig").strip()
+        references = read_references(pair.reference)
+        if not source:
+            raise ValueError(f"Empty source file: {pair.source}")
+        if not references:
+            raise ValueError(f"Reference file is empty: {pair.reference}")
+        pair_by_id[example_id] = pair
+        rows.append({"id": example_id, "text": source, "summary": references[0]})
+
+    input_jsonl.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    if overwrite and output_jsonl.is_file():
+        output_jsonl.unlink()
+
+    resolved = load_config(config_path)
+    temporary_config = copy.deepcopy(resolved)
+    temporary_config.pop("_meta", None)
+    model_config = temporary_config["model"]
+    for key in ("encoder_name", "decoder_name"):
+        model_config[key] = str(resolve_path(resolved["model"][key], resolved))
+    data_config = temporary_config["data"]
+    for key in ("train_file", "validation_file", "test_file"):
+        value = resolved["data"].get(key)
+        if value:
+            data_config[key] = str(resolve_path(value, resolved))
+    data_config.update(
+        {
+            "test_file": str(input_jsonl.resolve()),
+            "source_field": "text",
+            "target_field": "summary",
+            "id_field": "id",
+        }
+    )
+    if max_input_tokens is not None:
+        data_config["max_source_length"] = int(max_input_tokens)
+    if max_new_tokens is not None:
+        temporary_config["generation"]["max_new_tokens"] = int(max_new_tokens)
+    temporary_config_path.write_text(
+        yaml.safe_dump(temporary_config, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    print(
+        f"Generating {len(pending)} summaries with AFMR checkpoint {checkpoint_path} "
+        f"(device={device}, batch={batch_size}); vLLM is not used."
+    )
+    evaluate_afmr(
+        temporary_config_path,
+        checkpoint_path,
+        output_jsonl,
+        split="test",
+        batch_size=batch_size,
+        device=None if device == "auto" else device,
+        do_sample=False,
+    )
+
+    generated: dict[str, str] = {}
+    with output_jsonl.open("r", encoding="utf-8") as handle:
+        for line_number, raw in enumerate(handle, start=1):
+            if not raw.strip():
+                continue
+            row = json.loads(raw)
+            example_id = str(row.get("id", ""))
+            prediction = row.get("prediction")
+            if example_id not in pair_by_id or not isinstance(prediction, str):
+                raise ValueError(f"Unexpected AFMR prediction at {output_jsonl}:{line_number}")
+            generated[example_id] = prediction
+    missing = sorted(set(pair_by_id) - set(generated))
+    if missing:
+        raise RuntimeError(f"AFMR did not produce {len(missing)} prediction(s); first missing ID: {missing[0]}")
+
+    for example_id, pair in pair_by_id.items():
+        pair.prediction.parent.mkdir(parents=True, exist_ok=True)
+        temporary = pair.prediction.with_name(pair.prediction.name + ".tmp")
+        temporary.write_text(generated[example_id].strip() + "\n", encoding="utf-8")
+        temporary.replace(pair.prediction)
+    print(f"[predict] wrote {len(generated)} AFMR summaries under {model_dir}")
+
+
 def validate_rouge_install(rouge_path: Path) -> None:
     script = rouge_path / "ROUGE-1.5.5.pl"
     data = rouge_path / "data"
@@ -496,11 +652,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-ref-root", type=Path, default=DATA_REF_ROOT)
     parser.add_argument("--output-root", type=Path, default=DATA_SUM_ROOT)
     parser.add_argument(
+        "--backend",
+        choices=("transformers", "afmr"),
+        default="transformers",
+        help="Use a local HF checkpoint or the AFMR runtime directly, without vLLM.",
+    )
+    parser.add_argument(
         "--model-path",
         type=Path,
         default=None,
-        help="Local Hugging Face checkpoint; no network download is performed",
+        help="Local Hugging Face checkpoint for --backend transformers; no network download is performed",
     )
+    parser.add_argument("--afmr-config", type=Path, default=None, help="AFMR resolved_config.yaml")
+    parser.add_argument("--afmr-checkpoint", type=Path, default=None, help="AFMR .pt checkpoint")
     parser.add_argument(
         "--model-name",
         "--model",
@@ -509,8 +673,18 @@ def parse_args() -> argparse.Namespace:
         help="Output folder name under data_sum (defaults to the local checkpoint directory name)",
     )
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--max-input-tokens", type=int, default=8192)
-    parser.add_argument("--max-new-tokens", type=int, default=512)
+    parser.add_argument(
+        "--max-input-tokens",
+        type=int,
+        default=None,
+        help="Override source limit; otherwise Transformers uses 8192 and AFMR uses its config value",
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=None,
+        help="Override output limit; otherwise Transformers uses 512 and AFMR uses its config value",
+    )
     parser.add_argument("--device", default="auto", help="Device such as cuda:0, cpu, or auto")
     parser.add_argument("--dtype", choices=("auto", "bf16", "fp16", "fp32"), default="auto")
     parser.add_argument("--prompt-template", default=DEFAULT_PROMPT, help="Use {source} where source text goes")
@@ -539,14 +713,32 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    model_name = args.model_name or (args.model_path.name if args.model_path is not None else None)
+    if args.backend == "transformers" and (args.afmr_config is not None or args.afmr_checkpoint is not None):
+        print("ERROR: --afmr-config/--afmr-checkpoint require --backend afmr", file=sys.stderr)
+        return 2
+    if args.backend == "afmr" and args.model_path is not None:
+        print("ERROR: use --afmr-config and --afmr-checkpoint with --backend afmr, not --model-path", file=sys.stderr)
+        return 2
+    if args.backend == "afmr" and ((args.afmr_config is None) != (args.afmr_checkpoint is None)):
+        print("ERROR: --backend afmr requires both --afmr-config and --afmr-checkpoint", file=sys.stderr)
+        return 2
+
+    afmr_generation = args.backend == "afmr" and args.afmr_config is not None
+    model_name = args.model_name
+    if model_name is None and args.model_path is not None:
+        model_name = args.model_path.name
+    if model_name is None and args.afmr_checkpoint is not None:
+        model_name = args.afmr_checkpoint.parent.name
     if not model_name:
-        print("ERROR: pass --model-path for generation or --model-name to score existing predictions", file=sys.stderr)
+        print(
+            "ERROR: pass a model/checkpoint path for generation or --model-name to score existing predictions",
+            file=sys.stderr,
+        )
         return 2
     model_dir = args.output_root.expanduser().resolve() / model_name
-    if not args.model_path and not model_dir.is_dir():
+    if not args.model_path and not afmr_generation and not model_dir.is_dir():
         print(
-            f"ERROR: prediction directory not found: {model_dir}; pass --model-path to generate predictions",
+            f"ERROR: prediction directory not found: {model_dir}; pass model checkpoint arguments to generate them",
             file=sys.stderr,
         )
         return 2
@@ -587,14 +779,30 @@ def main() -> int:
         print("ERROR: pyrouge is not installed in this environment", file=sys.stderr)
         return 2
 
-    if args.model_path:
+    if afmr_generation:
+        try:
+            generate_afmr_predictions(
+                pairs,
+                model_dir,
+                args.afmr_config,
+                args.afmr_checkpoint,
+                batch_size=args.batch_size,
+                device=args.device,
+                max_input_tokens=args.max_input_tokens,
+                max_new_tokens=args.max_new_tokens,
+                overwrite=args.overwrite_predictions,
+            )
+        except (ImportError, OSError, ValueError, RuntimeError) as exc:
+            print(f"ERROR during AFMR prediction: {exc}", file=sys.stderr)
+            return 2
+    elif args.model_path:
         try:
             generate_predictions(
                 pairs,
                 args.model_path,
                 batch_size=args.batch_size,
-                max_input_tokens=args.max_input_tokens,
-                max_new_tokens=args.max_new_tokens,
+                max_input_tokens=args.max_input_tokens if args.max_input_tokens is not None else 8192,
+                max_new_tokens=args.max_new_tokens if args.max_new_tokens is not None else 512,
                 prompt_template=args.prompt_template,
                 use_chat_template=not args.no_chat_template,
                 device_name=args.device,
@@ -625,15 +833,29 @@ def main() -> int:
             rouge_path,
             args.keep_temp,
             generation_config={
-                "checkpoint": str(args.model_path.expanduser().resolve()) if args.model_path else None,
+                "backend": args.backend if args.model_path or afmr_generation else None,
+                "checkpoint": (
+                    str(args.model_path.expanduser().resolve())
+                    if args.model_path
+                    else str(args.afmr_checkpoint.expanduser().resolve())
+                    if afmr_generation
+                    else None
+                ),
+                "afmr_config": str(args.afmr_config.expanduser().resolve()) if afmr_generation else None,
                 "prompt_template": args.prompt_template if args.model_path else None,
                 "uses_tokenizer_chat_template": not args.no_chat_template if args.model_path else None,
-                "batch_size": args.batch_size if args.model_path else None,
-                "max_input_tokens": args.max_input_tokens if args.model_path else None,
-                "max_new_tokens": args.max_new_tokens if args.model_path else None,
-                "device": args.device if args.model_path else None,
+                "batch_size": args.batch_size if args.model_path or afmr_generation else None,
+                "max_input_tokens": (args.max_input_tokens if args.max_input_tokens is not None else 8192)
+                if args.model_path
+                else args.max_input_tokens,
+                "max_new_tokens": (args.max_new_tokens if args.max_new_tokens is not None else 512)
+                if args.model_path
+                else args.max_new_tokens,
+                "device": args.device if args.model_path or afmr_generation else None,
                 "dtype": args.dtype if args.model_path else None,
-                "existing_predictions_reused": bool(args.model_path and not args.overwrite_predictions),
+                "existing_predictions_reused": bool(
+                    (args.model_path or afmr_generation) and not args.overwrite_predictions
+                ),
             },
             compare=not args.no_compare,
         )

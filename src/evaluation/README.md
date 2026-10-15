@@ -9,8 +9,9 @@ the server's source/reference TXT tree and can generate summaries first.
 
 `evaluate_rouge_vietnamese.py` reads source files from
 `data_raw/<dataset>/**/*.txt`, generates predictions with a local Transformers
-checkpoint, writes them under `data_sum/<model>/<dataset>/`, and scores them
-against matching files in `data_ref/<dataset>/`. It includes `ViM`, `book`,
+checkpoint or the repository's AFMR runtime, writes them under
+`data_sum/<model>/<dataset>/`, and scores them against matching files in
+`data_ref/<dataset>/`. It includes `ViM`, `book`,
 `legal`, `vietnews`, `vlsp22`, `wikilingua`, and `xlsum`; `ViM_sum_tmp` is
 excluded. Causal and encoder-decoder checkpoints are supported, and the model
 is loaded with local-only paths so no checkpoint is downloaded.
@@ -31,6 +32,29 @@ use `--no-chat-template` to force a plain prompt. Existing non-empty prediction
 files are reused. Pass `--overwrite-predictions` to regenerate them. ROUGE
 uses the historical preprocessing and flags (`-a -m -n 2 -d`), and results are
 written to `rouge_old_summary.json` under the model output directory.
+
+### Generate with a local AFMR/SEAM checkpoint (no vLLM)
+
+For the repository's custom encoder-decoder checkpoint, use the AFMR runtime
+backend. It reads the encoder/decoder prompt, source limit, generation limit,
+and precision from the supplied resolved config, writes per-file predictions
+to the same `data_sum/<model>/<dataset>/` layout, then runs ROUGE-1.5.5.
+`--batch-size` and `--device` control inference. vLLM is not used.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python3 src/evaluation/evaluate_rouge_vietnamese.py \
+  --backend afmr \
+  --afmr-config /path/to/resolved_config.yaml \
+  --afmr-checkpoint /path/to/last.pt \
+  --model-name seam \
+  --batch-size 4 \
+  --device cuda:0
+```
+
+The AFMR source package must be present at `src/eviseq_new/eviseq_afmr` next
+to this evaluator. Resumable intermediate JSONL files are kept under the
+model's hidden `.afmr_work/` directory. Use `--overwrite-predictions` to
+regenerate summaries instead of reusing existing per-file predictions.
 
 ## BERTScore with a local model
 
