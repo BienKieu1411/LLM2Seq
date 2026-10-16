@@ -24,6 +24,20 @@ class SEAMModelState(EncoderDecoderModelState):
         super().__init__(vllm_config, model, encoder_cache, device)
         self.copy_states: dict[str, Any] = {}
         self._dummy_inputs_pending = False
+        self._warmup_requests: set[str] = set()
+
+    def add_request(self, req_index: int, new_req_data: Any) -> None:
+        super().add_request(req_index, new_req_data)
+        req_id = new_req_data.req_id
+        self._warmup_requests.discard(req_id)
+        features = new_req_data.mm_features
+        # vLLM 0.25.1 warmup_kernels schedules encoder length-only placeholders
+        # through the normal scheduler; it deliberately never runs the encoder.
+        # Match the internal descriptor, not user-controllable request names.
+        if len(features) == 1:
+            feature = features[0]
+            if feature.data is None and feature.modality == "" and feature.identifier == "_warmup_encoder":
+                self._warmup_requests.add(req_id)
 
     def dummy_inputs_embeds(self, num_tokens: int):
         inputs_embeds = super().dummy_inputs_embeds(num_tokens)
@@ -82,6 +96,12 @@ class SEAMModelState(EncoderDecoderModelState):
             self._dummy_inputs_pending = False
             return self.prepare_dummy_inputs(input_batch.num_reqs, input_batch.num_tokens_after_padding)
         model_inputs = super().prepare_inputs(input_batch, req_states)
+        warmup = [req_id in self._warmup_requests for req_id in input_batch.req_ids]
+        if any(warmup):
+            if not all(warmup):
+                raise RuntimeError("SEAM cannot mix internal warmup requests with real inference requests")
+            model_inputs["copy_states"] = None
+            return model_inputs
         if self.model.copy_head is not None:
             missing = [req_id for req_id in input_batch.req_ids if req_id not in self.copy_states]
             if missing:
@@ -95,6 +115,7 @@ class SEAMModelState(EncoderDecoderModelState):
         return {"encoder_outputs": [], "copy_states": None}
 
     def remove_request(self, req_id: str) -> None:
+        self._warmup_requests.discard(req_id)
         self.copy_states.pop(req_id, None)
         self.model.clear_copy_batch_cache()
         super().remove_request(req_id)
