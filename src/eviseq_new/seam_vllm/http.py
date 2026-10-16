@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,8 @@ from eviseq_afmr.config import load_config
 from ._prompt import configured_decoder_prompt_ids
 from ._request import request_prompt_ids, source_prompt
 from ._sampling import sampling_kwargs, validate_sampling_params
+
+logger = logging.getLogger(__name__)
 
 
 def _text_content(content: Any) -> str:
@@ -193,15 +196,19 @@ class _SEAMOnlineRenderer:
                 prompt["cache_salt"] = request.cache_salt
         # Singleton prompts intentionally enter the registered EncDec processor
         # directly. It produces the encoder source plus the exact decoder IDs.
-        rendered = await self.original.renderer.render_cmpl_async(
-            prompts,
-            TokenizeParams(
-                max_total_tokens=self.handler.model_config.max_model_len,
-                max_output_tokens=budget,
-                add_special_tokens=False,
-            ),
-            skip_mm_cache=skip_mm_cache,
-        )
+        try:
+            rendered = await self.original.renderer.render_cmpl_async(
+                prompts,
+                TokenizeParams(
+                    max_total_tokens=self.handler.model_config.max_model_len,
+                    max_output_tokens=budget,
+                    add_special_tokens=False,
+                ),
+                skip_mm_cache=skip_mm_cache,
+            )
+        except (ValueError, TypeError, NotImplementedError):
+            logger.exception("SEAM multimodal preprocessing failed before engine submission")
+            raise
         results = []
         for raw in rendered:
             if raw.get("type") != "multimodal" or "encoder_prompt_token_ids" not in raw:

@@ -259,6 +259,13 @@ class SEAMMultimodalProcessor(EncDecMultiModalProcessor[SEAMProcessingInfo]):
             fields["input_ids"] = torch.as_tensor(
                 self.info.get_tokenizer()(prompt or "", **tok_kwargs)["input_ids"], dtype=torch.long
             )
+        # vLLM unpacks one batch row even in its tokens-only/mm-only path,
+        # which calls this hook with dummy *text*. HF tokenizers normally return
+        # a flat sequence for one string unless return_tensors was requested.
+        if fields["input_ids"].ndim == 1:
+            fields["input_ids"] = fields["input_ids"].unsqueeze(0)
+        if fields["input_ids"].ndim != 2 or fields["input_ids"].shape[0] != 1:
+            raise ValueError("SEAM HF processor requires exactly one prompt row of token IDs")
         return BatchFeature(fields)
 
     def _get_mm_fields_config(
