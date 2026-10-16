@@ -217,7 +217,38 @@ This fingerprint covers the resolved config, checkpoint path/size/mtime,
 decoder context, and adapter code. It does not hash the full checkpoint weights.
 The metadata route uses native `/v1` authentication.
 
-From the repository root, with the server already running:
+To start a temporary host, predict and score in one command from the repository
+root (in the environment with vLLM 0.25.1 and the installed SEAM plugin):
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python3 src/evaluation/evaluate_rouge_vietnamese_vllm.py \
+  --start-server \
+  --afmr-config /absolute/path/resolved_config.yaml \
+  --afmr-checkpoint /absolute/path/epoch_003.pt \
+  --model-name seam_vi_vllm_003 \
+  --concurrency 16 \
+  --gpu-memory-utilization 0.90 \
+  --temperature 0 \
+  --top-p 1 \
+  --top-k 0 \
+  --allow-missing
+```
+
+`--start-server` (alias `--start-vllm-service`) launches the native SEAM host
+on `127.0.0.1:8000`, waits for its metadata/model routes, verifies the checkpoint
+identity, then sends concurrent requests. The host uses the evaluator's Python
+environment and inherits `CUDA_VISIBLE_DEVICES`; no model downloads are allowed.
+It is stopped after prediction, before ROUGE, including prediction errors and
+Ctrl+C. Only the subprocess group created by this evaluator is stopped.
+
+The host log is `<model output>/seam_vllm_server.log`. Use `--server-log` to
+choose another path, `--server-port` to change the port, or `--startup-timeout`
+to change the default 1200-second loading timeout. A busy port is rejected;
+an existing host is never stopped or silently reused. `--max-num-seqs` defaults
+to `--concurrency` for this host. Input/output limits and prompts default to
+the supplied config; request overrides follow the same HTTP rules below.
+
+With the server already running, omit `--start-server` and local model paths:
 
 ```bash
 python3 src/evaluation/evaluate_rouge_vietnamese_vllm.py \

@@ -3,8 +3,8 @@
 
 This is a separate vLLM runner for ``evaluate_rouge_vietnamese.py``. It keeps
 the same source/reference directory layout, prediction preprocessing, and
-ROUGE-1.5.5 command. HTTP mode calls an existing SEAM server without loading
-weights; the previous in-process vLLM backend remains available as local mode.
+ROUGE-1.5.5 command. HTTP mode calls an existing SEAM server or starts one with
+--start-server; the in-process vLLM backend remains available as local mode.
 """
 
 from __future__ import annotations
@@ -14,11 +14,15 @@ import copy
 import hashlib
 import json
 import os
+import signal
+import socket
+import subprocess
 import sys
 import tempfile
 import time
 from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -79,6 +83,95 @@ class SEAMHTTPClient:
                 raise RuntimeError(f"SEAM returned invalid JSON at {path}") from None
             time.sleep(min(2.0, 0.5 * (2**attempt)))
         raise RuntimeError("SEAM HTTP retries exhausted")
+
+
+@contextmanager
+def managed_seam_server(args, model_dir: Path, config_path: Path, checkpoint_path: Path):
+    """Start a loopback host and stop only this process group on every exit path."""
+    with socket.socket() as probe:
+        try:
+            probe.bind(("127.0.0.1", args.server_port))
+        except OSError as exc:
+            raise RuntimeError(
+                f"Port {args.server_port} is unavailable; choose --server-port or use the existing --base-url"
+            ) from exc
+    log_path = (args.server_log or model_dir / "seam_vllm_server.log").expanduser().resolve()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        sys.executable,
+        "-m",
+        "seam_vllm.serve",
+        "--config",
+        str(config_path),
+        "--checkpoint",
+        str(checkpoint_path),
+        "--served-model-name",
+        args.server_model,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(args.server_port),
+        "--max-num-seqs",
+        str(args.max_num_seqs if args.max_num_seqs is not None else args.batch_size),
+        "--gpu-memory-utilization",
+        str(0.90 if args.gpu_memory_utilization is None else args.gpu_memory_utilization),
+    ]
+    env = os.environ.copy()
+    package_root = EVALUATION_DIR.parent / "eviseq_new"
+    env["PYTHONPATH"] = str(package_root) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env.update(VLLM_USE_V2_MODEL_RUNNER="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+    api_key = args.api_key or env.get("VLLM_API_KEY") or env.get("OPENAI_API_KEY")
+    if api_key:
+        env["VLLM_API_KEY"] = api_key  # Do not expose the key in process arguments/logs.
+    base_url = f"http://127.0.0.1:{args.server_port}/v1"
+    client = SEAMHTTPClient(base_url, api_key, timeout=2, retries=0)
+    with log_path.open("a", encoding="utf-8") as log:
+        print(f"[host] starting {base_url} | log={log_path}", flush=True)
+        process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            started = time.monotonic()
+            next_progress = started + 30
+            while True:
+                if process.poll() is not None:
+                    raise RuntimeError(f"SEAM host exited with code {process.returncode}; inspect {log_path}")
+                if time.monotonic() - started >= args.startup_timeout:
+                    raise RuntimeError(f"SEAM host startup timed out; inspect {log_path}")
+                try:
+                    info = client.request("/seam/info")
+                except RuntimeError:
+                    info = None
+                if info is not None:
+                    if info.get("implementation") != "SEAMForQwen3" or info.get("checkpoint", {}).get("path") != str(
+                        checkpoint_path
+                    ):
+                        raise RuntimeError("Started endpoint did not identify the requested SEAM checkpoint")
+                    models = client.request("/models")
+                    if args.server_model not in [entry.get("id") for entry in models.get("data", [])]:
+                        raise RuntimeError("Started endpoint does not expose the requested model alias")
+                    print(f"[host] ready after {time.monotonic() - started:.1f}s", flush=True)
+                    yield base_url
+                    break
+                if time.monotonic() >= next_progress:
+                    print(f"[host] loading | elapsed={time.monotonic() - started:.0f}s | log={log_path}", flush=True)
+                    next_progress = time.monotonic() + 30
+                time.sleep(1)
+        finally:
+            # vLLM creates GPU worker processes; terminating only its parent can
+            # leave those workers holding VRAM. Never target an external host.
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=5)
+            print("[host] stopped", flush=True)
 
 
 def generate_http_predictions(
@@ -477,8 +570,23 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--api-key", default=None)
     parser.add_argument("--timeout", type=float, default=600.0, help="HTTP request timeout in seconds")
     parser.add_argument("--retries", type=int, default=2, help="Retries for transient HTTP errors")
-    parser.add_argument("--afmr-config", type=Path, default=None, help="Local backend: run's resolved_config.yaml")
-    parser.add_argument("--afmr-checkpoint", type=Path, default=None, help="Local backend: SEAM/AFMR .pt checkpoint")
+    parser.add_argument(
+        "--start-server",
+        "--start-vllm-service",
+        action="store_true",
+        help="Start a local SEAM HTTP host for this evaluation and stop it afterwards",
+    )
+    parser.add_argument("--server-port", type=int, default=8000, help="Port of the automatically started loopback host")
+    parser.add_argument("--startup-timeout", type=float, default=1200, help="Host startup timeout in seconds")
+    parser.add_argument(
+        "--server-log", type=Path, default=None, help="Host log; defaults to <model output>/seam_vllm_server.log"
+    )
+    parser.add_argument(
+        "--afmr-config", type=Path, default=None, help="Local backend/auto host: run's resolved_config.yaml"
+    )
+    parser.add_argument(
+        "--afmr-checkpoint", type=Path, default=None, help="Local backend/auto host: SEAM/AFMR .pt checkpoint"
+    )
     parser.add_argument(
         "--model-name", default=None, help="Prediction subfolder; defaults to served-model_http or checkpoint_vllm"
     )
@@ -496,7 +604,7 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="vLLM concurrent sequence limit; defaults to --batch-size",
     )
     parser.add_argument(
-        "--gpu-memory-utilization", type=float, default=None, help="Local backend only; defaults to 0.90"
+        "--gpu-memory-utilization", type=float, default=None, help="Local backend/auto host only; defaults to 0.90"
     )
     parser.add_argument("--max-input-tokens", type=int, default=None, help="Encoder token cap including its prefix")
     parser.add_argument("--max-new-tokens", "--max-tokens", type=int, default=None, help="Decoder output token budget")
@@ -522,20 +630,31 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--keep-temp", type=Path, default=None)
     args = parser.parse_args(argv)
     args.backend = args.backend or (
-        "http" if args.base_url or not (args.afmr_config or args.afmr_checkpoint) else "local"
+        "http" if args.start_server or args.base_url or not (args.afmr_config or args.afmr_checkpoint) else "local"
     )
+    if args.start_server:
+        if args.backend != "http" or args.base_url:
+            parser.error("--start-server requires HTTP mode without --base-url; use --server-port")
+        if not args.afmr_config or not args.afmr_checkpoint:
+            parser.error("--start-server requires --afmr-config and --afmr-checkpoint")
+        if not 1 <= args.server_port <= 65535 or not args.startup_timeout > 0:
+            parser.error("server-port must be in [1, 65535] and startup-timeout must be positive")
     if args.backend == "local":
         if not args.afmr_config or not args.afmr_checkpoint:
             parser.error("Local evaluation requires --afmr-config and --afmr-checkpoint")
         if args.base_url:
             parser.error("--base-url is an HTTP backend option")
     else:
-        if args.afmr_config or args.afmr_checkpoint:
+        if not args.start_server and (args.afmr_config or args.afmr_checkpoint):
             parser.error("HTTP evaluation uses the hosted model; omit local --afmr-config/--afmr-checkpoint")
-        if args.max_num_seqs is not None or args.gpu_memory_utilization is not None:
+        if not args.start_server and (args.max_num_seqs is not None or args.gpu_memory_utilization is not None):
             parser.error("Set max-num-seqs/GPU memory on the host; use --concurrency for HTTP evaluation")
     if args.batch_size < 1:
         parser.error("--batch-size/--concurrency must be positive")
+    if args.max_num_seqs is not None and args.max_num_seqs < 1:
+        parser.error("--max-num-seqs must be positive")
+    if args.gpu_memory_utilization is not None and not 0 < args.gpu_memory_utilization <= 1:
+        parser.error("--gpu-memory-utilization must be in (0, 1]")
     for key in ("max_input_tokens", "max_new_tokens"):
         if getattr(args, key) is not None and getattr(args, key) < 1:
             parser.error(f"--{key.replace('_', '-')} must be positive")
@@ -545,7 +664,7 @@ def parse_args(argv=None) -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     checkpoint_path = config_path = None
-    if args.backend == "local":
+    if args.backend == "local" or args.start_server:
         checkpoint_path = args.afmr_checkpoint.expanduser().resolve()
         config_path = args.afmr_config.expanduser().resolve()
         for label, path in (("checkpoint", checkpoint_path), ("config", config_path)):
@@ -553,7 +672,7 @@ def main() -> int:
                 print(f"ERROR: SEAM {label} not found: {path}", file=sys.stderr)
                 return 2
     default_name = (
-        f"{checkpoint_path.parent.name}_{checkpoint_path.stem}_vllm"
+        f"{checkpoint_path.parent.name}_{checkpoint_path.stem}_{'http' if args.start_server else 'vllm'}"
         if checkpoint_path
         else args.server_model.replace("/", "_") + "_http"
     )
@@ -621,16 +740,20 @@ def main() -> int:
             },
         )
         if args.backend == "http":
-            generation = generate_http_predictions(
-                pairs,
-                model_dir,
-                base_url=args.base_url or "http://127.0.0.1:8000/v1",
-                server_model=args.server_model,
-                api_key=args.api_key or os.environ.get("VLLM_API_KEY") or os.environ.get("OPENAI_API_KEY"),
-                timeout=args.timeout,
-                retries=args.retries,
-                **common,
-            )
+            with ExitStack() as stack:
+                base_url = args.base_url or "http://127.0.0.1:8000/v1"
+                if args.start_server:
+                    base_url = stack.enter_context(managed_seam_server(args, model_dir, config_path, checkpoint_path))
+                generation = generate_http_predictions(
+                    pairs,
+                    model_dir,
+                    base_url=base_url,
+                    server_model=args.server_model,
+                    api_key=args.api_key or os.environ.get("VLLM_API_KEY") or os.environ.get("OPENAI_API_KEY"),
+                    timeout=args.timeout,
+                    retries=args.retries,
+                    **common,
+                )
         else:
             generation = generate_vllm_predictions(
                 pairs,
