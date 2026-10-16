@@ -23,6 +23,14 @@ class SEAMModelState(EncoderDecoderModelState):
     ) -> None:
         super().__init__(vllm_config, model, encoder_cache, device)
         self.copy_states: dict[str, Any] = {}
+        self._dummy_inputs_pending = False
+
+    def dummy_inputs_embeds(self, num_tokens: int):
+        inputs_embeds = super().dummy_inputs_embeds(num_tokens)
+        # V2 profiling calls this hook, then normal prepare_inputs rather than
+        # prepare_dummy_inputs. Use the explicit hook, never request-ID patterns.
+        self._dummy_inputs_pending = True
+        return inputs_embeds
 
     def get_mm_embeddings(
         self,
@@ -30,6 +38,7 @@ class SEAMModelState(EncoderDecoderModelState):
         input_batch: InputBatch,
         req_states: RequestState,
     ) -> None:
+        self._dummy_inputs_pending = False
         ordered_inputs: dict[str, list[int]] = {}
         for req_id in input_batch.req_ids:
             indices = scheduled_encoder_inputs.get(req_id, [])
@@ -69,6 +78,9 @@ class SEAMModelState(EncoderDecoderModelState):
             self.copy_states[req_id] = state
 
     def prepare_inputs(self, input_batch: InputBatch, req_states: RequestState) -> dict[str, Any]:
+        if self._dummy_inputs_pending:
+            self._dummy_inputs_pending = False
+            return self.prepare_dummy_inputs(input_batch.num_reqs, input_batch.num_tokens_after_padding)
         model_inputs = super().prepare_inputs(input_batch, req_states)
         if self.model.copy_head is not None:
             missing = [req_id for req_id in input_batch.req_ids if req_id not in self.copy_states]
