@@ -77,10 +77,24 @@ reads the encoder, decoder, prompt, precision, and generation settings from the 
 config, and loads only local checkpoint paths. It enables offline HF loading
 and does not download backbone weights.
 
-## Install in the existing vLLM environment
+## Run from source in the existing vLLM environment
 
-On the server, activate the environment that already contains vLLM 0.25.1 and
-run:
+On the server, activate the environment that already contains vLLM 0.25.1.
+The facade, SEAM host launcher and evaluator's `--start-server` work directly
+from copied source; plugin installation is not required. Keep `seam_vllm` and
+`eviseq_afmr` in the same parent directory. For a Python script outside that
+directory, expose it before importing the facade:
+
+```bash
+export PYTHONPATH="$PWD/src/eviseq_new${PYTHONPATH:+:$PYTHONPATH}"
+```
+
+The facade/launcher prepares temporary standard entry-point metadata and makes
+it discoverable in the current process and fresh worker/inspector processes.
+No pip command, package download or site-packages modification occurs.
+
+Installation remains optional for the `seam-serve` console command or bare
+vLLM usage without the SEAM launcher/facade:
 
 ```bash
 bash src/eviseq_new/scripts/install_seam_vllm_plugin.sh

@@ -7,11 +7,11 @@ import json
 import os
 import shlex
 import sys
-from importlib.metadata import entry_points
 from pathlib import Path
 
 from eviseq_afmr.config import load_config, resolve_path
 
+from ._bootstrap import ensure_source_plugin
 from ._compat import validate_decoder_config
 
 
@@ -127,18 +127,17 @@ def main():
             printable[printable.index("--api-key") + 1] = "<redacted>"
         print(shlex.join(printable))
         return
+    ensure_source_plugin()
     import vllm
 
     if vllm.__version__.split("+")[0] != "0.25.1":
         raise RuntimeError(f"SEAM HTTP requires vLLM 0.25.1; received {vllm.__version__}")
-    if not entry_points(group="vllm.general_plugins", name="seam"):
-        raise RuntimeError("Install the local plugin first: bash scripts/install_seam_vllm_plugin.sh")
-    selected = os.environ.get("VLLM_PLUGINS")
-    if selected is not None:
-        names = [name.strip() for name in selected.split(",") if name.strip()]
-        if "seam" not in names:
-            os.environ["VLLM_PLUGINS"] = ",".join([*names, "seam"])
-    os.execv(sys.executable, command)
+    from vllm.entrypoints.cli.main import main as vllm_main
+
+    # Keep source-only entry-point metadata alive until the native host and its
+    # workers stop. execv would discard its cleanup handler and Python state.
+    sys.argv = ["vllm", *command[3:]]
+    vllm_main()
 
 
 if __name__ == "__main__":

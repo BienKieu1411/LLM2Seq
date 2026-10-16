@@ -8,6 +8,7 @@ from typing import Any, Sequence
 
 from eviseq_afmr.config import load_config, resolve_path
 
+from ._bootstrap import ensure_source_plugin
 from ._compat import validate_engine_options
 from ._prompt import configured_decoder_prompt_ids
 from ._request import request_prompt_ids, source_prompt
@@ -50,6 +51,7 @@ class SEAMLLM:
         if os.environ.get("VLLM_USE_V2_MODEL_RUNNER", "1") != "1":
             raise ValueError("SEAM requires VLLM_USE_V2_MODEL_RUNNER=1 for request-specific copy state")
         os.environ.setdefault("VLLM_USE_V2_MODEL_RUNNER", "1")
+        ensure_source_plugin()
         import vllm
         from transformers import AutoTokenizer
         from vllm import LLM

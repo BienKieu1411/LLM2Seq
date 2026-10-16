@@ -9,13 +9,11 @@ This implementation targets vLLM **0.25.1**, a **Qwen3 causal decoder**, and
 **one GPU**. The encoder uses the existing AFMR encoder adapter. Other decoder
 families are not implemented by this plugin.
 
-## Install and start
+## Start from source, without installing the plugin
 
 From the repository root, in the environment already containing vLLM 0.25.1:
 
 ```bash
-bash src/eviseq_new/scripts/install_seam_vllm_plugin.sh
-
 CUDA_VISIBLE_DEVICES=0 bash src/eviseq_new/scripts/serve_seam_vllm.sh \
   --config /absolute/path/resolved_config.yaml \
   --checkpoint /absolute/path/best.pt \
@@ -28,8 +26,14 @@ CUDA_VISIBLE_DEVICES=0 bash src/eviseq_new/scripts/serve_seam_vllm.sh \
 
 The config must point to the local encoder and decoder directories used for the
 checkpoint. The launcher does not change the config or download weights.
-Installation does not replace vLLM/PyTorch dependencies. After reinstalling, the
-same launcher is also available as `seam-serve --config ... --checkpoint ...`.
+The source folders `seam_vllm` and `eviseq_afmr` must be present alongside each
+other. No `pip install` is required: the launcher exposes a temporary plugin
+entry point and propagates its source/metadata paths to vLLM worker processes.
+It does not modify vLLM or site-packages. Existing vLLM/PyTorch/Transformers
+dependencies must already be available in the active environment.
+
+Installing with `scripts/install_seam_vllm_plugin.sh` remains optional if the
+`seam-serve` console command or bare native vLLM commands are wanted.
 
 Use `--api-key YOUR_KEY`, or the native `VLLM_API_KEY` environment variable, for
 vLLM authentication. The launcher also accepts `--max-model-len` for decoder
@@ -38,9 +42,11 @@ encoder source cap comes from `data.max_source_length` in the resolved config.
 `max-num-seqs` controls concurrent sequences, rather than a fixed batch size.
 Start conservatively and measure GPU memory with the actual document lengths.
 
-`--dry-run` prints the equivalent native launch command without loading weights
+`--dry-run` prints the native engine arguments without loading weights
 or starting a server (local config/tokenizer files are read). API keys are
-redacted in this printout. Internally the launcher executes the same CLI entry
+redacted in this printout. In source-only mode, keep using the SEAM launcher
+to prepare worker plugin discovery rather than copying that raw command.
+Internally the launcher executes the same CLI entry
 point as `vllm serve`, with the SEAM model overrides and:
 
 ```bash
@@ -218,7 +224,7 @@ decoder context, and adapter code. It does not hash the full checkpoint weights.
 The metadata route uses native `/v1` authentication.
 
 To start a temporary host, predict and score in one command from the repository
-root (in the environment with vLLM 0.25.1 and the installed SEAM plugin):
+root (in the environment with vLLM 0.25.1; plugin installation is not needed):
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python3 src/evaluation/evaluate_rouge_vietnamese_vllm.py \
@@ -264,8 +270,9 @@ python3 src/evaluation/evaluate_rouge_vietnamese_vllm.py \
 `--model` must match the host's `--served-model-name`. `--model-name` names the
 local prediction/report folder; it can differ from the served alias. Set
 `--api-key` (or `VLLM_API_KEY`/`OPENAI_API_KEY`) when required by the server.
-The HTTP evaluator does not load weights or require a local GPU or local
-checkpoint/config. It uses the server's prompt and input/output token defaults.
+When connecting to an existing host, the evaluator does not load weights or
+require a local GPU or local checkpoint/config. It uses the server's prompt and
+input/output token defaults.
 
 Optional request overrides are `--encoder-prompt`, `--decoder-prompt`,
 `--decoder-prefix`, `--decoder-chat-template` / `--no-decoder-chat-template`,
