@@ -6,7 +6,7 @@ from typing import Any
 
 
 def configured_decoder_prompt_ids(tokenizer: Any, data: dict[str, Any]) -> list[int]:
-    instruction = str(data.get("decoder_prompt", "")).strip()
+    instruction = str(data.get("decoder_prompt") or "").strip()
     if bool(data.get("decoder_chat_template", False)):
         if not instruction:
             raise ValueError("decoder_chat_template requires data.decoder_prompt")
@@ -24,7 +24,7 @@ def configured_decoder_prompt_ids(tokenizer: Any, data: dict[str, Any]) -> list[
     if values and isinstance(values[0], list):
         values = values[0]
     result = [int(value) for value in values]
-    prefix = str(data.get("decoder_prefix", ""))
+    prefix = str(data.get("decoder_prefix") or "")
     if prefix:
         prefix_ids = tokenizer(prefix, add_special_tokens=False)["input_ids"]
         result.extend(int(value) for value in prefix_ids)
@@ -39,7 +39,7 @@ def configured_decoder_prompt_ids(tokenizer: Any, data: dict[str, Any]) -> list[
 def validate_decoder_prompt_ids(actual: list[int], expected: list[int]) -> None:
     if actual != expected:
         raise ValueError(
-            "SEAM's bridge is conditioned on the decoder prompt stored in resolved_config.yaml; "
-            "the vLLM request prompt must use those exact token IDs. Use SEAMLLM or pass its configured "
-            "prompt_token_ids to LLM.generate()."
+            "SEAM's bridge is conditioned on this request's decoder prompt; "
+            "the decoder and bridge must use identical token IDs. Use SEAMLLM/the HTTP adapter, "
+            "or pass matching prompt_token_ids and mm_processor_kwargs.seam_decoder_prompt_ids."
         )

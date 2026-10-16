@@ -24,6 +24,7 @@ data_filter = ["lingua-language-detector==2.2.0"]
 
 [project.scripts]
 eviseq-afmr = "eviseq_afmr.cli:main"
+seam-serve = "seam_vllm.serve:main"
 
 [project.entry-points."vllm.general_plugins"]
 seam = "seam_vllm.plugin:register"

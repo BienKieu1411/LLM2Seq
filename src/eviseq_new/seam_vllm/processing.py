@@ -9,6 +9,7 @@ from typing import Any
 import torch
 from eviseq_afmr.config import load_config, resolve_path
 from eviseq_afmr.data.copy_alignment import align_copy_tokens
+from eviseq_afmr.data.normalization import detokenize
 from transformers import AutoTokenizer, Qwen3Config
 from vllm.config.multimodal import BaseDummyOptions
 from vllm.inputs import MultiModalDataDict
@@ -103,6 +104,12 @@ class SEAMDummyInputsBuilder(BaseDummyInputsBuilder[SEAMProcessingInfo]):
     def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
         return "Summary:\n"
 
+    def get_dummy_processor_inputs(self, seq_len, mm_counts, mm_options):
+        inputs = super().get_dummy_processor_inputs(seq_len, mm_counts, mm_options)
+        # Decoding/re-encoding a chat prompt is not guaranteed to round-trip.
+        inputs.prompt = list(self.info.decoder_prompt_ids)
+        return inputs
+
     def get_dummy_mm_data(
         self,
         seq_len: int,
@@ -115,6 +122,10 @@ class SEAMDummyInputsBuilder(BaseDummyInputsBuilder[SEAMProcessingInfo]):
 
 
 class SEAMMultimodalProcessor(EncDecMultiModalProcessor[SEAMProcessingInfo]):
+    # The caller already supplies the exact trained decoder prompt, including
+    # any BOS/chat-template tokens. Do not prepend a second start token.
+    skip_decoder_start_token = True
+
     def create_encoder_prompt(self, prompt: str | list[int], mm_items: MultiModalDataItems) -> str | list[int]:
         return [0]
 
@@ -123,10 +134,21 @@ class SEAMMultimodalProcessor(EncDecMultiModalProcessor[SEAMProcessingInfo]):
         actual_prompt_ids = _to_ids(
             tokenizer.encode(prompt, add_special_tokens=False) if isinstance(prompt, str) else prompt
         )
+        if not actual_prompt_ids:
+            raise ValueError("SEAM requires a non-empty decoder prompt")
+        return actual_prompt_ids
+
+    def apply(self, inputs, timing_ctx):
         from ._prompt import validate_decoder_prompt_ids
 
-        validate_decoder_prompt_ids(actual_prompt_ids, self.info.decoder_prompt_ids)
-        return prompt
+        actual = _to_ids(
+            self.info.get_tokenizer().encode(inputs.prompt, add_special_tokens=False)
+            if isinstance(inputs.prompt, str)
+            else inputs.prompt
+        )
+        expected = inputs.hf_processor_mm_kwargs.get("seam_decoder_prompt_ids", self.info.decoder_prompt_ids)
+        validate_decoder_prompt_ids(actual, list(expected))
+        return super().apply(inputs, timing_ctx)
 
     def _hf_processor_applies_updates(
         self,
@@ -140,21 +162,32 @@ class SEAMMultimodalProcessor(EncDecMultiModalProcessor[SEAMProcessingInfo]):
         # per encoded source token before the encoder outputs are gathered.
         return False
 
-    def _encoder_prefix(self) -> str:
+    def _encoder_prefix(self, encoder_prompt: str | None = None) -> str:
         data = self.info.seam_config["data"]
-        prefix = str(data.get("encoder_prefix", ""))
+        if encoder_prompt is not None and not isinstance(encoder_prompt, str):
+            raise ValueError("seam_encoder_prompt must be text")
+        prefix = str(data.get("encoder_prefix", "")) if encoder_prompt is None else encoder_prompt
         marker = str(data.get("encoder_task_marker", ""))
         return prefix if not marker or prefix.startswith(marker) else marker + prefix
 
-    def _encode_source(self, source: str) -> dict[str, torch.Tensor]:
+    def _encode_source(
+        self, source: str, max_source_length: int | None = None, encoder_prompt: str | None = None
+    ) -> dict[str, torch.Tensor]:
         config = self.info.seam_config
         data = config["data"]
-        prefix = self._encoder_prefix()
+        source = source.strip()
+        if data.get("detokenize", False):
+            source = detokenize(source)
+        prefix = self._encoder_prefix(encoder_prompt)
+        configured_limit = int(data.get("max_source_length", 4096))
+        limit = configured_limit if max_source_length is None else int(max_source_length)
+        if not 0 < limit <= configured_limit:
+            raise ValueError(f"seam_max_source_length must be in [1, {configured_limit}]")
         encoded = self.info.encoder_tokenizer(
             prefix + source,
             add_special_tokens=True,
             truncation=True,
-            max_length=int(data.get("max_source_length", 4096)),
+            max_length=limit,
             return_offsets_mapping=True,
         )
         ids = [int(value) for value in encoded["input_ids"]]
@@ -205,7 +238,21 @@ class SEAMMultimodalProcessor(EncDecMultiModalProcessor[SEAMProcessingInfo]):
         from transformers.feature_extraction_utils import BatchFeature
 
         texts = None if mm_data is None else mm_data.get("texts")
-        fields = self._encode_source(texts[0]) if texts else {}
+        fields = (
+            self._encode_source(texts[0], mm_kwargs.get("seam_max_source_length"), mm_kwargs.get("seam_encoder_prompt"))
+            if texts
+            else {}
+        )
+        if texts:
+            budget = int(mm_kwargs.get("seam_output_budget", self.info.seam_config["generation"]["max_new_tokens"]))
+            if budget < 1:
+                raise ValueError("seam_output_budget must be positive")
+            fields["requested_output_tokens"] = torch.tensor([[budget]], dtype=torch.float32)
+            prompt_ids = mm_kwargs.get("seam_decoder_prompt_ids", self.info.decoder_prompt_ids)
+            if not prompt_ids or any(isinstance(x, bool) or not isinstance(x, int) or x < 0 for x in prompt_ids):
+                raise ValueError("seam_decoder_prompt_ids must be non-empty token IDs")
+            fields["bridge_prompt_ids"] = torch.tensor([prompt_ids], dtype=torch.long)
+            fields["bridge_prompt_mask"] = torch.ones((1, len(prompt_ids)), dtype=torch.bool)
         if isinstance(prompt, (list, tuple)) and (not prompt or isinstance(prompt[0], int)):
             fields["input_ids"] = torch.tensor([prompt], dtype=torch.long)
         else:
@@ -230,6 +277,9 @@ class SEAMMultimodalProcessor(EncDecMultiModalProcessor[SEAMProcessingInfo]):
                 "copy_encoder_indices",
                 "copy_token_indices",
                 "copy_alignment_weights",
+                "requested_output_tokens",
+                "bridge_prompt_ids",
+                "bridge_prompt_mask",
             )
             if key in hf_inputs
         }
@@ -245,8 +295,9 @@ class SEAMMultimodalProcessor(EncDecMultiModalProcessor[SEAMProcessingInfo]):
             return []
         from vllm.multimodal.processing import PromptReplacement
 
-        source = texts.get(0)
-        source_token_count = int(self._encode_source(source)["encoder_input_ids"].shape[-1])
+        # The processor already tokenized and aligned the source. Reuse its
+        # result instead of repeating tokenization and copy alignment here.
+        source_token_count = int(out_mm_kwargs["text"][0]["encoder_input_ids"].data.numel())
         return [PromptReplacement(modality="text", target=[0], replacement=[0] * source_token_count)]
 
 

@@ -84,4 +84,5 @@ class SEAMModelState(EncoderDecoderModelState):
 
     def remove_request(self, req_id: str) -> None:
         self.copy_states.pop(req_id, None)
+        self.model.clear_copy_batch_cache()
         super().remove_request(req_id)

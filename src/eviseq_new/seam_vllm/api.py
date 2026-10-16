@@ -10,6 +10,8 @@ from eviseq_afmr.config import load_config, resolve_path
 
 from ._compat import validate_engine_options
 from ._prompt import configured_decoder_prompt_ids
+from ._request import request_prompt_ids, source_prompt
+from ._sampling import sampling_kwargs, validate_sampling_params
 
 
 class SEAMLLM:
@@ -45,8 +47,15 @@ class SEAMLLM:
 
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
         os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        if os.environ.get("VLLM_USE_V2_MODEL_RUNNER", "1") != "1":
+            raise ValueError("SEAM requires VLLM_USE_V2_MODEL_RUNNER=1 for request-specific copy state")
+        os.environ.setdefault("VLLM_USE_V2_MODEL_RUNNER", "1")
+        import vllm
         from transformers import AutoTokenizer
         from vllm import LLM
+
+        if vllm.__version__.split("+")[0] != "0.25.1":
+            raise RuntimeError(f"SEAM targets vLLM 0.25.1; received {vllm.__version__}")
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             str(self.decoder_path),
@@ -58,23 +67,6 @@ class SEAMLLM:
         ):
             raise ValueError("SEAM grounded copy requires the trained decoder's fast tokenizer for source offsets")
         self.prompt_token_ids = configured_decoder_prompt_ids(self.tokenizer, self.config["data"])
-        config = self.config
-        generation = config["generation"]
-        if int(generation.get("num_beams", 1)) != 1:
-            raise ValueError("SEAM vLLM currently supports greedy/sampling decode, not beam search")
-        if int(generation.get("no_repeat_ngram_size", 0)) > 0:
-            raise NotImplementedError(
-                "vLLM 0.25.1 does not implement AFMR no_repeat_ngram_size; "
-                "set generation.no_repeat_ngram_size=0 explicitly or use the AFMR evaluator"
-            )
-        if (
-            bool(self.config["data"].get("decoder_chat_template", False))
-            and float(generation.get("repetition_penalty", 1.0)) != 1.0
-        ):
-            raise NotImplementedError(
-                "SEAM vLLM cannot exclude decoder chat-template tokens from repetition_penalty; "
-                "set generation.repetition_penalty=1.0 or disable decoder_chat_template"
-            )
 
         validate_engine_options(vllm_options)
         defaults: dict[str, Any] = {
@@ -86,6 +78,8 @@ class SEAMLLM:
                 "is_encoder_decoder": True,
                 "seam_config_path": str(self.config_path),
                 "seam_checkpoint_path": str(self.checkpoint_path),
+                "max_source_positions": int(self.config["data"]["max_source_length"]),
+                "eos_token_id": self.tokenizer.eos_token_id,
             },
             "tensor_parallel_size": 1,
             "pipeline_parallel_size": 1,
@@ -101,29 +95,20 @@ class SEAMLLM:
         }
         defaults.update(vllm_options)
         self.engine = LLM(**defaults)
-        self._sampling_params = None
 
-    def _get_sampling_params(self):
-        if self._sampling_params is not None:
-            return self._sampling_params
+    def _get_sampling_params(self, sampling_params=None, **overrides):
         from vllm import SamplingParams
 
-        generation = self.config["generation"]
-        temperature = float(generation.get("temperature", 0.0))
-        params = {
-            "max_tokens": int(generation.get("max_new_tokens", 256)),
-            "min_tokens": int(generation.get("min_new_tokens", 0)),
-            "temperature": temperature,
-            "top_p": float(generation.get("top_p", 1.0)),
-            "top_k": max(0, int(generation.get("top_k", 0))),
-            "repetition_penalty": float(generation.get("repetition_penalty", 1.0)),
-        }
-        if temperature <= 0.0 or not bool(generation.get("do_sample", False)):
-            params["temperature"] = 0.0
-            params["top_p"] = 1.0
-            params["top_k"] = 0
-        self._sampling_params = SamplingParams(**params)
-        return self._sampling_params
+        if sampling_params is not None and overrides:
+            raise ValueError("Pass SamplingParams or generation keyword options, not both")
+        if sampling_params is None:
+            sampling_params = SamplingParams(**sampling_kwargs(self.config["generation"], overrides))
+        params = [sampling_params] if isinstance(sampling_params, SamplingParams) else list(sampling_params)
+        if not params or not all(isinstance(param, SamplingParams) for param in params):
+            raise TypeError("sampling_params must be SamplingParams or a sequence of SamplingParams")
+        for param in params:
+            validate_sampling_params(param)
+        return sampling_params if isinstance(sampling_params, SamplingParams) else params
 
     @staticmethod
     def _normalize_sources(sources: str | Sequence[str]) -> tuple[list[str], bool]:
@@ -136,24 +121,80 @@ class SEAMLLM:
                 raise ValueError("Every SEAM source must be a non-empty string")
         return normalized, single
 
-    def generate(self, sources: str | Sequence[str], *, use_tqdm: bool = False):
+    def generate(
+        self,
+        sources: str | Sequence[str],
+        sampling_params=None,
+        *,
+        use_tqdm: bool = False,
+        max_input_tokens: int | None = None,
+        encoder_prompt: str | None = None,
+        decoder_prompt: str | None = None,
+        decoder_prefix: str | None = None,
+        decoder_chat_template: bool | None = None,
+        **generation_options,
+    ):
+        """Return native vLLM RequestOutput objects; accept native or AFMR option names."""
         normalized, _ = self._normalize_sources(sources)
-        prompts = []
-        for source in normalized:
-            prompts.append(
-                {
-                    "prompt_token_ids": self.prompt_token_ids,
-                    "multi_modal_data": {"text": source},
-                }
-            )
-        return self.engine.generate(prompts, self._get_sampling_params(), use_tqdm=use_tqdm)
+        sampling_params = self._get_sampling_params(sampling_params, **generation_options)
+        from vllm import SamplingParams
 
-    def summarize(self, sources: str | Sequence[str], *, use_tqdm: bool = False) -> str | list[str]:
+        params = [sampling_params] * len(normalized) if isinstance(sampling_params, SamplingParams) else sampling_params
+        if len(params) != len(normalized):
+            raise ValueError("sampling_params must contain one entry per source")
+        source_limit = int(self.config["data"]["max_source_length"])
+        if max_input_tokens is not None and not 0 < max_input_tokens <= source_limit:
+            raise ValueError(
+                f"max_input_tokens must be in [1, {source_limit}]; increase the config limit before loading"
+            )
+        prompt_ids = self.prompt_token_ids
+        if any(value is not None for value in (decoder_prompt, decoder_prefix, decoder_chat_template)):
+            prompt_ids = request_prompt_ids(
+                self.tokenizer,
+                self.config["data"],
+                decoder_prompt=decoder_prompt,
+                decoder_prefix=decoder_prefix,
+                decoder_chat_template=decoder_chat_template,
+            )
+        prompts = []
+        for source, param in zip(normalized, params, strict=True):
+            prompts.append(
+                source_prompt(
+                    source,
+                    prompt_ids,
+                    source_limit=max_input_tokens or source_limit,
+                    output_budget=param.max_tokens,
+                    encoder_prompt=encoder_prompt,
+                )
+            )
+        return self.engine.generate(prompts, sampling_params, use_tqdm=use_tqdm)
+
+    def summarize(self, sources: str | Sequence[str], sampling_params=None, **options) -> str | list[str]:
         normalized, single = self._normalize_sources(sources)
-        outputs = self.generate(sources, use_tqdm=use_tqdm)
+        # Text convenience calls return exactly one completion per source.
+        request_keys = {
+            "use_tqdm",
+            "max_input_tokens",
+            "encoder_prompt",
+            "decoder_prompt",
+            "decoder_prefix",
+            "decoder_chat_template",
+        }
+        generation_options = {key: value for key, value in options.items() if key not in request_keys}
+        params = self._get_sampling_params(sampling_params, **generation_options)
+        from vllm import SamplingParams
+
+        all_params = [params] if isinstance(params, SamplingParams) else params
+        if any(param.n != 1 or not param.detokenize for param in all_params):
+            raise ValueError("summarize() requires n=1 and detokenize=True; use generate() for candidates/token IDs")
+        outputs = self.generate(
+            normalized,
+            params,
+            **{key: value for key, value in options.items() if key in request_keys},
+        )
         summaries = [output.outputs[0].text for output in outputs]
         return summaries[0] if single and len(normalized) == 1 else summaries
 
-    def __call__(self, sources: str | Sequence[str], *, use_tqdm: bool = False) -> str | list[str]:
+    def __call__(self, sources: str | Sequence[str], sampling_params=None, **options) -> str | list[str]:
         """Summarize one source or a batch, like a text-generation pipeline."""
-        return self.summarize(sources, use_tqdm=use_tqdm)
+        return self.summarize(sources, sampling_params, **options)

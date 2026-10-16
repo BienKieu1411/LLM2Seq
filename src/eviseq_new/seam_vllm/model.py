@@ -17,6 +17,7 @@ from torch import nn
 from vllm.config import VllmConfig
 from vllm.distributed import get_pp_group, get_tensor_model_parallel_world_size
 from vllm.model_executor.layers.attention.cross_attention import CrossAttention
+from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead
@@ -33,8 +34,12 @@ from ._compat import (
     validate_tokenizer_config,
     validate_vllm_config,
 )
+from ._copy_batch import CopyBatchCache, stack_copy_states
+from ._copy_logits import CopyLogitsMixer
+from ._cross_bias import pad_cross_key, pad_cross_query
 from ._prompt import configured_decoder_prompt_ids
 from ._shape import padded_attention_head_dim
+from ._tensors import _as_2d, bridge_prompt_batch, pack_bridge_memory, unpack_bridge_memory
 from ._weights import (
     expected_qwen3_decoder_checkpoint_keys,
     missing_parameter_names,
@@ -50,26 +55,6 @@ def _config_path(hf_config: Any, key: str) -> Path:
     if not path.is_file():
         raise FileNotFoundError(f"SEAM local file does not exist: {path}")
     return path
-
-
-def _as_2d(value: Any, name: str, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-    if isinstance(value, (list, tuple)) and value and not isinstance(value[0], (int, float, bool)):
-        rows = [torch.as_tensor(row, device=device, dtype=dtype).reshape(-1) for row in value]
-        width = max((row.numel() for row in rows), default=0)
-        fill = False if dtype == torch.bool else 0
-        output = torch.full((len(rows), width), fill, device=device, dtype=dtype)
-        for index, row in enumerate(rows):
-            output[index, : row.numel()] = row
-        tensor = output
-    else:
-        tensor = torch.as_tensor(value, device=device, dtype=dtype)
-        while tensor.ndim > 2 and tensor.shape[1] == 1:
-            tensor = tensor.squeeze(1)
-        if tensor.ndim == 1:
-            tensor = tensor.unsqueeze(0)
-    if tensor.ndim != 2:
-        raise ValueError(f"SEAM field {name} must be rank 2 after batching; got {tuple(tensor.shape)}")
-    return tensor
 
 
 class _SEAMCrossAttention(nn.Module):
@@ -94,14 +79,14 @@ class _SEAMCrossAttention(nn.Module):
             raise ValueError("SEAM Qwen3 cross-attention requires query heads divisible by KV heads")
 
         # Names and shapes mirror the copied cross-attention tensors in the
-        # AFMR checkpoint. The final padded coordinate carries source_bias.
+        # AFMR checkpoint. Two padded coordinates carry compensated source_bias.
         self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
         self.k_proj = nn.Linear(self.hidden_size, self.num_kv_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(self.hidden_size, self.num_kv_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
-        self.q_norm = nn.RMSNorm(self.head_dim, eps=float(config.rms_norm_eps))
-        self.k_norm = nn.RMSNorm(self.head_dim, eps=float(config.rms_norm_eps))
-        self.memory_norm = nn.RMSNorm(self.hidden_size, eps=float(config.rms_norm_eps))
+        self.q_norm = RMSNorm(self.head_dim, eps=float(config.rms_norm_eps))
+        self.k_norm = RMSNorm(self.head_dim, eps=float(config.rms_norm_eps))
+        self.memory_norm = RMSNorm(self.hidden_size, eps=float(config.rms_norm_eps))
         self.query_scale = float(getattr(attention, "scaling", self.head_dim**-0.5)) * math.sqrt(self.head_dim)
         self.attn = CrossAttention(
             num_heads=self.num_heads,
@@ -123,9 +108,7 @@ class _SEAMCrossAttention(nn.Module):
     ) -> torch.Tensor:
         query = self.q_proj(query_states).view(-1, self.num_heads, self.head_dim)
         query = self.q_norm(query) * self.query_scale
-        query_pad = query.new_zeros(query.shape[0], self.num_heads, self.padded_head_dim)
-        query_pad[..., : self.head_dim] = query
-        query_pad[..., self.head_dim] = 1.0
+        query_pad = pad_cross_query(query, self.padded_head_dim)
         query_pad = query_pad.reshape(-1, self.num_heads * self.padded_head_dim)
 
         key = value = None
@@ -136,12 +119,10 @@ class _SEAMCrossAttention(nn.Module):
             if memory.shape != value_memory.shape or source_bias.shape != memory.shape[:1]:
                 raise ValueError("SEAM packed cross-attention memory has inconsistent shapes")
             normalized = self.memory_norm(memory)
-            normalized_values = self.memory_norm(value_memory)
+            normalized_values = normalized if value_memory is memory else self.memory_norm(value_memory)
             key = self.k_proj(normalized).view(-1, self.num_kv_heads, self.head_dim)
             key = self.k_norm(key)
-            key_pad = key.new_zeros(key.shape[0], self.num_kv_heads, self.padded_head_dim)
-            key_pad[..., : self.head_dim] = key
-            key_pad[..., self.head_dim] = source_bias.to(key.dtype)[:, None] * math.sqrt(self.head_dim)
+            key_pad = pad_cross_key(key, source_bias, self.padded_head_dim)
             key = key_pad.reshape(-1, self.num_kv_heads * self.padded_head_dim)
             value = self.v_proj(normalized_values).view(-1, self.num_kv_heads, self.head_dim)
             value_pad = value.new_zeros(value.shape[0], self.num_kv_heads, self.padded_head_dim)
@@ -162,7 +143,7 @@ class SEAMQwen3DecoderLayer(Qwen3DecoderLayer):
         prefix: str = "",
     ) -> None:
         super().__init__(config, cache_config=cache_config, quant_config=quant_config, prefix=prefix)
-        self.cross_norm = nn.RMSNorm(config.hidden_size, eps=float(config.rms_norm_eps))
+        self.cross_norm = RMSNorm(config.hidden_size, eps=float(config.rms_norm_eps))
         self.cross = _SEAMCrossAttention(self, config, cache_config, quant_config, prefix=f"{prefix}.cross")
         self.cross_gate = nn.Parameter(torch.zeros((), dtype=torch.float32))
         self.cross_gate_max = float(getattr(config, "seam_cross_gate_max", 1.0))
@@ -282,6 +263,8 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         self.seam_config_path = config_path
         self.seam_checkpoint_path = checkpoint_path
         self.seam_config = load_config(config_path)
+        if int(self.seam_config["decoder"].get("cross_attention_every", 1)) != 1:
+            raise NotImplementedError("SEAM vLLM currently requires cross_attention_every=1")
         self._validate_local_backbones(config_path)
         validate_tokenizer_config(vllm_config, self.seam_config["model"]["decoder_name"])
         expected_dtype = str(
@@ -294,6 +277,9 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
 
         model_config = dict(self.seam_config["model"])
         model_config["gradient_checkpointing"] = False
+        # Match native CUDA evaluation: load the encoder at inference precision
+        # instead of first allocating FP32 weights and then converting them.
+        model_config["dtype"] = expected_dtype
         encoder_config = dict(self.seam_config)
         encoder_config["model"] = model_config
         self.encoder = build_encoder(encoder_config)
@@ -321,6 +307,9 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         self.register_buffer("decoder_prompt_ids", self._build_decoder_prompt(), persistent=False)
         self._completed_copy_states: list[CopyState | None] = []
         self._pending_copy_state: CopyState | None = None
+        self._has_copy_requests = False
+        self._copy_batch_cache = CopyBatchCache()
+        self._copy_logits_mixer = CopyLogitsMixer()
 
     def _validate_local_backbones(self, config_path: Path) -> None:
         for name in ("encoder_name", "decoder_name"):
@@ -342,8 +331,10 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         prompt_ids = configured_decoder_prompt_ids(tokenizer, data)
         return torch.tensor(prompt_ids, dtype=torch.long)
 
-    def _restore_afmr_checkpoint(self, checkpoint_path: Path) -> None:
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    def _restore_afmr_checkpoint(self, checkpoint_path: Path) -> set[str]:
+        # Training checkpoints also contain optimizer states. Memory-map their
+        # storages so inference only touches the model tensors it restores.
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False, mmap=True)
         expected_spec = architecture_spec(self.seam_config)
         actual_spec = checkpoint.get("architecture_spec")
         if actual_spec != expected_spec:
@@ -446,6 +437,17 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
                     )
                 parameter.copy_(value.to(device=parameter.device, dtype=parameter.dtype))
 
+        # vLLM's DefaultModelLoader checks every named parameter, including
+        # encoder/bridge/copy/cross modules loaded outside AutoWeightsLoader.
+        restored = set(loaded) | set(cross_values)
+        for prefix, module in (("encoder", self.encoder), ("bridge", self.bridge), ("copy_head", self.copy_head)):
+            if module is not None:
+                restored.update(f"{prefix}.{name}" for name, _ in module.named_parameters())
+        missing = missing_parameter_names(params, restored)
+        if missing:
+            raise RuntimeError(f"SEAM checkpoint did not restore all model parameters: {missing[:8]}")
+        return restored & set(params)
+
     def get_language_model(self) -> nn.Module:
         return self.model
 
@@ -473,6 +475,9 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         copy_encoder_indices=None,
         copy_token_indices=None,
         copy_alignment_weights=None,
+        requested_output_tokens=None,
+        bridge_prompt_ids=None,
+        bridge_prompt_mask=None,
         **kwargs,
     ) -> list[torch.Tensor]:
         device = self.decoder_prompt_ids.device
@@ -490,15 +495,23 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
 
         encoder_state = self.encoder(ids, attention_mask, content_mask)
         batch = ids.shape[0]
-        prompt_ids = self.decoder_prompt_ids.to(device=device).unsqueeze(0).expand(batch, -1)
-        prompt_mask = torch.ones_like(prompt_ids, dtype=torch.bool)
-        prompt_embeddings = self.model.embed_tokens(prompt_ids)
-        output_budget = torch.full(
-            (batch,),
-            int(self.seam_config["generation"].get("max_new_tokens", 256)),
-            device=device,
-            dtype=torch.float32,
+        prompt_ids, prompt_mask = bridge_prompt_batch(
+            self.decoder_prompt_ids, bridge_prompt_ids, bridge_prompt_mask, batch, device
         )
+        prompt_embeddings = self.model.embed_tokens(prompt_ids)
+        if requested_output_tokens is None:
+            output_budget = torch.full(
+                (batch,),
+                int(self.seam_config["generation"].get("max_new_tokens", 256)),
+                device=device,
+                dtype=torch.float32,
+            )
+        else:
+            output_budget = _as_2d(requested_output_tokens, "requested_output_tokens", device, torch.float32).reshape(
+                -1
+            )
+            if output_budget.numel() != batch:
+                raise ValueError("SEAM requires one requested output budget per source")
         bridge = self.bridge(encoder_state, prompt_embeddings, prompt_mask, output_budget)
         decoder_dtype = self.model.embed_tokens.weight.dtype
         memory = bridge.memory.to(decoder_dtype)
@@ -529,33 +542,16 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
             )
             copy_batch = [prepared.index_select(torch.tensor([i], device=device)) for i in range(batch)]
 
-        value_memory = memory if value_memory is None else value_memory
-        packed = torch.cat((memory, value_memory, bridge.source_bias.unsqueeze(-1).to(memory.dtype)), dim=-1)
+        packed = pack_bridge_memory(memory, value_memory, bridge.source_bias)
         lengths = attention_mask.sum(dim=-1).tolist()
         self._completed_copy_states.extend(copy_batch)
         return [packed[index, : int(length)].contiguous() for index, length in enumerate(lengths)]
 
-    @staticmethod
-    def _stack_copy_states(states: list[CopyState | None]) -> CopyState | None:
-        if not states or all(state is None for state in states):
-            return None
-        if any(state is None for state in states):
-            raise ValueError("SEAM batch mixes requests with and without required grounded-copy state")
-        typed = [state for state in states if state is not None]
-        max_width = max(state.token_ids.shape[-1] for state in typed)
-        first = typed[0]
-        batch = len(typed)
-        keys = first.keys.new_zeros(batch, max_width, first.keys.shape[-1])
-        token_ids = first.token_ids.new_zeros(batch, max_width)
-        mask = first.mask.new_zeros(batch, max_width)
-        bias = first.bias.new_zeros(batch, max_width)
-        for row, state in enumerate(typed):
-            width = state.token_ids.shape[-1]
-            keys[row, :width] = state.keys[0]
-            token_ids[row, :width] = state.token_ids[0]
-            mask[row, :width] = state.mask[0]
-            bias[row, :width] = state.bias[0]
-        return CopyState(keys, token_ids, mask, bias)
+    _stack_copy_states = staticmethod(stack_copy_states)
+
+    def clear_copy_batch_cache(self) -> None:
+        self._copy_batch_cache.clear()
+        self._copy_logits_mixer.clear()
 
     def forward(
         self,
@@ -571,12 +567,9 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         if encoder_outputs:
             packed = torch.cat(encoder_outputs, dim=0)
             hidden = int(self.config.hidden_size)
-            if packed.shape[-1] != 2 * hidden + 1:
-                raise ValueError(f"SEAM encoder output has width {packed.shape[-1]}, expected {2 * hidden + 1}")
-            memory = packed[:, :hidden]
-            value_memory = packed[:, hidden : 2 * hidden]
-            source_bias = packed[:, 2 * hidden].float()
-        self._pending_copy_state = self._stack_copy_states(copy_states or [])
+            memory, value_memory, source_bias = unpack_bridge_memory(packed, hidden)
+        self._pending_copy_state = self._copy_batch_cache.get(copy_states or [])
+        self._has_copy_requests = bool(copy_states) and self.copy_head is not None
         return self.model(
             input_ids,
             positions,
@@ -591,6 +584,8 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         logits = self.logits_processor(self.lm_head, hidden_states)
         copy_state = self._pending_copy_state
         self._pending_copy_state = None
+        if self._has_copy_requests and copy_state is None and hidden_states.shape[0]:
+            raise RuntimeError("SEAM copy state was already consumed; prompt_logprobs is not supported")
         if logits is None or self.copy_head is None or copy_state is None:
             return logits
         if logits.shape[0] != copy_state.token_ids.shape[0]:
@@ -598,13 +593,14 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
                 "vLLM selected a different number/order of logits than SEAM request copy states; "
                 "exact copy-mixed decoding cannot proceed"
             )
-        return self.copy_head.mix_logits(hidden_states[:, None, :], logits[:, None, :], copy_state)[:, 0, :]
+        return self._copy_logits_mixer.mix(self.copy_head, hidden_states, logits, copy_state)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         loader = AutoWeightsLoader(self, skip_prefixes=["lm_head."] if self.config.tie_word_embeddings else None)
-        loaded = loader.load_weights(weights)
-        self._restore_afmr_checkpoint(self.seam_checkpoint_path)
-        return loaded
+        loader.load_weights(weights)
+        # Report custom-module parameters too: vLLM checks the entire model,
+        # not just the original HF decoder loaded by AutoWeightsLoader.
+        return self._restore_afmr_checkpoint(self.seam_checkpoint_path)
 
 
 def _as_token_list(values: Any) -> list[int]:

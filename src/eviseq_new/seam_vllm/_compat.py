@@ -35,6 +35,7 @@ def validate_engine_options(options: Mapping[str, Any]) -> None:
         "skip_tokenizer_init",
         "dtype",
         "override_attention_dtype",
+        "model_impl",
     } & options.keys()
     if protected:
         names = ", ".join(sorted(protected))
@@ -56,6 +57,10 @@ def validate_engine_options(options: Mapping[str, Any]) -> None:
         raise NotImplementedError("SEAM vLLM has not validated speculative decoding")
     if options.get("quantization") is not None or options.get("quantization_config") is not None:
         raise NotImplementedError("SEAM vLLM currently requires unquantized model weights")
+    if options.get("load_format", "auto") not in ("auto", "safetensors", "pt"):
+        raise NotImplementedError(
+            "SEAM requires the standard weight loader; load_format must be auto, safetensors, or pt"
+        )
 
 
 def validate_vllm_config(vllm_config: Any) -> None:
@@ -63,6 +68,12 @@ def validate_vllm_config(vllm_config: Any) -> None:
 
     model_config = vllm_config.model_config
     cache_config = vllm_config.cache_config
+    if not vllm_config.use_v2_model_runner:
+        raise NotImplementedError("SEAM requires VLLM_USE_V2_MODEL_RUNNER=1; the V1 runner cannot preserve copy state")
+    if vllm_config.load_config.load_format not in ("auto", "safetensors", "pt"):
+        raise NotImplementedError(
+            "SEAM requires the standard weight loader; load_format must be auto, safetensors, or pt"
+        )
     if bool(model_config.skip_tokenizer_init):
         raise NotImplementedError("SEAM requires vLLM tokenizer initialization for prompts and output text")
     if not bool(model_config.enforce_eager):
