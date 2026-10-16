@@ -14,11 +14,18 @@ def pack_bridge_memory(memory, value_memory, source_bias):
 
 
 def unpack_bridge_memory(packed, hidden: int):
+    # The appended bias makes the packed row width odd. A slice can have
+    # stride(-1)==1 while its BF16 row starts are unaligned for vLLM's vector
+    # loads in RMSNorm. Materialize once per encoder prefill, before any layer.
     if packed.shape[-1] == hidden + 1:
-        memory = packed[:, :hidden]
-        return memory, memory, packed[:, hidden].float()
+        memory = packed[:, :hidden].contiguous()
+        return memory, memory, packed[:, hidden].float().contiguous()
     if packed.shape[-1] == 2 * hidden + 1:
-        return packed[:, :hidden], packed[:, hidden : 2 * hidden], packed[:, 2 * hidden].float()
+        return (
+            packed[:, :hidden].contiguous(),
+            packed[:, hidden : 2 * hidden].contiguous(),
+            packed[:, 2 * hidden].float().contiguous(),
+        )
     raise ValueError(f"SEAM encoder output has width {packed.shape[-1]}, expected {hidden + 1} or {2 * hidden + 1}")
 
 
