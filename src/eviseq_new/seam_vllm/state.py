@@ -23,6 +23,7 @@ class SEAMModelState(EncoderDecoderModelState):
     ) -> None:
         super().__init__(vllm_config, model, encoder_cache, device)
         self.copy_states: dict[str, Any] = {}
+        self.copy_states_by_hash: dict[str, Any] = {}
         self._dummy_inputs_pending = False
         self._warmup_requests: set[str] = set()
 
@@ -81,6 +82,7 @@ class SEAMModelState(EncoderDecoderModelState):
                 "SEAM encoder/copy output count differs from vLLM's source-item count; refusing to lose copy state"
             )
         copy_by_hash = dict(zip(mm_hashes, encoded_copy_states, strict=True))
+        self.copy_states_by_hash.update(copy_by_hash)
 
         for req_id, indices in ordered_inputs.items():
             if len(indices) != 1:
@@ -103,6 +105,15 @@ class SEAMModelState(EncoderDecoderModelState):
             model_inputs["copy_states"] = None
             return model_inputs
         if self.model.copy_head is not None:
+            if self.encoder_cache is not None:
+                for req_id in input_batch.req_ids:
+                    if req_id not in self.copy_states:
+                        mm_features = self.encoder_cache.mm_features.get(req_id, [])
+                        if mm_features:
+                            feature_id = mm_features[0].identifier
+                            cached_state = self.copy_states_by_hash.get(feature_id)
+                            if cached_state is not None:
+                                self.copy_states[req_id] = cached_state
             missing = [req_id for req_id in input_batch.req_ids if req_id not in self.copy_states]
             if missing:
                 raise RuntimeError(f"SEAM copy state missing for active requests: {missing[:3]}")
@@ -113,6 +124,13 @@ class SEAMModelState(EncoderDecoderModelState):
 
     def prepare_dummy_inputs(self, num_reqs: int, num_tokens: int) -> dict[str, Any]:
         return {"encoder_outputs": [], "copy_states": None}
+
+    def reset_encoder_cache(self) -> None:
+        self.copy_states.clear()
+        self.copy_states_by_hash.clear()
+        self.model.clear_copy_batch_cache()
+        if hasattr(super(), "reset_encoder_cache"):
+            super().reset_encoder_cache()
 
     def remove_request(self, req_id: str) -> None:
         self._warmup_requests.discard(req_id)

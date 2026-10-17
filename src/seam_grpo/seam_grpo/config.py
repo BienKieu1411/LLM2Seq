@@ -32,6 +32,7 @@ DEFAULTS = {
     "seed": 42,
     "num_workers": 0,
     "max_steps": 0,
+    "validate_every_steps": 0,
     "max_train_examples": 0,
     "validation_max_examples": 0,
     "validation_batch_size": 4,
@@ -46,6 +47,14 @@ DEFAULTS = {
     "vllm_encoder_max_batch_tokens": 8192,
     "vllm_logp_mean_tolerance": 0.05,
     "vllm_logp_max_tolerance": 0.50,
+    "vllm_group_sampling": False,
+    "epsilon_high": None,
+    "delta": None,
+    "importance_sampling_level": "token",
+    "loss_type": "dr_grpo",
+    "top_entropy_quantile": 1.0,
+    "entropy_coef": 0.0,
+    "off_policy_mask_threshold": None,
 }
 
 
@@ -86,7 +95,7 @@ def load(path: str | Path) -> dict:
     for key in integers:
         if isinstance(cfg[key], bool) or not isinstance(cfg[key], int) or cfg[key] < 1:
             raise ValueError(f"training.{key} must be a positive integer")
-    for key in ("seed", "num_workers", "max_steps", "max_train_examples", "validation_max_examples"):
+    for key in ("seed", "num_workers", "max_steps", "max_train_examples", "validation_max_examples", "validate_every_steps"):
         if isinstance(cfg[key], bool) or not isinstance(cfg[key], int) or cfg[key] < 0:
             raise ValueError(f"training.{key} must be a nonnegative integer")
     if cfg["group_size"] < 2:
@@ -114,7 +123,7 @@ def load(path: str | Path) -> dict:
         raise ValueError("epsilon must be in (0, 1)")
     if cfg["scale_rewards"] not in {"none", "group"}:
         raise ValueError("scale_rewards must be none or group")
-    for key in ("save_each_epoch", "save_best", "evaluate_before_training"):
+    for key in ("save_each_epoch", "save_best", "evaluate_before_training", "vllm_group_sampling"):
         if not isinstance(cfg[key], bool):
             raise ValueError(f"training.{key} must be boolean")
     if cfg["rollout_backend"] not in {"native", "seam_vllm"}:
@@ -126,6 +135,29 @@ def load(path: str | Path) -> dict:
         cfg[key] = float(cfg[key])
         if not math.isfinite(cfg[key]) or cfg[key] <= 0:
             raise ValueError(f"{key} must be positive and finite")
+    if cfg["epsilon_high"] is not None:
+        cfg["epsilon_high"] = float(cfg["epsilon_high"])
+        if not 0 < cfg["epsilon_high"] < 1:
+            raise ValueError("epsilon_high must be in (0, 1)")
+    if cfg["delta"] is not None:
+        cfg["delta"] = float(cfg["delta"])
+        if cfg["delta"] <= 0 or not math.isfinite(cfg["delta"]):
+            raise ValueError("delta must be positive and finite")
+    if cfg["importance_sampling_level"] not in {"token", "sequence"}:
+        raise ValueError("importance_sampling_level must be 'token' or 'sequence'")
+    allowed_loss_types = {"grpo", "bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"}
+    if cfg["loss_type"] not in allowed_loss_types:
+        raise ValueError(f"loss_type must be one of {sorted(allowed_loss_types)}")
+    cfg["top_entropy_quantile"] = float(cfg["top_entropy_quantile"])
+    if not 0 < cfg["top_entropy_quantile"] <= 1.0:
+        raise ValueError("top_entropy_quantile must be in (0, 1]")
+    cfg["entropy_coef"] = float(cfg["entropy_coef"])
+    if cfg["entropy_coef"] < 0 or not math.isfinite(cfg["entropy_coef"]):
+        raise ValueError("entropy_coef must be nonnegative and finite")
+    if cfg["off_policy_mask_threshold"] is not None:
+        cfg["off_policy_mask_threshold"] = float(cfg["off_policy_mask_threshold"])
+        if cfg["off_policy_mask_threshold"] <= 0 or not math.isfinite(cfg["off_policy_mask_threshold"]):
+            raise ValueError("off_policy_mask_threshold must be positive and finite")
     raw["training"] = cfg
     raw.setdefault("reward", {})
     return raw

@@ -261,6 +261,12 @@ sang evaluator ROUGE-1.5.5 và length chính thức để đối chiếu chỉ t
 
 ## Kiểm thử và cơ sở thiết kế
 
+Adapter dùng cùng [conditional-policy contract](../seam_grpo/README.md#verification-and-evidence)
+với bản GRPO cơ bản: likelihood đã trộn copy, gradient qua toàn bộ actor,
+reference tính lại encoder/bridge riêng. Kiểm thử TRL còn bật đồng thời
+`beta=0.01`, source teacher và warm-up CE để xác nhận KL reference và teacher
+có thể chia sẻ bản SFT đóng băng, trong khi actor tiếp tục cập nhật độc lập.
+
 Không cần tải backbone để chạy checks. Trên Mac dùng đúng môi trường của dự án:
 
 ```bash

@@ -575,7 +575,8 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
                 copy_token_indices=_as_2d(copy_token_indices, "copy_token_indices", device, torch.long),
                 copy_alignment_weights=_as_2d(copy_alignment_weights, "copy_alignment_weights", device, torch.float32),
             )
-            copy_batch = [prepared.index_select(torch.tensor([i], device=device)) for i in range(batch)]
+            row_index = torch.arange(batch, device=device)
+            copy_batch = [prepared.index_select(row_index[i : i + 1]) for i in range(batch)]
 
         packed = pack_bridge_memory(memory, value_memory, bridge.source_bias)
         lengths = _source_lengths if _source_lengths is not None else attention_mask.sum(dim=-1).tolist()

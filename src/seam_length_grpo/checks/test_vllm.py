@@ -79,3 +79,36 @@ def test_recreate_resynchronizes_entire_actor(monkeypatch):
     engine.close()
     engine([row["prompt"] for row in rows], source)
     assert [item.version for item in engines] == [7, 7]
+
+
+def test_seam_vllm_state_hash_fallback():
+    pytest.importorskip("vllm")
+    from seam_vllm.state import SEAMModelState
+
+    state = SEAMModelState.__new__(SEAMModelState)
+    state.copy_states = {}
+    state.copy_states_by_hash = {}
+    state._warmup_requests = set()
+    state._dummy_inputs_pending = False
+    state.model = SimpleNamespace(copy_head=object(), clear_copy_batch_cache=lambda: None)
+
+    # Step 1: Request 1 encodes and populates copy_states and copy_states_by_hash
+    state.copy_states["req_1"] = "copy_state_doc_1"
+    state.copy_states_by_hash["mm_hash_doc_1"] = "copy_state_doc_1"
+
+    # Step 2: Request 2 shares mm_hash_doc_1; vLLM encoder cache skips embed_multimodal
+    assert "req_2" not in state.copy_states
+    state.encoder_cache = SimpleNamespace(mm_features={"req_2": [SimpleNamespace(identifier="mm_hash_doc_1")]})
+
+    input_batch = SimpleNamespace(req_ids=["req_2"], num_reqs=1, num_tokens_after_padding=8)
+
+    # Calling prepare_inputs resolves req_2 from copy_states_by_hash fallback
+    model_inputs = SEAMModelState.prepare_inputs(state, input_batch, None)
+    assert model_inputs["copy_states"] == ["copy_state_doc_1"]
+    assert state.copy_states["req_2"] == "copy_state_doc_1"
+
+    # Step 3: reset_encoder_cache clears both caches
+    state.reset_encoder_cache()
+    assert len(state.copy_states) == 0
+    assert len(state.copy_states_by_hash) == 0
+

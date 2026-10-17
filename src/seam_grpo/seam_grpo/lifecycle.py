@@ -79,6 +79,9 @@ class Lifecycle(TrainerCallback):
                     )
                     + "\n"
                 )
+        every = trainer.settings.get("validate_every_steps", 0)
+        if every and state.global_step % every == 0 and state.global_step < state.max_steps:
+            self.measure(f"step_{state.global_step:07d}", math.ceil(state.epoch or 1))
 
     def on_epoch_end(self, args, state, control, **kwargs):
         epoch = math.ceil(state.epoch or 1)

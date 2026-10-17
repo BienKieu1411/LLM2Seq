@@ -120,6 +120,14 @@ class LengthVLLMRollout:
             )
             for text, ids, prefix in zip(source["sources"], prompt_ids, source["encoder_prompts"], strict=True)
         ]
+        group = 1
+        if cfg.get("vllm_group_sampling"):
+            group = trainer.num_generations if trainer.model.training else trainer.num_generations_eval
+            texts = source["sources"]
+            if len(texts) % group or any(texts[row] != texts[row - row % group] for row in range(len(texts))):
+                raise RuntimeError("Grouped vLLM sampling needs contiguous identical-source groups")
+            params.n = group
+        requests = requests[::group]
         # The version-pinned vLLM batch accepts a different multimodal prompt per row.
         # SEAMLLM's convenience string API applies overrides batch-wide, so build
         # requests here using the SAME renderer/IDs as native likelihood scoring.
@@ -131,6 +139,7 @@ class LengthVLLMRollout:
             prompt_ids,
             eos_token_id=trainer.decoder_tokenizer.eos_token_id,
             budget=cfg["max_new_tokens"],
+            group_size=group,
         )
 
     def close(self):

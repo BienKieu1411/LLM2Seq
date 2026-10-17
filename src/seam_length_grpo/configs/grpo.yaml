@@ -10,11 +10,11 @@ ce_warmup:
 training:
   rollout_backend: native         # native or seam_vllm (vLLM 0.25.1)
   epochs: 1
-  prompt_batch_size: 1            # unique sources PER GPU, before G candidates
+  prompt_batch_size: 2            # unique sources PER GPU, before G candidates
   group_size: 4
-  gradient_accumulation_steps: 4
-  rollout_micro_batch_size: 4     # candidates generated in parallel when prompt widths match
-  score_micro_batch_size: 1
+  gradient_accumulation_steps: 16 # 2*16 = 32 sources (128 rollouts) per update per GPU
+  rollout_micro_batch_size: 8     # candidates generated in parallel when prompt widths match
+  score_micro_batch_size: 4
   max_new_tokens: null            # decoder TOKEN cap, independent of requested words
   temperature: 1.0               # temperature-only sampling, full vocabulary support
   ce_weight: 0.05
@@ -27,6 +27,7 @@ training:
   warmup_ratio: 0.03
   min_lr_ratio: 0.1               # cosine decay
   validation_batch_size: 4
+  validate_every_steps: 100       # also validates at epoch end; best.pt uses length-feasible-first rule
   save_best: true
   save_each_epoch: true
 length_control:

@@ -10,9 +10,10 @@ from trl import GRPOTrainer
 from seam_length_grpo import train as runtime
 
 
-@pytest.mark.parametrize("source_weight", [0.0, 0.05])
-def test_real_trl_updates_ragged_prompts_and_frozen_teacher(tmp_path, monkeypatch, source_weight):
+@pytest.mark.parametrize("source_weight,beta", [(0.0, 0.0), (0.05, 0.0), (0.05, 0.01)])
+def test_real_trl_updates_ragged_prompts_and_frozen_teacher(tmp_path, monkeypatch, source_weight, beta):
     settings, tokenizer, path = settings_file(tmp_path, source_weight=source_weight)
+    settings["training"]["beta"] = beta
     if source_weight == 0:
         settings["length_control"]["source_content_tokens"] = None
     monkeypatch.setattr(runtime, "_tokenizers", lambda config: (tokenizer, tokenizer))
@@ -70,6 +71,8 @@ def test_real_trl_updates_ragged_prompts_and_frozen_teacher(tmp_path, monkeypatc
     assert trainer._likelihood_source is None
     assert (trainer.source_teacher is not None) == bool(source_weight)
     if trainer.source_teacher is not None:
+        if beta:
+            assert trainer.source_teacher.actor is trainer.ref_model
         for name, value in trainer.source_teacher.actor.named_parameters():
             torch.testing.assert_close(value, sft[name.removeprefix("policy.seam.")], rtol=0, atol=0)
     model = trainer.accelerator.unwrap_model(trainer.model)
@@ -79,6 +82,8 @@ def test_real_trl_updates_ragged_prompts_and_frozen_teacher(tmp_path, monkeypatc
         if n.startswith("policy.seam.encoder.")
     )
     metrics = [json.loads(row) for row in (tmp_path / "out/training_metrics.jsonl").read_text().splitlines()]
+    if beta:
+        assert any("kl" in row for row in metrics)
     assert any(row.get("behavior_logp_mae", 1) < 1e-4 for row in metrics)
     validation = [json.loads(row) for row in (tmp_path / "out/validation_epoch_001.jsonl").read_text().splitlines()]
     assert [row["target_words"] for row in validation] == [2, 12]

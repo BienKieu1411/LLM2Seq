@@ -14,31 +14,39 @@ import yaml
 from .context import validate_context
 
 
-def completion_rows(outputs, prompt_ids, *, eos_token_id, budget):
-    """Use sampled-token processed log-probs, including EOS, with no text roundtrip."""
+def completion_rows(outputs, prompt_ids, *, eos_token_id, budget, group_size=1):
+    """Use sampled-token processed log-probs, including EOS, with no text roundtrip.
+
+    With group_size=G, ``outputs`` holds one RequestOutput per unique prompt (sampled
+    with n=G) while ``prompt_ids`` still lists every candidate row in contiguous groups.
+    """
     result = {"prompt_ids": [], "completion_ids": [], "logprobs": []}
-    if len(outputs) != len(prompt_ids):
+    if len(prompt_ids) % group_size or len(outputs) != len(prompt_ids) // group_size:
         raise RuntimeError("vLLM output/source count differs")
-    for output, prompt in zip(outputs, prompt_ids, strict=True):
-        if list(output.prompt_token_ids) != list(prompt) or len(output.outputs) != 1:
+    for index, output in enumerate(outputs):
+        group = prompt_ids[index * group_size : (index + 1) * group_size]
+        if any(list(row) != list(group[0]) for row in group):
+            raise RuntimeError("Grouped rollout rows do not share one decoder prompt")
+        if list(output.prompt_token_ids) != list(group[0]) or len(output.outputs) != group_size:
             raise RuntimeError("vLLM changed decoder prompt or candidate count")
-        completion = output.outputs[0]
-        tokens = list(completion.token_ids)
-        if not tokens or len(tokens) > budget or completion.logprobs is None:
-            raise RuntimeError("Invalid or missing vLLM completion/log-probabilities")
-        if len(completion.logprobs) != len(tokens):
-            raise RuntimeError("vLLM action/log-probability length differs")
-        if eos_token_id in tokens[:-1] or (len(tokens) < budget and tokens[-1] != eos_token_id):
-            raise RuntimeError("vLLM stopping convention differs from native rollout")
-        logps = []
-        for token, scores in zip(tokens, completion.logprobs, strict=True):
-            value = float(scores[token].logprob)
-            if not math.isfinite(value) or value > 1e-6:
-                raise RuntimeError("vLLM returned invalid sampled-token log-probability")
-            logps.append(value)
-        result["prompt_ids"].append(list(prompt))
-        result["completion_ids"].append(tokens)
-        result["logprobs"].append(logps)
+        prompt = group[0]
+        for completion in output.outputs:
+            tokens = list(completion.token_ids)
+            if not tokens or len(tokens) > budget or completion.logprobs is None:
+                raise RuntimeError("Invalid or missing vLLM completion/log-probabilities")
+            if len(completion.logprobs) != len(tokens):
+                raise RuntimeError("vLLM action/log-probability length differs")
+            if eos_token_id in tokens[:-1] or (len(tokens) < budget and tokens[-1] != eos_token_id):
+                raise RuntimeError("vLLM stopping convention differs from native rollout")
+            logps = []
+            for token, scores in zip(tokens, completion.logprobs, strict=True):
+                value = float(scores[token].logprob)
+                if not math.isfinite(value) or value > 1e-6:
+                    raise RuntimeError("vLLM returned invalid sampled-token log-probability")
+                logps.append(value)
+            result["prompt_ids"].append(list(prompt))
+            result["completion_ids"].append(tokens)
+            result["logprobs"].append(logps)
     return result
 
 
@@ -133,7 +141,15 @@ class VLLMRollout:
         )
         if params.temperature != cfg["temperature"]:
             raise ValueError("vLLM altered the requested sampling temperature")
-        outputs = self.engine.generate(prompts, params)
+        group = 1
+        if cfg.get("vllm_group_sampling"):
+            group = trainer.num_generations if trainer.model.training else trainer.num_generations_eval
+            if len(prompts) % group or any(
+                prompts[row] != prompts[row - row % group] for row in range(len(prompts))
+            ):
+                raise RuntimeError("Grouped vLLM sampling needs contiguous identical-source groups")
+            params.n = group
+        outputs = self.engine.generate(prompts[::group], params)
         if trainer.state.global_step != version:
             raise RuntimeError("Actor changed during vLLM rollout")
         return completion_rows(
@@ -141,6 +157,7 @@ class VLLMRollout:
             source["decoder_prompt_ids"].tolist(),
             eos_token_id=trainer.decoder_tokenizer.eos_token_id,
             budget=cfg["max_new_tokens"],
+            group_size=group,
         )
 
     def close(self):

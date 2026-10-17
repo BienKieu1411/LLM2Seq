@@ -1,7 +1,8 @@
 # Local verification - 2026-10-17
 
 Scope: the new `src/seam_length_grpo` experiment. This implementation reused
-the existing `seam_grpo` core and `eviseq_new` architecture; it did not edit them.
+the existing `seam_grpo` training core and `eviseq_new` architecture without
+changing their production logic. The later audit adds regression checks/docs.
 No model checkpoint was downloaded. No commit or push was made.
 
 Runtime: `/Users/kieugiangbien/bienkieu_env/bin/python`, tiny randomly initialized
@@ -33,6 +34,19 @@ performed.
 After enabling the source term by default (eta=0.05), the targeted reward,
 per-sample length and real TRL/teacher checks passed: **14 passed** in 10.92s.
 This includes default-config activation and the complete three-term formula.
+
+Architecture-specific audit on 2026-10-17: the baseline suites passed 41
+(`seam_grpo`) and 37 (`seam_length_grpo`) checks. Three added base checks passed:
+full-reference encoder independence with/without copy and direct RL gradients
+through H0/M/value memory/source bias/copy keys/copy bias. The length runtime
+check additionally passed with beta=0.01, a shared frozen SFT teacher/reference,
+per-sample ragged word prompts, CE adaptation and fresh GRPO optimizer state.
+No new production correctness defect was reproduced in these routes.
+
+Final full-suite rerun after adding these regressions: **44 passed** in 45.53s
+for `seam_grpo`; **38 passed** in 54.87s for `seam_length_grpo` (82 total, no
+skips). Ruff lint/format and whitespace checks passed. Only checks and
+documentation changed during this audit; production settings and logic did not.
 
 ## Checks
 

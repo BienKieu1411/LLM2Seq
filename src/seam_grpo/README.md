@@ -235,6 +235,21 @@ has no preference signal and only CE/optional KL can contribute.
 
 ## Verification and evidence
 
+The policy is the complete conditional SEAM model, not its standalone causal
+decoder. For a fixed source and prompts, only generated decoder tokens are
+actions; source-token likelihoods do not belong in the GRPO ratio. Gradients
+of those action likelihoods still propagate through the encoder, bridge,
+cross-attention, value anchor, source bias and copy mixture. Policy scoring
+recomputes these states with autograd; detached rollout states are not reused.
+
+When KL is enabled, the frozen reference also owns a complete encoder/bridge/
+decoder/copy model and computes its own states for the same source/prompts and
+budget. It must not combine a reference decoder with the actor's memory.
+`checks/test_conditional_alignment.py` deliberately constructs that incorrect
+shortcut and checks that changing the reference encoder exposes the error,
+with copy enabled and disabled. It also retains H0, M, value memory, source
+bias and copy-state tensors to verify nonzero finite RL gradients directly.
+
 Run `python -m pytest -q src/seam_grpo/checks` in an environment containing the
 base model's dependencies. Checks use randomly initialized tiny local backbones,
 not downloaded pretrained weights. GPU transfer mapping is checked on torch

@@ -10,17 +10,17 @@ output_dir: ../../../runs/seam_grpo/rouge_ce
 training:
   rollout_backend: seam_vllm       # native remains available without vLLM
   vllm_gpu_memory_utilization: 0.20 # per-GPU engine share; train model also needs VRAM
-  vllm_max_num_seqs: 16           # concurrent requests PER GPU, also under DDP
+  vllm_max_num_seqs: 64           # concurrent requests PER GPU, also under DDP
   vllm_max_num_batched_tokens: 2048
-  vllm_encoder_max_batch_tokens: 8192
+  vllm_encoder_max_batch_tokens: 32768
   vllm_logp_mean_tolerance: 0.05   # stop before backward if rollout/scorer diverge
   vllm_logp_max_tolerance: 0.50
   epochs: 1
-  prompt_batch_size: 1             # unique sources per GPU per microbatch
+  prompt_batch_size: 2             # unique sources per GPU per microbatch
   group_size: 4                   # sampled summaries per source
-  gradient_accumulation_steps: 4
-  rollout_micro_batch_size: 4     # native rollout only; vLLM uses max_num_seqs
-  score_micro_batch_size: 1       # candidate trajectories per grad forward
+  gradient_accumulation_steps: 16  # 2*16 = 32 sources (128 rollouts) per update per GPU
+  rollout_micro_batch_size: 8     # native rollout only; vLLM uses max_num_seqs
+  score_micro_batch_size: 4       # candidate trajectories per grad forward (B200 180GB)
   logprob_chunk_size: 32          # avoid materializing [batch, target, vocab]
   max_new_tokens: null            # inherit SFT generation budget
   temperature: 1.0                # also used in policy likelihoods
@@ -39,6 +39,7 @@ training:
   seed: 42
   num_workers: 0
   max_steps: 0
+  validate_every_steps: 100        # also validates at epoch end; best.pt tracks best validation
   max_train_examples: 0
   validation_max_examples: 0
   validation_batch_size: 4

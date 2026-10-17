@@ -7,6 +7,9 @@ from seam_grpo.data import move, trajectory
 from seam_grpo.rollout import select_rows
 
 
+from seam_grpo.actor import find_unique_source_indices
+
+
 class SourceTeacher:
     def __init__(self, actor, collator, config, *, max_new_tokens, micro_batch_size):
         if actor is None or any(p.requires_grad for p in actor.parameters()):
@@ -42,16 +45,23 @@ class SourceTeacher:
         wrong_source = move(self.collator(negatives), device)
         means = []
         for source in (true_source, wrong_source):
+            unique_indices, inverse_indices = find_unique_source_indices(source)
+            unique_batch = select_rows(source, unique_indices)
+            unique_bridge = self.actor.policy.encode_source(unique_batch)
             values = []
             for start in range(0, len(rows), self.micro_batch_size):
                 end = min(len(rows), start + self.micro_batch_size)
                 batch = trajectory(
                     select_rows(source, range(start, end)), actions[start:end], mask[start:end], self.budget
                 )
-                logps = self.actor.policy(batch, temperature=1.0)
+                slice_bridge = unique_bridge.index_select(inverse_indices[start:end])
+                logps = self.actor.policy(batch, temperature=1.0, bridge=slice_bridge)
                 values.append(logps.masked_fill(~mask[start:end], 0).sum(-1) / mask[start:end].sum(-1))
             means.append(torch.cat(values))
         delta = means[0] - means[1]
         if not torch.isfinite(delta).all():
             raise FloatingPointError("Non-finite source-teacher margin")
-        return torch.tanh(delta / self.config["tau"]).tolist(), delta.tolist()
+        tau = float(self.config["tau"])
+        max_delta = float(self.config.get("max_delta", 10.0))
+        clamped_delta = delta.clamp(min=-max_delta, max=max_delta)
+        return torch.tanh(clamped_delta / tau).tolist(), delta.tolist()

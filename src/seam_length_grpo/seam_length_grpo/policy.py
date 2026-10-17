@@ -65,11 +65,32 @@ def prompt_groups(batch, maximum):
 
 
 class LengthPolicy(Policy):
-    def forward(self, batch, *, temperature, ce=False, return_entropy=False):
+    def forward(
+        self,
+        batch,
+        *,
+        temperature,
+        ce=False,
+        return_entropy=False,
+        bridge=None,
+        compute_entropy_with_grad=False,
+    ):
         scores, entropies, losses, counts = [], [], [], []
         for indices in prompt_groups(batch, batch["input_ids"].shape[0]):
             row = unpad_rows(batch, indices)
-            output = super().forward(row, temperature=temperature, ce=ce, return_entropy=return_entropy)
+            row_bridge = (
+                bridge.index_select(torch.tensor(indices, device=bridge.memory.device))
+                if bridge is not None
+                else None
+            )
+            output = super().forward(
+                row,
+                temperature=temperature,
+                ce=ce,
+                return_entropy=return_entropy,
+                bridge=row_bridge,
+                compute_entropy_with_grad=compute_entropy_with_grad,
+            )
             if ce:
                 count = row["labels"][:, 1:].ne(-100).sum()
                 losses.append(output * count)

@@ -28,6 +28,17 @@ class BridgeState:
     value_memory: Optional[torch.Tensor] = None
     copy_state: Optional[CopyState] = None
 
+    def index_select(self, indices: torch.Tensor) -> BridgeState:
+        return BridgeState(
+            memory=self.memory.index_select(0, indices),
+            memory_mask=self.memory_mask.index_select(0, indices),
+            content_mask=self.content_mask.index_select(0, indices),
+            source_bias=self.source_bias.index_select(0, indices),
+            controller=self.controller.index_select(0, indices),
+            value_memory=None if self.value_memory is None else self.value_memory.index_select(0, indices),
+            copy_state=None if self.copy_state is None else self.copy_state.index_select(indices),
+        )
+
 
 @dataclass
 class AFMROutput:

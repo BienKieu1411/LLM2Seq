@@ -203,7 +203,12 @@ class SEAMGRPOTrainer(GRPOTrainer):
         packed["gold_decoder_input_ids"] = source["decoder_input_ids"]
         packed["gold_decoder_attention_mask"] = source["decoder_attention_mask"]
         with self.accelerator.autocast():
-            logps, entropies, ce_sum = model(packed, temperature=self.temperature, gold_selector=self._ce_selector)
+            logps, entropies, ce_sum = model(
+                packed,
+                temperature=self.temperature,
+                gold_selector=self._ce_selector,
+                compute_entropy_with_grad=(getattr(self, "entropy_coef", 0.0) != 0.0),
+            )
         if torch.is_grad_enabled():
             self._ce_sum = ce_sum
             if self._active_behavior is not None:

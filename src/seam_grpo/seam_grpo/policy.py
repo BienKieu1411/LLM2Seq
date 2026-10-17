@@ -48,6 +48,24 @@ class Policy(nn.Module):
     def _copy_inputs(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
         return {key: batch[key] for key in COPY_INPUT_KEYS if key in batch}
 
+    def encode_source(self, batch: dict[str, Any]) -> Any:
+        self.seam.eval()
+        input_ids = batch["input_ids"]
+        batch_size = int(input_ids.shape[0])
+        budget = self._output_budget(batch, self.seam, batch_size, input_ids.device)
+        copy_inputs = self._copy_inputs(batch)
+        prompt_ids = batch["decoder_prompt_ids"].to(device=input_ids.device, dtype=torch.long)
+        prompt_mask = batch["decoder_prompt_mask"].to(device=input_ids.device, dtype=torch.bool)
+        return self.seam.encode_source(
+            input_ids,
+            batch["attention_mask"],
+            batch["source_content_mask"],
+            prompt_ids,
+            prompt_mask,
+            budget,
+            **copy_inputs,
+        )
+
     def forward(
         self,
         batch: dict[str, Any],
@@ -55,6 +73,8 @@ class Policy(nn.Module):
         temperature: float,
         ce: bool = False,
         return_entropy: bool = False,
+        bridge: Any | None = None,
+        compute_entropy_with_grad: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         input_ids = batch["input_ids"]
         batch_size = int(input_ids.shape[0])
@@ -71,22 +91,38 @@ class Policy(nn.Module):
             decoder_attention_mask = batch.get("gold_decoder_attention_mask", batch.get("decoder_attention_mask"))
             if decoder_input_ids is None or decoder_input_ids.shape != labels.shape:
                 raise ValueError("CE requires gold decoder inputs aligned with labels")
-            output = self.seam(
-                input_ids,
-                batch["attention_mask"],
-                batch["source_content_mask"],
-                batch["decoder_prompt_ids"],
-                batch["decoder_prompt_mask"],
-                decoder_input_ids,
-                decoder_attention_mask,
-                labels,
-                output_budget=budget,
-                return_logits=False,
-                **copy_inputs,
-            )
-            if output.loss_ce is None:
-                raise RuntimeError("AFMR did not return a supervised CE loss")
-            return output.loss_ce
+            if bridge is None:
+                output = self.seam(
+                    input_ids,
+                    batch["attention_mask"],
+                    batch["source_content_mask"],
+                    batch["decoder_prompt_ids"],
+                    batch["decoder_prompt_mask"],
+                    decoder_input_ids,
+                    decoder_attention_mask,
+                    labels,
+                    output_budget=budget,
+                    return_logits=False,
+                    **copy_inputs,
+                )
+                if output.loss_ce is None:
+                    raise RuntimeError("AFMR did not return a supervised CE loss")
+                return output.loss_ce
+            else:
+                _, _, loss_ce = self.seam.decoder(
+                    decoder_input_ids,
+                    bridge.memory,
+                    bridge.memory_mask,
+                    bridge.source_bias,
+                    decoder_attention_mask,
+                    labels=labels,
+                    return_logits=False,
+                    value_memory=bridge.value_memory,
+                    copy_state=bridge.copy_state,
+                )
+                if loss_ce is None:
+                    raise RuntimeError("AFMR decoder did not return a supervised CE loss")
+                return loss_ce
 
         if not math.isfinite(float(temperature)) or temperature <= 0:
             raise ValueError("temperature must be finite and positive")
@@ -132,15 +168,16 @@ class Policy(nn.Module):
         decoder = self.seam.decoder
         validate_context(decoder, prompt_width, budget)
         decoder.clear_cross_cache()
-        bridge = self.seam.encode_source(
-            input_ids,
-            batch["attention_mask"],
-            batch["source_content_mask"],
-            prompt_ids,
-            prompt_mask,
-            budget,
-            **copy_inputs,
-        )
+        if bridge is None:
+            bridge = self.seam.encode_source(
+                input_ids,
+                batch["attention_mask"],
+                batch["source_content_mask"],
+                prompt_ids,
+                prompt_mask,
+                budget,
+                **copy_inputs,
+            )
 
         position_ids = decoder_attention_mask.long().cumsum(-1) - 1
         position_ids = position_ids.masked_fill(~decoder_attention_mask, 0)
@@ -207,12 +244,18 @@ class Policy(nn.Module):
                 selected = torch.where(active, selected, torch.zeros_like(selected))
                 if not return_entropy:
                     return selected
-                with torch.no_grad():
-                    distribution_log_probs = log_probs.detach()
-                    probabilities = distribution_log_probs.exp()
-                    safe_log_probs = distribution_log_probs.masked_fill(~torch.isfinite(distribution_log_probs), 0.0)
+                if compute_entropy_with_grad:
+                    probabilities = log_probs.exp()
+                    safe_log_probs = log_probs.masked_fill(~torch.isfinite(log_probs), 0.0)
                     entropy = -(probabilities * safe_log_probs).sum(dim=-1)
                     entropy = torch.where(active, entropy, torch.zeros_like(entropy))
+                else:
+                    with torch.no_grad():
+                        distribution_log_probs = log_probs.detach()
+                        probabilities = distribution_log_probs.exp()
+                        safe_log_probs = distribution_log_probs.masked_fill(~torch.isfinite(distribution_log_probs), 0.0)
+                        entropy = -(probabilities * safe_log_probs).sum(dim=-1)
+                        entropy = torch.where(active, entropy, torch.zeros_like(entropy))
                 return selected, entropy
 
             if torch.is_grad_enabled():
@@ -227,7 +270,7 @@ class Policy(nn.Module):
                 raise FloatingPointError("Non-finite policy action log-probability")
             chunks.append(selected_log_probs)
             if return_entropy:
-                entropy_chunks.append(entropy.detach())
+                entropy_chunks.append(entropy if compute_entropy_with_grad else entropy.detach())
 
         log_probs = torch.cat(chunks, dim=1)
         if return_entropy:

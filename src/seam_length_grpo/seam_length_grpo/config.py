@@ -174,7 +174,7 @@ def load(path: str | Path) -> dict:
     for key in integers:
         if isinstance(cfg[key], bool) or not isinstance(cfg[key], int) or cfg[key] < 1:
             raise ValueError(f"training.{key} must be a positive integer")
-    for key in ("seed", "num_workers", "max_steps", "max_train_examples", "validation_max_examples"):
+    for key in ("seed", "num_workers", "max_steps", "max_train_examples", "validation_max_examples", "validate_every_steps"):
         if isinstance(cfg[key], bool) or not isinstance(cfg[key], int) or cfg[key] < 0:
             raise ValueError(f"training.{key} must be a nonnegative integer")
     if cfg["group_size"] < 2:
@@ -202,7 +202,7 @@ def load(path: str | Path) -> dict:
         raise ValueError("epsilon must be in (0, 1)")
     if cfg["scale_rewards"] not in {"none", "group"}:
         raise ValueError("scale_rewards must be none or group")
-    for key in ("save_each_epoch", "save_best", "evaluate_before_training"):
+    for key in ("save_each_epoch", "save_best", "evaluate_before_training", "vllm_group_sampling"):
         if not isinstance(cfg[key], bool):
             raise ValueError(f"training.{key} must be boolean")
     if cfg["rollout_backend"] not in {"native", "seam_vllm"}:

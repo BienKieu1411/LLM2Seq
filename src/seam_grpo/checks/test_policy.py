@@ -13,6 +13,7 @@ from eviseq_afmr.data.schema import CanonicalRecord
 from eviseq_afmr.modeling.model import EviSeqAFMR
 from eviseq_afmr.runtime import _TinyTokenizer
 from eviseq_afmr.training.checkpoint import load_checkpoint, save_checkpoint
+from seam_grpo.actor import SEAMActor
 from seam_grpo.config import DEFAULTS
 from seam_grpo.objective import clipped_terms
 from seam_grpo.policy import Policy
@@ -249,3 +250,70 @@ def test_context_guard_and_cache_cleanup_on_encoder_failure(monkeypatch):
     with pytest.raises(RuntimeError, match="encoder failed"):
         rollout(model, batch, tokenizer, 4, 1.0)
     assert len(calls) == 2
+
+
+def test_unique_source_encoding_call_count_and_grad_equivalence(monkeypatch):
+    cfg, _, batch = tiny()
+    model = EviSeqAFMR(cfg).eval()
+    expected_model = copy.deepcopy(model)
+
+    # Build a group of 4 candidates for prompt 0
+    first = {k: (v[:1] if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
+    first["output_budget"] = torch.tensor([4.0])
+    repeated = repeat_batch(first, 4)
+    actions = repeated["decoder_input_ids"][:, -3:]
+    packed = trajectory(repeated, actions, torch.ones_like(actions, dtype=torch.bool), 4)
+    packed["gold_decoder_input_ids"] = repeated["decoder_input_ids"]
+    packed["gold_decoder_attention_mask"] = repeated["decoder_attention_mask"]
+
+    encode_calls = []
+    original_encode = model.encode_source
+
+    def counting_encode(*args, **kwargs):
+        encode_calls.append(1)
+        return original_encode(*args, **kwargs)
+
+    monkeypatch.setattr(model, "encode_source", counting_encode)
+
+    actor = SEAMActor(model, chunk_size=1, score_batch_size=1).train()
+    gold_selector = torch.tensor([True, False, False, False])
+    logps, entropy, ce_sum = actor(packed, temperature=1.0, gold_selector=gold_selector)
+
+    # encode_source must be called exactly 1 time across all 4 candidates and the gold CE!
+    assert len(encode_calls) == 1, f"Expected 1 encode_source call, got {len(encode_calls)}"
+
+    # Compare with reference policy
+    ref_policy = Policy(expected_model, chunk_size=1)
+    expected_logps = ref_policy(packed, temperature=1.0)
+    expected_ce = ref_policy(first, temperature=1.0, ce=True) * first["labels"][:, 1:].ne(-100).sum()
+
+    torch.testing.assert_close(logps, expected_logps, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(ce_sum, expected_ce, rtol=1e-6, atol=1e-6)
+
+    (logps.sum() + 0.05 * ce_sum).backward()
+    (expected_logps.sum() + 0.05 * expected_ce).backward()
+
+    for (name, p), (other, q) in zip(model.named_parameters(), expected_model.named_parameters()):
+        assert (p.grad is None) == (q.grad is None), name
+        if p.grad is not None:
+            torch.testing.assert_close(p.grad, q.grad, rtol=3e-4, atol=2e-5, msg=name)
+
+
+def test_differentiable_entropy_when_enabled():
+    cfg, _, batch = tiny()
+    model = EviSeqAFMR(cfg).eval()
+    actions = batch["decoder_input_ids"][:, -3:]
+    packed = trajectory(batch, actions, torch.ones_like(actions, dtype=torch.bool), 4)
+
+    policy = Policy(model, chunk_size=1)
+    # Default: entropy is detached
+    logps, detached_entropy = policy(packed, temperature=1.0, return_entropy=True, compute_entropy_with_grad=False)
+    assert not detached_entropy.requires_grad
+
+    # Enabled: entropy has autograd graph
+    logps, diff_entropy = policy(packed, temperature=1.0, return_entropy=True, compute_entropy_with_grad=True)
+    assert diff_entropy.requires_grad
+    diff_entropy.sum().backward()
+    grads = [p.grad for p in model.decoder.lm_head.parameters() if p.grad is not None]
+    assert len(grads) > 0 and all(g.abs().sum() > 0 for g in grads)
+

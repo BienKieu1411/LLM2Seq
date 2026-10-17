@@ -228,3 +228,20 @@ def test_completion_conversion_keeps_eos_and_processed_sampled_logprobs():
     completion.logprobs = completion.logprobs[:1]
     with pytest.raises(RuntimeError, match="stopping"):
         completion_rows([output], [[1]], eos_token_id=2, budget=4)
+
+
+def test_grouped_completion_conversion_expands_n_candidates_per_unique_prompt():
+    def completion(token, logp):
+        return SimpleNamespace(token_ids=[token, 2], logprobs=[{token: SimpleNamespace(logprob=logp)}, {2: SimpleNamespace(logprob=-0.5)}])
+
+    outputs = [
+        SimpleNamespace(prompt_token_ids=[1], outputs=[completion(7, -0.1), completion(8, -0.2)]),
+        SimpleNamespace(prompt_token_ids=[3], outputs=[completion(9, -0.3), completion(6, -0.4)]),
+    ]
+    rows = completion_rows(outputs, [[1], [1], [3], [3]], eos_token_id=2, budget=4, group_size=2)
+    assert rows["prompt_ids"] == [[1], [1], [3], [3]]
+    assert [ids[0] for ids in rows["completion_ids"]] == [7, 8, 9, 6]
+    with pytest.raises(RuntimeError, match="count"):
+        completion_rows(outputs[:1], [[1], [1], [3], [3]], eos_token_id=2, budget=4, group_size=2)
+    with pytest.raises(RuntimeError, match="share"):
+        completion_rows(outputs, [[1], [3], [3], [3]], eos_token_id=2, budget=4, group_size=2)

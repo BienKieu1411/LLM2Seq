@@ -12,6 +12,33 @@ from .policy import Policy
 from .rollout import select_rows
 
 
+def find_unique_source_indices(batch: dict[str, Any]) -> tuple[list[int], torch.Tensor]:
+    input_ids = batch["input_ids"]
+    prompt_ids = batch.get("decoder_prompt_ids")
+    batch_size = int(input_ids.shape[0])
+    if batch_size <= 1:
+        return [0], torch.zeros(batch_size, dtype=torch.long, device=input_ids.device)
+
+    unique_rows: list[int] = []
+    inverse = torch.zeros(batch_size, dtype=torch.long, device=input_ids.device)
+    for i in range(batch_size):
+        matched = -1
+        for u_idx, u in enumerate(unique_rows):
+            if torch.equal(input_ids[i], input_ids[u]):
+                if prompt_ids is None or torch.equal(prompt_ids[i], prompt_ids[u]):
+                    if "source_content_mask" not in batch or torch.equal(
+                        batch["source_content_mask"][i], batch["source_content_mask"][u]
+                    ):
+                        matched = u_idx
+                        break
+        if matched >= 0:
+            inverse[i] = matched
+        else:
+            inverse[i] = len(unique_rows)
+            unique_rows.append(i)
+    return unique_rows, inverse
+
+
 class SEAMActor(PreTrainedModel):
     """Expose a SEAM model as one trainable actor to TRL and DDP.
 
@@ -74,27 +101,56 @@ class SEAMActor(PreTrainedModel):
         self.seam.eval()
         return self
 
-    def _score_candidates(self, batch: dict[str, Any], temperature: float) -> tuple[torch.Tensor, torch.Tensor]:
+    def _encode_unique_sources(self, batch: dict[str, Any]) -> tuple[Any, torch.Tensor]:
+        unique_indices, inverse_indices = find_unique_source_indices(batch)
+        unique_batch = select_rows(batch, unique_indices)
+        if torch.is_grad_enabled():
+            unique_bridge = checkpoint(self.policy.encode_source, unique_batch, use_reentrant=False)
+        else:
+            unique_bridge = self.policy.encode_source(unique_batch)
+        return unique_bridge, inverse_indices
+
+    def _score_candidates(
+        self,
+        batch: dict[str, Any],
+        temperature: float,
+        unique_bridge: Any,
+        inverse_indices: torch.Tensor,
+        compute_entropy_with_grad: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size = int(batch["input_ids"].shape[0])
         logps: list[torch.Tensor] = []
         entropies: list[torch.Tensor] = []
         for start in range(0, batch_size, self.score_batch_size):
             stop = min(batch_size, start + self.score_batch_size)
             candidate_batch = select_rows(batch, range(start, stop))
+            row_indices = inverse_indices[start:stop]
+            slice_bridge = unique_bridge.index_select(row_indices)
 
-            def score(batch_arg: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
-                return self.policy(batch_arg, temperature=temperature, return_entropy=True)
+            def score(batch_arg: dict[str, Any], bridge_arg: Any) -> tuple[torch.Tensor, torch.Tensor]:
+                return self.policy(
+                    batch_arg,
+                    temperature=temperature,
+                    return_entropy=True,
+                    bridge=bridge_arg,
+                    compute_entropy_with_grad=compute_entropy_with_grad,
+                )
 
             if torch.is_grad_enabled():
-                logp_chunk, entropy_chunk = checkpoint(score, candidate_batch, use_reentrant=False)
+                logp_chunk, entropy_chunk = checkpoint(score, candidate_batch, slice_bridge, use_reentrant=False)
             else:
-                logp_chunk, entropy_chunk = score(candidate_batch)
+                logp_chunk, entropy_chunk = score(candidate_batch, slice_bridge)
             logps.append(logp_chunk)
-            entropies.append(entropy_chunk.detach())
+            entropies.append(entropy_chunk if compute_entropy_with_grad else entropy_chunk.detach())
         return torch.cat(logps, dim=0), torch.cat(entropies, dim=0)
 
     def _score_gold(
-        self, batch: dict[str, Any], gold_selector: torch.Tensor | None, logps: torch.Tensor
+        self,
+        batch: dict[str, Any],
+        gold_selector: torch.Tensor | None,
+        logps: torch.Tensor,
+        unique_bridge: Any,
+        inverse_indices: torch.Tensor,
     ) -> torch.Tensor:
         zero = logps.sum() * 0.0
         if gold_selector is None:
@@ -118,14 +174,16 @@ class SEAMActor(PreTrainedModel):
             if labels is None:
                 raise ValueError("Gold CE requires collator labels")
             token_count = labels[:, 1:].ne(-100).sum()
+            row_indices = inverse_indices[indices]
+            slice_bridge = unique_bridge.index_select(row_indices)
 
-            def score_ce(batch_arg: dict[str, Any]) -> torch.Tensor:
-                return self.policy(batch_arg, temperature=1.0, ce=True)
+            def score_ce(batch_arg: dict[str, Any], bridge_arg: Any) -> torch.Tensor:
+                return self.policy(batch_arg, temperature=1.0, ce=True, bridge=bridge_arg)
 
             ce_mean = (
-                checkpoint(score_ce, gold_batch, use_reentrant=False)
+                checkpoint(score_ce, gold_batch, slice_bridge, use_reentrant=False)
                 if torch.is_grad_enabled()
-                else score_ce(gold_batch)
+                else score_ce(gold_batch, slice_bridge)
             )
             ce_sum = ce_sum + ce_mean * token_count.to(dtype=ce_mean.dtype)
         return ce_sum
@@ -136,7 +194,15 @@ class SEAMActor(PreTrainedModel):
         *,
         temperature: float,
         gold_selector: torch.Tensor | None = None,
+        compute_entropy_with_grad: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        logps, entropies = self._score_candidates(batch, temperature)
-        ce_sum = self._score_gold(batch, gold_selector, logps)
-        return logps, entropies.detach(), ce_sum
+        unique_bridge, inverse_indices = self._encode_unique_sources(batch)
+        logps, entropies = self._score_candidates(
+            batch,
+            temperature,
+            unique_bridge,
+            inverse_indices,
+            compute_entropy_with_grad=compute_entropy_with_grad,
+        )
+        ce_sum = self._score_gold(batch, gold_selector, logps, unique_bridge, inverse_indices)
+        return logps, entropies if compute_entropy_with_grad else entropies.detach(), ce_sum

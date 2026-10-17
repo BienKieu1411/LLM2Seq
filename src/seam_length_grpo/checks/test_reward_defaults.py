@@ -23,3 +23,28 @@ def test_three_term_reward_uses_per_sample_word_request():
     exact = reward(prediction, reference, target_words=4, error_budget=2, source_score=0.6, source_weight=0.05)
     assert exact["reward"] == pytest.approx(exact["quality"] + 0.03)
     assert exact["reward"] - short["reward"] == pytest.approx(0.1)
+
+
+def test_length_reward_max_band_cost_clipping():
+    reward = LengthReward({"length_weight": 0.1, "max_band_cost": 2.0})
+    prediction, reference = "one " * 100, "one two"
+    result = reward(prediction, reference, target_words=10, error_budget=2)
+    # 100 words vs 10 words target -> error 90 -> raw cost 45.0, clamped to 2.0
+    assert result["length_cost"] == 2.0
+    assert result["abs_len_loss"] == 90
+    assert result["reward"] == pytest.approx(result["quality"] - 0.1 * 2.0)
+
+
+def test_length_reward_gr3_mode():
+    import math
+
+    reward = LengthReward({"length_weight": 0.1, "max_band_cost": 2.0, "reward_mode": "gr3"})
+    prediction, reference = "one two three four", "one two three four"
+    exact = reward(prediction, reference, target_words=4, error_budget=2)
+    # cost = 0 -> exp(0) = 1.0 -> reward = quality
+    assert exact["reward"] == pytest.approx(exact["quality"])
+
+    diff = reward(prediction, reference, target_words=6, error_budget=2)
+    # error = 2 -> cost = 1.0 -> reward = quality * exp(-0.1)
+    assert diff["reward"] == pytest.approx(diff["quality"] * math.exp(-0.1))
+

@@ -102,6 +102,7 @@ def trajectory(batch, actions, mask, budget):
 def validate(model, loader, tokenizer, cfg, base, reward, device, autocast, output):
     totals = {key: 0.0 for key in ("reward", "rouge1", "rouge2", "rougeL")}
     count = 0
+    words = 0
     gen = base["generation"]
     with Path(output).open("w", encoding="utf-8") as handle:
         for raw in loader:
@@ -123,5 +124,10 @@ def validate(model, loader, tokenizer, cfg, base, reward, device, autocast, outp
                     + "\n"
                 )
                 handle.flush()
+                words += len(text.split())
                 count += 1
-    return {**{key: value / max(1, count) for key, value in totals.items()}, "count": count}
+    return {
+        **{key: value / max(1, count) for key, value in totals.items()},
+        "mean_words": words / max(1, count),
+        "count": count,
+    }
