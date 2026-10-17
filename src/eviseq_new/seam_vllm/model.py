@@ -37,6 +37,7 @@ from ._compat import (
 from ._copy_batch import CopyBatchCache, stack_copy_states
 from ._copy_logits import CopyLogitsMixer
 from ._cross_bias import pad_cross_key, pad_cross_query
+from ._encoder_batch import encoder_batches
 from ._prompt import configured_decoder_prompt_ids
 from ._shape import padded_attention_head_dim
 from ._tensors import _as_2d, bridge_prompt_batch, pack_bridge_memory, unpack_bridge_memory
@@ -262,7 +263,7 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         checkpoint_path = _config_path(hf_config, "seam_checkpoint_path")
         self.seam_config_path = config_path
         self.seam_checkpoint_path = checkpoint_path
-        self.seam_config = load_config(config_path)
+        self.seam_config = load_config(config_path, train_only=True)
         if int(self.seam_config["decoder"].get("cross_attention_every", 1)) != 1:
             raise NotImplementedError("SEAM vLLM currently requires cross_attention_every=1")
         self._validate_local_backbones(config_path)
@@ -310,6 +311,9 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         self._has_copy_requests = False
         self._copy_batch_cache = CopyBatchCache()
         self._copy_logits_mixer = CopyLogitsMixer()
+        self._actor_update = None
+        self._actor_version = -1
+        self._initial_weights_loaded = False
 
     def _validate_local_backbones(self, config_path: Path) -> None:
         for name in ("encoder_name", "decoder_name"):
@@ -465,7 +469,33 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         return result
 
     @torch.inference_mode()
-    def embed_multimodal(
+    def embed_multimodal(self, encoder_input_ids, **kwargs) -> list[torch.Tensor]:
+        if getattr(self, "_actor_update", None) is not None:
+            raise RuntimeError("SEAM actor update is incomplete; generation is blocked")
+        outputs = []
+        device = self.decoder_prompt_ids.device
+        budget = getattr(self.vllm_config.model_config.hf_config, "seam_encoder_max_batch_tokens", 8192)
+        ids = _as_2d(encoder_input_ids, "encoder_input_ids", device, torch.long)
+        fields = dict(kwargs)
+        if fields.get("encoder_attention_mask") is None:
+            pad = getattr(getattr(self.encoder.model, "config", None), "pad_token_id", None)
+            fields["encoder_attention_mask"] = (
+                ids.ne(int(pad)) if pad is not None else torch.ones_like(ids, dtype=torch.bool)
+            )
+        attention_mask = _as_2d(fields["encoder_attention_mask"], "encoder_attention_mask", device, torch.bool)
+        # vLLM invokes this once for a whole encoder batch. Transfer lengths to
+        # Python once, before microbatching, instead of synchronizing CUDA once
+        # per chunk when slicing the returned source memories.
+        source_lengths = attention_mask.sum(dim=-1).tolist()
+        offset = 0
+        for fields in encoder_batches(ids, fields, device, budget):
+            count = fields["encoder_input_ids"].shape[0]
+            fields["_source_lengths"] = source_lengths[offset : offset + count]
+            offset += count
+            outputs.extend(self._embed_multimodal_batch(**fields))
+        return outputs
+
+    def _embed_multimodal_batch(
         self,
         encoder_input_ids,
         encoder_attention_mask=None,
@@ -478,6 +508,7 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         requested_output_tokens=None,
         bridge_prompt_ids=None,
         bridge_prompt_mask=None,
+        _source_lengths=None,
         **kwargs,
     ) -> list[torch.Tensor]:
         device = self.decoder_prompt_ids.device
@@ -513,6 +544,10 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
             if output_budget.numel() != batch:
                 raise ValueError("SEAM requires one requested output budget per source")
         bridge = self.bridge(encoder_state, prompt_embeddings, prompt_mask, output_budget)
+        # The bridge result contains the memory, masks and prior needed below.
+        # Release encoder layer taps and prompt intermediates before copy-state
+        # construction and packing, which otherwise overlap with those tensors.
+        del encoder_state, prompt_embeddings, prompt_ids, prompt_mask, output_budget
         decoder_dtype = self.model.embed_tokens.weight.dtype
         memory = bridge.memory.to(decoder_dtype)
         value_memory = None if bridge.value_memory is None else bridge.value_memory.to(decoder_dtype)
@@ -543,7 +578,9 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
             copy_batch = [prepared.index_select(torch.tensor([i], device=device)) for i in range(batch)]
 
         packed = pack_bridge_memory(memory, value_memory, bridge.source_bias)
-        lengths = attention_mask.sum(dim=-1).tolist()
+        lengths = _source_lengths if _source_lengths is not None else attention_mask.sum(dim=-1).tolist()
+        if len(lengths) != batch:
+            raise ValueError("SEAM source length count differs from the encoder batch size")
         self._completed_copy_states.extend(copy_batch)
         return [packed[index, : int(length)].contiguous() for index, length in enumerate(lengths)]
 
@@ -563,6 +600,8 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         copy_states: list[CopyState | None] | None = None,
         **kwargs,
     ) -> torch.Tensor | IntermediateTensors:
+        if getattr(self, "_actor_update", None) is not None:
+            raise RuntimeError("SEAM actor update is incomplete; generation is blocked")
         memory = value_memory = source_bias = None
         if encoder_outputs:
             packed = torch.cat(encoder_outputs, dim=0)
@@ -581,6 +620,8 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         )
 
     def compute_logits(self, hidden_states: torch.Tensor) -> torch.Tensor | None:
+        if getattr(self, "_actor_update", None) is not None:
+            raise RuntimeError("SEAM actor update is incomplete; generation is blocked")
         logits = self.logits_processor(self.lm_head, hidden_states)
         copy_state = self._pending_copy_state
         self._pending_copy_state = None
@@ -596,11 +637,17 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         return self._copy_logits_mixer.mix(self.copy_head, hidden_states, logits, copy_state)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        if self._initial_weights_loaded:
+            raise RuntimeError(
+                "Use SEAMLLM.sync_weights for full-actor runtime updates; HF decoder-only reload is unsafe"
+            )
         loader = AutoWeightsLoader(self, skip_prefixes=["lm_head."] if self.config.tie_word_embeddings else None)
         loader.load_weights(weights)
         # Report custom-module parameters too: vLLM checks the entire model,
         # not just the original HF decoder loaded by AutoWeightsLoader.
-        return self._restore_afmr_checkpoint(self.seam_checkpoint_path)
+        restored = self._restore_afmr_checkpoint(self.seam_checkpoint_path)
+        self._initial_weights_loaded = True
+        return restored
 
 
 def _as_token_list(values: Any) -> list[int]:

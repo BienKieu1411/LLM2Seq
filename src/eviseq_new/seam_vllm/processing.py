@@ -67,7 +67,7 @@ class SEAMProcessingInfo(BaseProcessingInfo):
         path = getattr(self.get_hf_config(), "seam_config_path", None)
         if not path:
             raise ValueError("SEAM requires hf_overrides.seam_config_path pointing to a local resolved config")
-        return load_config(str(path))
+        return load_config(str(path), train_only=True)
 
     @cached_property
     def encoder_tokenizer(self):

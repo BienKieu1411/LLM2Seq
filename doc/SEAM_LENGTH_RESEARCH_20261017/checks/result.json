@@ -1,0 +1,172 @@
+{
+  "scope": "pure functions with controlled ROUGE stub; no training or model inference",
+  "fingerprints": {
+    "lafrt.py": {
+      "path": "/Users/kieugiangbien/Downloads/lafrt.py",
+      "sha256": "12b7ce535fc250e797263858c6f4e1d73de54f9f69c59c1cd61955206bc54b10"
+    },
+    "lead_eigen_threshold.py": {
+      "path": "/Users/kieugiangbien/Downloads/lead_eigen_threshold.py",
+      "sha256": "2c1e616c258ff5879b4305b10621a0547fa10764b2ae5efc41b81627cc403540"
+    },
+    "lead_eigen.py": {
+      "path": "/Users/kieugiangbien/Downloads/lead_eigen.py",
+      "sha256": "6e476a073a9c43a7debbfaf29fbb50254579bbdf3daba6a803851dcebc84564e"
+    },
+    "lead_len_control.py": {
+      "path": "/Users/kieugiangbien/Downloads/lead_len_control.py",
+      "sha256": "f2486deef3b671faf7f33d6cbbbcdfe184b2f3856ea6e0f3c871dc15bf7bce06"
+    },
+    "schedule_running.py": {
+      "path": "/Users/kieugiangbien/Downloads/schedule_running.py",
+      "sha256": "1c9a2c46f1b65f7b7e0b9bdbff279256916c2846e4d3004b4644c779687f0497"
+    },
+    "semantic_lafrt_len_balanced.py": {
+      "path": "/Users/kieugiangbien/Downloads/semantic_lafrt_len_balanced.py",
+      "sha256": "9fe98463842b482ac9bda40dfb909f984bf4dd22d116c72bb28196fbadf23ba6"
+    }
+  },
+  "word_counts": [
+    {
+      "script": "lafrt.py",
+      "text": "Việt Nam đang phát triển",
+      "legacy": 8,
+      "unicode": 5,
+      "evaluator": 5
+    },
+    {
+      "script": "lafrt.py",
+      "text": "công nghệ thông tin",
+      "legacy": 6,
+      "unicode": 4,
+      "evaluator": 4
+    },
+    {
+      "script": "lafrt.py",
+      "text": "🙂",
+      "legacy": 0,
+      "unicode": 0,
+      "evaluator": 0
+    },
+    {
+      "script": "lafrt.py",
+      "text": "tiếng Việt",
+      "legacy": 4,
+      "unicode": 2,
+      "evaluator": 2
+    },
+    {
+      "script": "lafrt.py",
+      "text": "tiếng Việt",
+      "legacy": 4,
+      "unicode": 4,
+      "evaluator": 2
+    },
+    {
+      "script": "semantic_lafrt_len_balanced.py",
+      "text": "Việt Nam đang phát triển",
+      "legacy": 8,
+      "unicode": 5,
+      "evaluator": 5
+    },
+    {
+      "script": "semantic_lafrt_len_balanced.py",
+      "text": "công nghệ thông tin",
+      "legacy": 6,
+      "unicode": 4,
+      "evaluator": 4
+    },
+    {
+      "script": "semantic_lafrt_len_balanced.py",
+      "text": "🙂",
+      "legacy": 0,
+      "unicode": 0,
+      "evaluator": 0
+    },
+    {
+      "script": "semantic_lafrt_len_balanced.py",
+      "text": "tiếng Việt",
+      "legacy": 4,
+      "unicode": 2,
+      "evaluator": 2
+    },
+    {
+      "script": "semantic_lafrt_len_balanced.py",
+      "text": "tiếng Việt",
+      "legacy": 4,
+      "unicode": 2,
+      "evaluator": 2
+    }
+  ],
+  "lead_len_control_gate": [
+    {
+      "content_score": 0.4,
+      "response_words": 50.0,
+      "target_length": 100.0,
+      "length_penalty": 0.1353352832366127,
+      "final_reward": -0.19999999999999996
+    },
+    {
+      "content_score": 0.4,
+      "response_words": 100.0,
+      "target_length": 100.0,
+      "length_penalty": 1.0,
+      "final_reward": -0.19999999999999996
+    },
+    {
+      "content_score": 0.4,
+      "response_words": 150.0,
+      "target_length": 100.0,
+      "length_penalty": 0.1353352832366127,
+      "final_reward": -0.19999999999999996
+    },
+    {
+      "content_score": 0.5,
+      "response_words": 50.0,
+      "target_length": 100.0,
+      "length_penalty": 0.1353352832366127,
+      "final_reward": 0.0
+    },
+    {
+      "content_score": 0.5,
+      "response_words": 100.0,
+      "target_length": 100.0,
+      "length_penalty": 1.0,
+      "final_reward": 0.0
+    },
+    {
+      "content_score": 0.5,
+      "response_words": 150.0,
+      "target_length": 100.0,
+      "length_penalty": 0.1353352832366127,
+      "final_reward": 0.0
+    },
+    {
+      "content_score": 0.6,
+      "response_words": 50.0,
+      "target_length": 100.0,
+      "length_penalty": 0.1353352832366127,
+      "final_reward": 0.027067056647322535
+    },
+    {
+      "content_score": 0.6,
+      "response_words": 100.0,
+      "target_length": 100.0,
+      "length_penalty": 1.0,
+      "final_reward": 0.19999999999999996
+    },
+    {
+      "content_score": 0.6,
+      "response_words": 150.0,
+      "target_length": 100.0,
+      "length_penalty": 0.1353352832366127,
+      "final_reward": 0.027067056647322535
+    }
+  ],
+  "verified": {
+    "length_inactive_at_quality_0_4": true,
+    "length_active_at_quality_0_6": true,
+    "balanced_unicode_mode_matches_evaluator_on_examples": true,
+    "default_larft_counter_disagrees_on_vietnamese": true
+  }
+}

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 from pathlib import Path
+from threading import RLock
 from typing import Any, Sequence
 
 from eviseq_afmr.config import load_config, resolve_path
@@ -30,15 +32,23 @@ class SEAMLLM:
         self,
         config_path: str | Path,
         checkpoint_path: str | Path,
+        *,
+        encoder_max_batch_tokens: int = 8192,
         **vllm_options: Any,
     ) -> None:
+        if (
+            isinstance(encoder_max_batch_tokens, bool)
+            or not isinstance(encoder_max_batch_tokens, int)
+            or encoder_max_batch_tokens < 1
+        ):
+            raise ValueError("encoder_max_batch_tokens must be a positive integer")
         self.config_path = Path(config_path).expanduser().resolve()
         self.checkpoint_path = Path(checkpoint_path).expanduser().resolve()
         if not self.config_path.is_file():
             raise FileNotFoundError(f"SEAM config not found: {self.config_path}")
         if not self.checkpoint_path.is_file():
             raise FileNotFoundError(f"SEAM checkpoint not found: {self.checkpoint_path}")
-        self.config = load_config(self.config_path)
+        self.config = load_config(self.config_path, train_only=True)
         model = self.config["model"]
         self.decoder_path = resolve_path(model["decoder_name"], self.config)
         self.encoder_path = resolve_path(model["encoder_name"], self.config)
@@ -82,6 +92,7 @@ class SEAMLLM:
                 "seam_checkpoint_path": str(self.checkpoint_path),
                 "max_source_positions": int(self.config["data"]["max_source_length"]),
                 "eos_token_id": self.tokenizer.eos_token_id,
+                "seam_encoder_max_batch_tokens": encoder_max_batch_tokens,
             },
             "tensor_parallel_size": 1,
             "pipeline_parallel_size": 1,
@@ -96,7 +107,64 @@ class SEAMLLM:
             "generation_config": "vllm",
         }
         defaults.update(vllm_options)
+        self._actor_lock = RLock()
+        self._actor_sync_failed = False
+        self._actor_version = -1
+        self._actor_sync_supported = (
+            defaults.get("distributed_executor_backend") == "external_launcher"
+            and os.environ.get("VLLM_ENABLE_V1_MULTIPROCESSING") == "0"
+        )
         self.engine = LLM(**defaults)
+
+    def sync_weights(self, model, *, policy_version: int, chunk_bytes: int = 128 * 1024 * 1024):
+        """Synchronize a full native EviSeqAFMR actor in a colocated process.
+
+        Direct GPU copies avoid checkpoint I/O and host staging. Only the
+        external-launcher/in-process engine is supported here; arbitrary HTTP
+        servers and decoder-only vLLM weight reloads do not implement this API.
+        A failed transaction blocks generation until the engine is rebuilt.
+        """
+        from eviseq_afmr.training.checkpoint import architecture_spec
+
+        from ._actor_rpc import begin_actor_update, finish_actor_update, load_actor_chunk
+
+        if not self._actor_sync_supported:
+            raise RuntimeError("Actor sync requires external_launcher and VLLM_ENABLE_V1_MULTIPROCESSING=0")
+        if isinstance(policy_version, bool) or not isinstance(policy_version, int) or policy_version < 0:
+            raise ValueError("policy_version must be a nonnegative integer")
+        if isinstance(chunk_bytes, bool) or not isinstance(chunk_bytes, int) or chunk_bytes < 1:
+            raise ValueError("chunk_bytes must be a positive integer")
+        with self._actor_lock:
+            if self._actor_sync_failed or policy_version <= self._actor_version:
+                raise RuntimeError("Actor sync failed previously or policy version is stale")
+            if self.engine.llm_engine.has_unfinished_requests():
+                raise RuntimeError("Drain all inference requests before synchronizing the actor")
+            if architecture_spec(model.config) != architecture_spec(self.config):
+                raise ValueError("Actor architecture differs from the engine config")
+            weights = list(model.named_parameters())
+            manifest = [(name, list(value.shape)) for name, value in weights]
+            self._actor_sync_failed = True
+            if not self.engine.reset_prefix_cache():
+                raise RuntimeError("vLLM refused to invalidate the previous actor KV cache")
+            self.engine.reset_mm_cache()
+            self.engine.collective_rpc(
+                begin_actor_update, args=(manifest, architecture_spec(model.config), policy_version)
+            )
+            chunk, size = [], 0
+            for name, value in weights:
+                chunk.append((name, value.detach()))
+                size += value.numel() * value.element_size()
+                if size >= chunk_bytes:
+                    self.engine.collective_rpc(load_actor_chunk, args=(chunk,))
+                    chunk, size = [], 0
+            if chunk:
+                self.engine.collective_rpc(load_actor_chunk, args=(chunk,))
+            result = self.engine.collective_rpc(finish_actor_update)
+            if len(result) != 1 or result[0]["policy_version"] != policy_version:
+                raise RuntimeError("SEAM worker did not confirm the requested policy version")
+            self._actor_version = policy_version
+            self._actor_sync_failed = False
+            return result[0]
 
     def _get_sampling_params(self, sampling_params=None, **overrides):
         from vllm import SamplingParams
@@ -169,7 +237,10 @@ class SEAMLLM:
                     encoder_prompt=encoder_prompt,
                 )
             )
-        return self.engine.generate(prompts, sampling_params, use_tqdm=use_tqdm)
+        with getattr(self, "_actor_lock", nullcontext()):
+            if getattr(self, "_actor_sync_failed", False):
+                raise RuntimeError("SEAM actor update failed; generation is blocked until engine rebuild")
+            return self.engine.generate(prompts, sampling_params, use_tqdm=use_tqdm)
 
     def summarize(self, sources: str | Sequence[str], sampling_params=None, **options) -> str | list[str]:
         normalized, single = self._normalize_sources(sources)

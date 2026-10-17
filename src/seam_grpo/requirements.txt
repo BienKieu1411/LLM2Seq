@@ -1,0 +1,3 @@
+# Use the same local-backbone dependencies as eviseq_new, with Python >=3.11.
+# These private GRPO extension hooks are verified against this exact version.
+trl==1.16.0

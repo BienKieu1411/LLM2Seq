@@ -1,0 +1,3 @@
+# Optional server environment only; not installed on the Mac for verification.
+-r requirements.txt
+vllm==0.25.1

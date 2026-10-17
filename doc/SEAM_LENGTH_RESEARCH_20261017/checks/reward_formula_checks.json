@@ -1,0 +1,83 @@
+{
+  "scope": "synthetic arithmetic only, not model evaluation",
+  "length_symmetry_and_budget": [
+    {
+      "quality": 0.5,
+      "generated_words": 57,
+      "requested_words": 100,
+      "error_budget_words": 43,
+      "length_cost": 1.0,
+      "source_margin": 0.0,
+      "bounded_source_score": 0.0,
+      "reward": 0.4
+    },
+    {
+      "quality": 0.5,
+      "generated_words": 100,
+      "requested_words": 100,
+      "error_budget_words": 43,
+      "length_cost": 0.0,
+      "source_margin": 0.0,
+      "bounded_source_score": 0.0,
+      "reward": 0.5
+    },
+    {
+      "quality": 0.5,
+      "generated_words": 143,
+      "requested_words": 100,
+      "error_budget_words": 43,
+      "length_cost": 1.0,
+      "source_margin": 0.0,
+      "bounded_source_score": 0.0,
+      "reward": 0.4
+    }
+  ],
+  "source_term_algebra_only": [
+    {
+      "quality": 0.5,
+      "generated_words": 100,
+      "requested_words": 100,
+      "error_budget_words": 43,
+      "length_cost": 0.0,
+      "source_margin": -0.5,
+      "bounded_source_score": -0.46211715726000974,
+      "reward": 0.4768941421369995
+    },
+    {
+      "quality": 0.5,
+      "generated_words": 100,
+      "requested_words": 100,
+      "error_budget_words": 43,
+      "length_cost": 0.0,
+      "source_margin": 0,
+      "bounded_source_score": 0.0,
+      "reward": 0.5
+    },
+    {
+      "quality": 0.5,
+      "generated_words": 100,
+      "requested_words": 100,
+      "error_budget_words": 43,
+      "length_cost": 0.0,
+      "source_margin": 0.5,
+      "bounded_source_score": 0.46211715726000974,
+      "reward": 0.5231058578630005
+    }
+  ],
+  "constant_group_penalty": {
+    "before": [
+      -0.15000000000000002,
+      -0.050000000000000044,
+      0.04999999999999993,
+      0.1499999999999999
+    ],
+    "after": [
+      -0.14999999999999997,
+      -0.04999999999999999,
+      0.04999999999999999,
+      0.14999999999999997
+    ],
+    "cancels": true
+  },
+  "no_teacher_model_loaded": true
+}

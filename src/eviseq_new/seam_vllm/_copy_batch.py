@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import torch
 from eviseq_afmr.modeling.grounded_copy import CopyState
 
 
@@ -20,12 +21,15 @@ def stack_copy_states(states: list[CopyState | None]) -> CopyState | None:
     token_ids = first.token_ids.new_zeros(batch, max_width)
     mask = first.mask.new_zeros(batch, max_width)
     bias = first.bias.new_zeros(batch, max_width)
-    for row, state in enumerate(typed):
-        width = state.token_ids.shape[-1]
-        keys[row, :width] = state.keys[0]
-        token_ids[row, :width] = state.token_ids[0]
-        mask[row, :width] = state.mask[0]
-        bias[row, :width] = state.bias[0]
+    widths = [state.token_ids.shape[-1] for state in typed]
+    # Use four tensor-list calls rather than dispatching four copy_ operations
+    # per request. Heterogeneous widths may still take PyTorch's per-tensor
+    # CUDA path, so this reduces Python dispatch without claiming fused copies.
+    for name, destination in (("keys", keys), ("token_ids", token_ids), ("mask", mask), ("bias", bias)):
+        torch._foreach_copy_(
+            [destination[row, :width] for row, width in enumerate(widths)],
+            [getattr(state, name)[0] for state in typed],
+        )
     return CopyState(keys, token_ids, mask, bias)
 
 

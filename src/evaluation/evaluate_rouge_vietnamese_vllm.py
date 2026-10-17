@@ -115,6 +115,8 @@ def managed_seam_server(args, model_dir: Path, config_path: Path, checkpoint_pat
         str(args.max_num_seqs if args.max_num_seqs is not None else args.batch_size),
         "--gpu-memory-utilization",
         str(0.90 if args.gpu_memory_utilization is None else args.gpu_memory_utilization),
+        "--encoder-max-batch-tokens",
+        str(args.encoder_max_batch_tokens if args.encoder_max_batch_tokens is not None else 8192),
     ]
     env = os.environ.copy()
     package_root = EVALUATION_DIR.parent / "eviseq_new"
@@ -253,6 +255,7 @@ def generate_http_predictions(
     )
     pending = [pair for pair in pairs if not pair.prediction.is_file() or pair.prediction.stat().st_size == 0]
     generated, started = 0, time.monotonic()
+    output_tokens, usage_count = 0, 0
 
     def predict(pair):
         source = pair.source.read_text(encoding="utf-8-sig").strip()
@@ -267,7 +270,11 @@ def generate_http_predictions(
             or not isinstance(choices[0].get("text"), str)
         ):
             raise RuntimeError(f"SEAM returned an invalid completion for {pair.source}")
-        return pair, choices[0]["text"]
+        usage = result.get("usage") or {}
+        tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
+            tokens = None
+        return pair, choices[0]["text"], tokens
 
     print(
         f"[predict] backend=seam_vllm_http | model={server_model} | pending={len(pending)} | concurrency={batch_size}"
@@ -284,9 +291,12 @@ def generate_http_predictions(
             errors = []
             for future in done:
                 try:
-                    pair, summary = future.result()
+                    pair, summary, tokens = future.result()
                     _write_prediction(pair, summary)
                     generated += 1
+                    if tokens is not None:
+                        output_tokens += tokens
+                        usage_count += 1
                 except Exception as exc:
                     errors.append(exc)
             if errors:
@@ -296,19 +306,25 @@ def generate_http_predictions(
                     if future.cancel():
                         continue
                     try:
-                        pair, summary = future.result()
+                        pair, summary, _ = future.result()
                         _write_prediction(pair, summary)
                     except Exception:
                         continue
                 raise RuntimeError(f"Prediction failed after saving successful results: {errors[0]}") from errors[0]
             if generated == 1 or generated == len(pending) or generated % 10 == 0:
+                elapsed = max(time.monotonic() - started, 1e-9)
+                rate = generated / elapsed
+                token_rate = f" | out_tok/s={output_tokens / elapsed:.1f}" if usage_count == generated else ""
                 print(
-                    f"[predict] {generated}/{len(pending)} written | elapsed={(time.monotonic() - started) / 60:.1f}m"
+                    f"[predict] {generated}/{len(pending)} written | elapsed={elapsed / 60:.1f}m"
+                    f" | ex/s={rate:.2f}{token_rate} | ETA={(len(pending) - generated) / rate / 60:.1f}m",
+                    flush=True,
                 )
             for _ in done:
                 pair = next(iterator, None)
                 if pair is not None:
                     futures.add(executor.submit(predict, pair))
+    elapsed = time.monotonic() - started
     return {
         **provenance,
         "generated": generated,
@@ -316,6 +332,15 @@ def generate_http_predictions(
         "batch_size": batch_size,
         "max_input_tokens": source_limit,
         "max_new_tokens": options["max_tokens"],
+        "performance": {
+            "elapsed_seconds": elapsed,
+            "examples_per_second": generated / elapsed if elapsed > 0 else 0.0,
+            "output_tokens": output_tokens if usage_count else None,
+            "usage_examples": usage_count,
+            "output_tokens_per_second": output_tokens / elapsed
+            if elapsed > 0 and usage_count == generated and generated
+            else None,
+        },
     }
 
 
@@ -607,6 +632,12 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--gpu-memory-utilization", type=float, default=None, help="Local backend/auto host only; defaults to 0.90"
     )
     parser.add_argument("--max-input-tokens", type=int, default=None, help="Encoder token cap including its prefix")
+    parser.add_argument(
+        "--encoder-max-batch-tokens",
+        type=int,
+        default=None,
+        help="Auto host only: encoder/bridge microbatch budget in padded source tokens (default 8192)",
+    )
     parser.add_argument("--max-new-tokens", "--max-tokens", type=int, default=None, help="Decoder output token budget")
     parser.add_argument("--encoder-prompt", default=None, help="Override encoder prefix; default from model config")
     parser.add_argument("--decoder-prompt", default=None, help="Override decoder instruction and bridge conditioning")
@@ -632,6 +663,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     args.backend = args.backend or (
         "http" if args.start_server or args.base_url or not (args.afmr_config or args.afmr_checkpoint) else "local"
     )
+    if args.encoder_max_batch_tokens is not None:
+        if not args.start_server:
+            parser.error("Set encoder-max-batch-tokens on the host, or use --start-server")
+        if args.encoder_max_batch_tokens < 1:
+            parser.error("--encoder-max-batch-tokens must be positive")
     if args.start_server:
         if args.backend != "http" or args.base_url:
             parser.error("--start-server requires HTTP mode without --base-url; use --server-port")

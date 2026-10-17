@@ -1,0 +1,64 @@
+# All paths are relative to this file; backbone paths in base_config must be LOCAL.
+base_config: ../../eviseq_new/runs/afmr/train/resolved_config.yaml
+sft_checkpoint: ../../eviseq_new/runs/afmr/train/best.pt
+output_dir: ../../../runs/seam_length_grpo/dual_prompt
+# train_file: /workspace/.../mixed_train/train.jsonl
+# validation_file: /workspace/.../validation.jsonl
+ce_warmup:
+  fraction: 0.05                 # adapt on ~5% of one pass, with per-sample word prompts
+  max_steps: 0                   # >0 overrides fraction; fraction=0/max_steps=0 disables
+training:
+  rollout_backend: native         # native or seam_vllm (vLLM 0.25.1)
+  epochs: 1
+  prompt_batch_size: 1            # unique sources PER GPU, before G candidates
+  group_size: 4
+  gradient_accumulation_steps: 4
+  rollout_micro_batch_size: 4     # candidates generated in parallel when prompt widths match
+  score_micro_batch_size: 1
+  max_new_tokens: null            # decoder TOKEN cap, independent of requested words
+  temperature: 1.0               # temperature-only sampling, full vocabulary support
+  ce_weight: 0.05
+  beta: 0.0
+  encoder_lr: 1.0e-6
+  decoder_lr: 1.0e-6
+  bridge_lr: 3.0e-6
+  cross_attention_lr: 3.0e-6
+  max_grad_norm: 1.0
+  warmup_ratio: 0.03
+  min_lr_ratio: 0.1               # cosine decay
+  validation_batch_size: 4
+  save_best: true
+  save_each_epoch: true
+length_control:
+  condition_encoder: true
+  condition_decoder: true
+  target_words_field: target_words
+  dataset_field: dataset
+  default_dataset: default
+  default_error_budget_words: 43
+  dataset_error_budgets:
+    wikilingua: 43
+    vietnews: 38
+    xlsum: 40
+    legal: 72
+    book: 59
+    ViM: 98
+    vlsp22: 34
+  source_content_tokens: 3072    # source BODY budget
+  encoder_prompt_reserve: 128   # total encoder capacity = body + this reserve
+  decoder_prompt_reserve: 192
+  max_requested_words: 4096
+  encoder_instruction: "Đọc văn bản để chuẩn bị bản tóm tắt khoảng {target_words} từ. Ưu tiên các ý chính và chi tiết cần thiết để diễn đạt chính xác.\nVăn bản:\n"
+  decoder_instruction: "Viết bản tóm tắt khoảng {target_words} từ dựa trên văn bản đã cung cấp. Giữ các thông tin quan trọng, viết rõ ràng và chỉ trả về bản tóm tắt."
+reward:
+  rouge1_weight: 0.25
+  rouge2_weight: 0.50
+  rougeL_weight: 0.25
+  length_weight: 0.10
+source_reward:
+  weight: 0.05                   # eta: frozen source-teacher reward; 0 disables for ablation
+  tau: 1.0
+  teacher_checkpoint: null       # null => original SFT, never the moving actor
+  reservoir_size: 256
+  max_length_ratio: 2.0
+  max_jaccard: 0.8

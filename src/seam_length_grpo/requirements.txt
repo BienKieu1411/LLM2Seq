@@ -1,0 +1,2 @@
+-r ../seam_grpo/requirements.txt
+# Optional CUDA rollout: same local seam_vllm plugin and vllm==0.25.1

@@ -18,6 +18,9 @@ from ._compat import validate_decoder_config
 def build_command(config_path: Path, checkpoint_path: Path, args) -> list[str]:
     from transformers import AutoConfig, AutoTokenizer
 
+    encoder_budget = getattr(args, "encoder_max_batch_tokens", 8192)
+    if isinstance(encoder_budget, bool) or not isinstance(encoder_budget, int) or encoder_budget < 1:
+        raise ValueError("encoder-max-batch-tokens must be a positive integer")
     config_path = config_path.expanduser().resolve()
     checkpoint_path = checkpoint_path.expanduser().resolve()
     if not checkpoint_path.is_file():
@@ -41,6 +44,7 @@ def build_command(config_path: Path, checkpoint_path: Path, args) -> list[str]:
         "seam_checkpoint_path": str(checkpoint_path),
         "max_source_positions": int(config["data"]["max_source_length"]),
         "eos_token_id": tokenizer.eos_token_id,
+        "seam_encoder_max_batch_tokens": encoder_budget,
     }
     command = [
         sys.executable,
@@ -101,6 +105,12 @@ def parse_args():
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     parser.add_argument("--max-model-len", type=int, default=None, help="Decoder context limit")
     parser.add_argument("--max-num-batched-tokens", type=int, default=None)
+    parser.add_argument(
+        "--encoder-max-batch-tokens",
+        type=int,
+        default=8192,
+        help="Padded source-token budget per encoder/bridge microbatch; long sources run alone",
+    )
     parser.add_argument("--api-key", default=None, help="Native vLLM authentication key (or set VLLM_API_KEY)")
     parser.add_argument(
         "--dry-run", action="store_true", help="Print native launch command without loading model weights"

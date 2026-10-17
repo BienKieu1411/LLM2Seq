@@ -42,6 +42,12 @@ encoder source cap comes from `data.max_source_length` in the resolved config.
 `max-num-seqs` controls concurrent sequences, rather than a fixed batch size.
 Start conservatively and measure GPU memory with the actual document lengths.
 
+`--encoder-max-batch-tokens` (default 8192) independently bounds the padded
+source positions per HF encoder/FP32 bridge microbatch. For example, 8192 permits
+four rows padded to 2048, or one row of 8192. A longer single source runs alone;
+this setting never truncates source text. Output/copy states keep their original
+request order. The Python facade accepts `encoder_max_batch_tokens=8192`.
+
 `--dry-run` prints the native engine arguments without loading weights
 or starting a server (local config/tokenizer files are read). API keys are
 redacted in this printout. In source-only mode, keep using the SEAM launcher
@@ -297,7 +303,64 @@ silently mix predictions. For a different model/prompt/checkpoint use a new
 responses are saved even if another request fails. Transient HTTP errors have
 bounded retries (`--retries`, default 2); `--timeout` defaults to 600 seconds.
 
+For an auto-started host, pass `--encoder-max-batch-tokens` to the evaluator to
+set that host's encoder/bridge microbatch budget. With an existing server, set
+the option on its launcher instead. This budget does not change concurrency.
+
 The previous in-process evaluator remains available with `--backend local`,
 `--afmr-config`, and `--afmr-checkpoint`. Supplying those local paths without a
 base URL also selects local mode, preserving earlier commands. The original
 non-vLLM evaluator is unchanged.
+
+## Measuring throughput
+
+Before timing, remove debugging flags from the shell that launches the host:
+
+```bash
+unset CUDA_LAUNCH_BLOCKING VLLM_TRACE_FUNCTION
+```
+
+The [vLLM troubleshooting guide](https://docs.vllm.ai/en/v0.25.1/usage/troubleshooting/)
+recommends turning debug flags off after diagnosis because they can slow
+execution. Keep the trained prompts, token budgets, and sampling settings fixed
+when comparing runs. Increasing concurrency is not guaranteed to improve speed;
+compare actual running requests and throughput at the intended source lengths.
+
+The HTTP evaluator prints completed examples per second, output tokens per
+second, and ETA. Output token rates use native `usage.completion_tokens` and
+are omitted if any completed response lacks that count. The report's
+`generation.performance` records these measurements for newly generated
+examples. Timing excludes host startup and ROUGE, but includes requests and
+prediction writes. It is an end-to-end completion rate, not per-token latency.
+
+Copy-state packing uses grouped tensor-list copies when the active batch changes.
+Copy-logit mixing replaces the absent-copy finite-floor `logaddexp` with its
+FP32-equivalent maximum; source-token destinations still use `logaddexp`.
+CPU reference comparisons pass, but GPU throughput improvements remain to be
+measured. Upload the updated adapter and evaluator, restart the host, and use a
+new `--model-name` for the benchmark: adapter edits change its fingerprint, so
+an existing prediction manifest cannot be silently reused across revisions.
+
+## Encoder/bridge out of memory while decoding
+
+SEAM profiling uses dummy decoder requests, which do not reproduce the full
+real HF encoder/FP32 bridge activation peak. KV allocation can therefore leave
+too little space for a later encoder batch, even with low reported KV usage:
+usage describes occupied blocks within an already allocated pool. A crash on
+`_focus_prior` followed by `EngineDeadError`/HTTP 500 is a worker failure, not an
+HTTP request-format error.
+
+For the observed 178.35 GiB GPU run (165.46 GiB KV allocation at utilization
+0.95, concurrency 256), restart with more headroom and fewer active requests:
+
+```bash
+--concurrency 64 --max-num-seqs 64 \
+--gpu-memory-utilization 0.80 --encoder-max-batch-tokens 8192
+```
+
+These are starting settings for that run, not a memory guarantee for every
+backbone/source length. The microbatch budget limits temporary activations;
+per-request copy states and paged self/cross KVs still grow with active sources.
+Restart the failed engine before retrying. After changing adapter files use a
+new prediction folder name because the code fingerprint changes. Keep the
+original predictions rather than mixing results across adapter revisions.

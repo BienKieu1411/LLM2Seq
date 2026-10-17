@@ -62,6 +62,7 @@ def server_info(hf_config, config, *, max_model_len: int | None = None) -> dict[
         "adapter": adapter.hexdigest(),
         "vllm": "0.25.1",
         "decoder_context": max_model_len,
+        "encoder_max_batch_tokens": getattr(hf_config, "seam_encoder_max_batch_tokens", 8192),
     }
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     data = config["data"]
@@ -73,6 +74,7 @@ def server_info(hf_config, config, *, max_model_len: int | None = None) -> dict[
         "generation_defaults": sampling_kwargs(config["generation"], {}),
         "max_input_tokens": int(data["max_source_length"]),
         "decoder_context": max_model_len,
+        "encoder_max_batch_tokens": payload["encoder_max_batch_tokens"],
         "prompt_defaults": {
             "encoder_prompt": data.get("encoder_prefix", ""),
             "encoder_task_marker": data.get("encoder_task_marker", ""),

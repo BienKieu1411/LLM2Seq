@@ -1,0 +1,55 @@
+# Paths are relative to THIS config, or use absolute server paths.
+base_config: ../../../src/eviseq_new/runs/afmr/train/resolved_config.yaml
+sft_checkpoint: ../../../src/eviseq_new/runs/afmr/train/best.pt
+output_dir: ../../../runs/seam_grpo/rouge_ce
+# Optional: override only train / validation paths. Prompts and model paths are
+# inherited from base_config. No test data is read during training.
+# train_file: /workspace/.../train.jsonl
+# validation_file: /workspace/.../validation.jsonl
+
+training:
+  rollout_backend: seam_vllm       # native remains available without vLLM
+  vllm_gpu_memory_utilization: 0.20 # per-GPU engine share; train model also needs VRAM
+  vllm_max_num_seqs: 16           # concurrent requests PER GPU, also under DDP
+  vllm_max_num_batched_tokens: 2048
+  vllm_encoder_max_batch_tokens: 8192
+  vllm_logp_mean_tolerance: 0.05   # stop before backward if rollout/scorer diverge
+  vllm_logp_max_tolerance: 0.50
+  epochs: 1
+  prompt_batch_size: 1             # unique sources per GPU per microbatch
+  group_size: 4                   # sampled summaries per source
+  gradient_accumulation_steps: 4
+  rollout_micro_batch_size: 4     # native rollout only; vLLM uses max_num_seqs
+  score_micro_batch_size: 1       # candidate trajectories per grad forward
+  logprob_chunk_size: 32          # avoid materializing [batch, target, vocab]
+  max_new_tokens: null            # inherit SFT generation budget
+  temperature: 1.0                # also used in policy likelihoods
+  epsilon: 0.2
+  scale_rewards: none             # group centering, no std division (Dr. GRPO)
+  ce_weight: 0.05                 # hypothesis; tune on validation
+  beta: 0.0                      # >0 loads a separate frozen SFT reference
+  encoder_lr: 1.0e-6
+  decoder_lr: 1.0e-6
+  bridge_lr: 3.0e-6
+  cross_attention_lr: 3.0e-6
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  min_lr_ratio: 0.1
+  max_grad_norm: 1.0
+  seed: 42
+  num_workers: 0
+  max_steps: 0
+  max_train_examples: 0
+  validation_max_examples: 0
+  validation_batch_size: 4
+  log_every_steps: 1
+  save_each_epoch: true
+  save_best: true
+  evaluate_before_training: true  # compare SFT under the SAME validation protocol
+
+reward:
+  # Backend / preprocessing documented in README. This training proxy is NOT
+  # claimed to reproduce corpus-level Perl ROUGE-1.5.5 exactly.
+  rouge1_weight: 1.0
+  rouge2_weight: 1.0
+  rougeL_weight: 1.0
