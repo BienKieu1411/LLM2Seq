@@ -47,7 +47,11 @@ DEFAULTS = {
     "vllm_encoder_max_batch_tokens": 8192,
     "vllm_logp_mean_tolerance": 0.05,
     "vllm_logp_max_tolerance": 0.50,
+    "vllm_importance_sampling_clip_max": 2.0,
     "vllm_group_sampling": False,
+    "vllm_mode": "colocate",
+    "vllm_rollout_gpu": "1",
+    "vllm_server_timeout": 1800,
     "epsilon_high": None,
     "delta": None,
     "importance_sampling_level": "token",
@@ -91,6 +95,7 @@ def load(path: str | Path) -> dict:
         "vllm_max_num_seqs",
         "vllm_max_num_batched_tokens",
         "vllm_encoder_max_batch_tokens",
+        "vllm_server_timeout",
     )
     for key in integers:
         if isinstance(cfg[key], bool) or not isinstance(cfg[key], int) or cfg[key] < 1:
@@ -135,6 +140,11 @@ def load(path: str | Path) -> dict:
             raise ValueError(f"training.{key} must be boolean")
     if cfg["rollout_backend"] not in {"native", "seam_vllm"}:
         raise ValueError("rollout_backend must be native or seam_vllm")
+    if cfg["vllm_mode"] not in {"colocate", "dedicated"}:
+        raise ValueError("vllm_mode must be colocate or dedicated")
+    cfg["vllm_rollout_gpu"] = str(cfg["vllm_rollout_gpu"])
+    if not cfg["vllm_rollout_gpu"].strip() or "," in cfg["vllm_rollout_gpu"]:
+        raise ValueError("vllm_rollout_gpu must identify exactly one GPU")
     cfg["vllm_gpu_memory_utilization"] = float(cfg["vllm_gpu_memory_utilization"])
     if not 0 < cfg["vllm_gpu_memory_utilization"] < 1:
         raise ValueError("vllm_gpu_memory_utilization must be in (0, 1)")
@@ -142,6 +152,9 @@ def load(path: str | Path) -> dict:
         cfg[key] = float(cfg[key])
         if not math.isfinite(cfg[key]) or cfg[key] <= 0:
             raise ValueError(f"{key} must be positive and finite")
+    cfg["vllm_importance_sampling_clip_max"] = float(cfg["vllm_importance_sampling_clip_max"])
+    if not math.isfinite(cfg["vllm_importance_sampling_clip_max"]) or cfg["vllm_importance_sampling_clip_max"] < 1:
+        raise ValueError("vllm_importance_sampling_clip_max must be finite and >= 1")
     if cfg["epsilon_high"] is not None:
         cfg["epsilon_high"] = float(cfg["epsilon_high"])
         if not 0 < cfg["epsilon_high"] < 1:

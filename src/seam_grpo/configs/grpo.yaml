@@ -9,19 +9,23 @@ validation_file: /workspace/storage-shared/nlp/dungdx4/bien_projects/LLM2Seq/src
 
 training:
   rollout_backend: seam_vllm       # native remains available without vLLM
-  vllm_gpu_memory_utilization: 0.20 # per-GPU engine share; train model also needs VRAM
-  vllm_max_num_seqs: 8            # concurrent sequences PER GPU; lower rollout peak memory
+  vllm_mode: dedicated             # one training GPU + one automatically started rollout GPU
+  vllm_rollout_gpu: "1"            # physical GPU index/UUID, outside the trainer's CUDA_VISIBLE_DEVICES
+  vllm_server_timeout: 1800
+  vllm_gpu_memory_utilization: 0.20 # rollout-engine budget; increase after measuring the dedicated host's memory
+  vllm_max_num_seqs: 8            # concurrent sequences on each rollout engine
   vllm_max_num_batched_tokens: 8192 # automatically raised if source/decoder context requires more
   vllm_encoder_max_batch_tokens: 8192 # encoder microbatch budget; source token cap is unchanged
   vllm_logp_mean_tolerance: 0.05   # stop before backward if rollout/scorer diverge
-  vllm_logp_max_tolerance: 1.00
+  vllm_logp_max_tolerance: 1.00    # warn on isolated outliers; mean/nonfinite errors still stop all ranks
+  vllm_importance_sampling_clip_max: 2.0 # token-level TIS for train/inference numerical mismatch
   vllm_group_sampling: true        # encode each source once with SamplingParams(n=group_size)
   epochs: 1
   prompt_batch_size: 2             # unique sources per GPU per microbatch
   group_size: 8                   # sampled summaries per source
-  gradient_accumulation_steps: 16  # per GPU: 32 sources / 256 candidates per update; 2 GPUs: 64 / 512
+  gradient_accumulation_steps: 16  # dedicated: 32 sources / 256 candidates; two TRAIN ranks would give 64 / 512
   rollout_micro_batch_size: 8     # native rollout only; vLLM uses max_num_seqs
-  score_micro_batch_size: 2       # candidate trajectories per grad forward; also limits gold CE batches
+  score_micro_batch_size: 2       # candidate trajectories per grad forward; gold CE is scored once per source
   logprob_chunk_size: 16          # decoder positions per vocabulary projection
   max_new_tokens: 1024            # explicit output cap for GRPO rollout and validation
   temperature: 1.0                # also used in policy likelihoods

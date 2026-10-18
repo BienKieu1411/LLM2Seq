@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import math
+import time
 from importlib.metadata import version
 from pathlib import Path
 
@@ -11,7 +14,9 @@ from eviseq_afmr.training.checkpoint import save_checkpoint
 from trl import GRPOTrainer
 
 from .data import move, trajectory
+from .progress import TrainingProgress
 from .rollout import rollout, select_rows
+from .sampling import correct_vllm_policy_inputs
 
 TRL_VERSION = "1.16.0"
 
@@ -53,6 +58,8 @@ class SEAMGRPOTrainer(GRPOTrainer):
         self._ce_selector = None
         self._ce_sum = None
         self._active_behavior = None
+        self._active_loss_inputs = None
+        self._last_logp_warning_step = None
         self.rollout_history = []
         self.sft_checkpoint = sft_checkpoint
         self.rollout_engine = None
@@ -86,6 +93,22 @@ class SEAMGRPOTrainer(GRPOTrainer):
         # vLLM path disabled so it cannot construct a decoder-only rollout model.
         if self.use_vllm or self.is_deepspeed_enabled or self.is_fsdp_enabled:
             raise ValueError("SEAM GRPO currently supports native rollout with single GPU / DDP only")
+        if settings["rollout_backend"] == "seam_vllm" and (
+            self.num_iterations != 1 or self.args.steps_per_generation != self.args.gradient_accumulation_steps
+        ):
+            raise ValueError("SEAM vLLM TIS requires one optimization iteration per synchronized rollout window")
+        self.progress = TrainingProgress()
+        self.add_callback(self.progress)
+
+    def log(self, logs, start_time=None):
+        if self.model.training:
+            logs = {**logs, **self.progress.metrics(self.state)}
+            maxima = self._metrics["train"].get("behavior_logp_max_error", [])
+            if maxima:
+                # TRL averages metric lists. A maximum across microbatches
+                # must remain a maximum, rather than hide a rare outlier.
+                self._metrics["train"]["behavior_logp_max_error"] = [max(maxima)]
+        return super().log(logs, start_time=start_time)
 
     def create_scheduler(self, num_training_steps, optimizer=None):
         from .config import cosine_multiplier
@@ -160,7 +183,8 @@ class SEAMGRPOTrainer(GRPOTrainer):
         old = result.get("sampling_per_token_logps")
         if old is None:
             raise RuntimeError("Native rollout must provide the actual behavior log-probabilities")
-        result["old_per_token_logps"] = old.detach().clone()
+        result["seam_behavior_logps"] = old.detach().clone()
+        result["old_per_token_logps"] = result["seam_behavior_logps"] if cfg["rollout_backend"] == "native" else None
         selector = torch.zeros(len(inputs), device=self.accelerator.device, dtype=torch.bool)
         selector[::group] = True
         gold_tokens = (source["labels"][:, 1:].ne(-100).sum(-1) * selector).sum()
@@ -186,7 +210,9 @@ class SEAMGRPOTrainer(GRPOTrainer):
                     unsplit_pixel_values_by_grid,
                 )
 
+                started = time.perf_counter()
                 generation_batch = self._generate_and_score_completions(generation_batch)
+                self.progress.rollout_seconds += time.perf_counter() - started
                 generation_batch = split_pixel_values_by_grid(generation_batch)
                 generation_batches = split_tensor_dict(generation_batch, self.args.steps_per_generation)
                 self._buffered_inputs = [unsplit_pixel_values_by_grid(batch) for batch in generation_batches]
@@ -250,12 +276,44 @@ class SEAMGRPOTrainer(GRPOTrainer):
                         not torch.isfinite(totals).all()
                         or not torch.isfinite(maxima).all()
                         or mean_error > self.settings["vllm_logp_mean_tolerance"]
-                        or max_error > self.settings["vllm_logp_max_tolerance"]
                     ):
                         raise RuntimeError(
                             f"SEAM vLLM/native likelihood mismatch: mean={mean_error:.5f}, max={max_error:.5f}; "
                             "check weights, dtype, tokenizer, prompts, source budget and sampling before training"
                         )
+                    if (
+                        max_error > self.settings["vllm_logp_max_tolerance"]
+                        and self._last_logp_warning_step != self.state.global_step
+                    ):
+                        if self.accelerator.is_main_process:
+                            logging.getLogger(__name__).warning(
+                                "vLLM log-prob outlier: mean=%.5f, max=%.5f; applying token-level TIS "
+                                "with cap %.2f. Mean/nonfinite and policy-version guards remain active.",
+                                mean_error,
+                                max_error,
+                                self.settings["vllm_importance_sampling_clip_max"],
+                            )
+                        self._last_logp_warning_step = self.state.global_step
+                    correction = correct_vllm_policy_inputs(
+                        self._active_loss_inputs,
+                        logps,
+                        self._active_behavior,
+                        active,
+                        cap=self.settings["vllm_importance_sampling_clip_max"],
+                        loss_type=self.loss_type,
+                    )
+                    clipped = (
+                        (logps.detach() - self._active_behavior)
+                        > math.log(self.settings["vllm_importance_sampling_clip_max"])
+                    ) & active
+                    stats = torch.stack(((correction * active).sum(), clipped.sum().float(), active.sum().float()))
+                    stats = self.accelerator.reduce(stats, reduction="sum")
+                    self._metrics["train"]["sampling/importance_sampling_ratio_mean"].append(
+                        float(stats[0] / stats[2].clamp_min(1))
+                    )
+                    self._metrics["train"]["sampling/importance_sampling_clipped_ratio"].append(
+                        float(stats[1] / stats[2].clamp_min(1))
+                    )
         return logps, entropies if compute_entropy else None, None
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -266,7 +324,11 @@ class SEAMGRPOTrainer(GRPOTrainer):
         }
         self._ce_selector = inputs["seam_gold_selector"] if self.settings["ce_weight"] else None
         self._ce_sum = None
-        self._active_behavior = inputs["old_per_token_logps"]
+        self._active_behavior = inputs["seam_behavior_logps"]
+        # Only mutate the working microbatch. Cached trajectories/advantages
+        # must retain their original values, including after a failed forward.
+        inputs = dict(inputs)
+        self._active_loss_inputs = inputs
         try:
             # Clipping, importance ratios, reference KL, Dr. GRPO normalization,
             # gradient-accumulation scaling, and policy metrics remain TRL's.
@@ -288,6 +350,7 @@ class SEAMGRPOTrainer(GRPOTrainer):
             self._ce_selector = None
             self._ce_sum = None
             self._active_behavior = None
+            self._active_loss_inputs = None
 
     def export_checkpoint(self, name, *, epoch, best_metric=None):
         if not self.accelerator.is_main_process:

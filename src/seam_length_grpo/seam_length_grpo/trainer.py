@@ -73,7 +73,10 @@ class LengthTrainer(SEAMGRPOTrainer):
         old = result.get("sampling_per_token_logps")
         if old is None:
             raise RuntimeError("Missing actual behavior log-probabilities")
-        result["old_per_token_logps"] = old.detach().clone()
+        result["seam_behavior_logps"] = old.detach().clone()
+        result["old_per_token_logps"] = (
+            result["seam_behavior_logps"] if self.settings["rollout_backend"] == "native" else None
+        )
         selector = torch.zeros(len(inputs), device=self.accelerator.device, dtype=torch.bool)
         selector[::group] = True
         result["seam_gold_selector"] = selector

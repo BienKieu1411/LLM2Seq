@@ -57,7 +57,14 @@ class LengthVLLMRollout:
                 yaml.safe_dump(config, stream, sort_keys=False, allow_unicode=True)
         accelerator.wait_for_everyone()
         torch.cuda.empty_cache()
-        self.engine = SEAMLLM(
+        engine_class = SEAMLLM
+        extra = {}
+        if cfg.get("vllm_mode", "colocate") == "dedicated":
+            from seam_grpo.remote_rollout import RemoteSEAMLLM
+
+            engine_class = RemoteSEAMLLM
+            extra["trainer"] = trainer
+        self.engine = engine_class(
             rollout_config,
             trainer.sft_checkpoint,
             distributed_executor_backend="external_launcher",
@@ -69,6 +76,7 @@ class LengthVLLMRollout:
             mm_processor_cache_gb=0,
             logprobs_mode="processed_logprobs",
             seed=cfg["seed"] + accelerator.process_index,
+            **extra,
         )
 
     def __call__(self, prompts, source):
@@ -147,7 +155,10 @@ class LengthVLLMRollout:
             # Version-pinned EngineCoreClient lifecycle, before Trainer tears
             # down the distributed process group (LLMEngine has no shutdown()).
             try:
-                self.engine.engine.llm_engine.engine_core.shutdown()
+                if self.trainer.settings.get("vllm_mode", "colocate") == "dedicated":
+                    self.engine.close()
+                else:
+                    self.engine.engine.llm_engine.engine_core.shutdown()
             finally:
                 self.engine = None
                 self.version = -1

@@ -55,7 +55,7 @@ def test_stale_rollout_is_rejected_before_policy_forward():
         trainer.compute_loss(None, {"seam_policy_version": torch.tensor([1, 1])})
 
 
-@pytest.mark.parametrize("rollout_backend", ["native", "seam_vllm", "seam_vllm_bad"])
+@pytest.mark.parametrize("rollout_backend", ["native", "seam_vllm", "seam_vllm_bad", "seam_vllm_outlier"])
 def test_real_trl_objective_new_versions_and_frozen_full_reference(tmp_path, monkeypatch, rollout_backend):
     bad_logps = rollout_backend == "seam_vllm_bad"
     if rollout_backend.startswith("seam_vllm"):
@@ -98,6 +98,7 @@ def test_real_trl_objective_new_versions_and_frozen_full_reference(tmp_path, mon
         holder["trainer"] = self
         holder["ref"] = {name: p.detach().clone() for name, p in self.ref_model.named_parameters()}
         self._test_bad_vllm_logps = bad_logps
+        self._test_vllm_outlier = rollout_backend == "seam_vllm_outlier"
 
     monkeypatch.setattr(GRPOTrainer, "_compute_loss", counted_loss)
     monkeypatch.setattr(SEAMGRPOTrainer, "__init__", captured_init)
@@ -107,11 +108,11 @@ def test_real_trl_objective_new_versions_and_frozen_full_reference(tmp_path, mon
         "output_dir": str(tmp_path / "out"),
         "training": {
             **DEFAULTS,
-            "rollout_backend": "seam_vllm" if bad_logps else rollout_backend,
+            "rollout_backend": "seam_vllm" if rollout_backend.startswith("seam_vllm") else rollout_backend,
             "epochs": 2,
             "max_steps": 2,
             "group_size": 2,
-            "max_new_tokens": 3,
+            "max_new_tokens": 32 if rollout_backend == "seam_vllm_outlier" else 3,
             "gradient_accumulation_steps": 2,
             "beta": 0.01,
             "validation_batch_size": 1,
@@ -131,6 +132,12 @@ def test_real_trl_objective_new_versions_and_frozen_full_reference(tmp_path, mon
     assert [row["candidates"] for row in result["rollouts"]] == [4, 4]
     assert trainer._buffered_inputs is None
     assert trainer._likelihood_source is None
+    assert trainer._active_loss_inputs is None
+    metrics = [json.loads(line) for line in (tmp_path / "out/training_metrics.jsonl").read_text().splitlines()]
+    assert any("eta" in row and "rollout_reward_seconds" in row and "train_seconds" in row for row in metrics)
+    if rollout_backend == "seam_vllm_outlier":
+        assert any(row.get("behavior_logp_max_error", 0) > 1.0 for row in metrics)
+        assert any(row.get("sampling/importance_sampling_clipped_ratio", 0) > 0 for row in metrics)
     for name, p in trainer.ref_model.named_parameters():
         assert not p.requires_grad and p.grad is None
         torch.testing.assert_close(p, holder["ref"][name], rtol=0, atol=0)

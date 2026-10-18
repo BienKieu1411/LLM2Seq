@@ -19,8 +19,9 @@ policy objective with fixed generation-budget normalization (Dr. GRPO style):
 
 ```text
 A_i = reward_i - mean_group(reward)
-ratio_i,t = exp(current_logp_i,t - rollout_logp_i,t)
-L_RL = -sum_valid min(ratio*A, clip(ratio, 1-epsilon, 1+epsilon)*A)
+ratio_i,t = exp(current_logp_i,t - old_training_logp_i,t)
+rho_i,t = min(exp(old_training_logp_i,t - rollout_logp_i,t), 2) # vLLM only
+L_RL = -sum_valid rho * min(ratio*A, clip(ratio, 1-epsilon, 1+epsilon)*A)
        / (number_of_candidates * max_new_tokens)
 L = L_RL + ce_weight * CE(training_gold) + beta * sampled_KL_to_SFT
 ```
@@ -31,6 +32,18 @@ proven optimal for this model. Gold CE is evaluated once per original source,
 at temperature 1, with prompt and padding labels excluded. It anchors the
 reference-summary distribution; it does not guarantee naturalness or factuality.
 The CE coefficient is sensitive to the relative gradient scales.
+
+For native rollout, the saved rollout log-probability remains the old policy
+and `rho=1`. For vLLM, the training and inference engines can assign different
+probabilities even with synchronized weights. The adapter applies TRL's
+token-level Truncated Importance Sampling (TIS), with configurable
+`vllm_importance_sampling_clip_max=2.0`. This is separate from PPO clipping.
+The correction is detached and applies only to the policy term; gold CE,
+entropy and reference KL retain their upstream treatment. VESPO consumes the
+correction in its upstream gamma weights instead. Since there is exactly one
+optimization iteration per synchronized rollout window, the old training
+policy is the current forward detached. No extra teacher-forced scoring pass
+is needed. Rollouts from another optimizer version are still rejected.
 
 Every sampled token is scored under the **full generator + grounded-copy
 mixture**, including the encoder and bridge. Current-policy scoring recomputes
@@ -129,12 +142,37 @@ python3 src/seam_grpo/run_grpo.py --config src/seam_grpo/configs/grpo.yaml --dry
 
 # One GPU.
 CUDA_VISIBLE_DEVICES=0 bash src/seam_grpo/scripts/run_grpo.sh \
-  --config src/seam_grpo/configs/grpo.yaml
+  --config src/seam_grpo/configs/grpo.yaml --vllm-mode colocate
 
 # Two GPUs, DDP. Each rank samples and compares complete candidate groups.
 CUDA_VISIBLE_DEVICES=0,1 NPROC_PER_NODE=2 bash src/seam_grpo/scripts/run_grpo.sh \
+  --config src/seam_grpo/configs/grpo.yaml --vllm-mode colocate
+```
+
+The supplied config now selects **dedicated** rollout: one GPU trains and one
+GPU hosts vLLM, with one training process. Launch both automatically:
+
+```bash
+TRAIN_GPU=0 ROLLOUT_GPU=1 bash src/seam_grpo/scripts/run_grpo_two_gpu.sh \
   --config src/seam_grpo/configs/grpo.yaml
 ```
+
+The host runs in a separate local process with its own `CUDA_VISIBLE_DEVICES`.
+Control messages use authenticated loopback IPC; full actor weights travel
+directly GPU-to-GPU through a separate NCCL communicator, without checkpoint
+files or CPU weight staging. The host acknowledges a complete actor version
+and invalidates derived caches before generating the next group. It is shut
+down with training; its log is `output_dir/rollout_server.log`. This internal
+rollout service is separate from the public OpenAI-compatible HTTP server.
+Training and rollout are synchronous; this does not claim overlap or a measured
+speedup. The host retains an FP32 receive buffer for the complete actor in
+addition to its inference model and KV/encoder caches.
+
+For one GPU or the earlier two-training-GPU DDP setup, explicitly use
+`--vllm-mode colocate` with `run_grpo.sh` (including `NPROC_PER_NODE=2` for DDP).
+In dedicated mode, sources/update are `prompt_batch_size * accumulation`;
+there is no factor of two. Double accumulation if you want to preserve the
+effective batch of a previous two-rank run. No batch setting is silently changed.
 
 By default, each run must use a fresh output directory. To intentionally restart
 in the same directory, append `--overwrite-output-dir` to the launch command.
@@ -150,7 +188,7 @@ mid-epoch resume is not implemented. `beta>0` loads an additional complete froze
 SFT model and increases memory use. `beta=0` means the logged KL term is disabled,
 not that actual divergence from SFT is zero.
 
-`seam_vllm` creates one colocated TP=1/PP=1 engine on each rank's training GPU,
+In `vllm_mode: colocate`, `seam_vllm` creates one TP=1/PP=1 engine on each rank's training GPU,
 using vLLM's external launcher and in-process engine. Each rank generates its
 complete local groups; DDP synchronizes training gradients. Single-GPU runs use
 the same adapter without DDP. This is a native Python engine, not an HTTP host.
@@ -204,10 +242,13 @@ Rollout requests use `processed_logprobs`, so saved probabilities include the
 configured temperature. They return sampled token IDs including EOS, without
 text retokenization. Dataset sources are not detokenized a second time in the
 engine. Each training microbatch measures native-versus-rollout log-probability
-MAE/max over valid actions and stops all ranks before backward if configured
-tolerances are exceeded (defaults 0.05 mean and 0.50 max, in log units). These
-are mismatch guards, not a proof of identical GPU kernels or preserved quality.
-Do not raise them to bypass an unexplained mismatch.
+MAE/max over valid actions. Nonfinite values or MAE above
+`vllm_logp_mean_tolerance` stop all ranks before backward. A token outlier above
+`vllm_logp_max_tolerance` warns once per optimizer step, while TIS bounds its
+policy-gradient weight. The maximum metric reports the actual maximum across
+microbatches rather than an average of maxima. This does not establish kernel
+parity: inspect persistent drift, correction clipping and validation quality.
+Do not increase mean tolerance to bypass a source/weight/tokenization mismatch.
 
 The stock TRL `use_vllm` path stays disabled because it would instantiate a
 causal-only model. `rollout_backend: seam_vllm` explicitly selects the custom
@@ -249,6 +290,21 @@ completion length, truncation, tied-reward groups, and elapsed time. A policy
 loss near zero before the first on-policy update is normal with centered
 advantages: gradients can still be nonzero. If every group is tied, the RL term
 has no preference signal and only CE/optional KL can contribute.
+
+Logs also show `progress` (optimizer updates), `elapsed`, `eta`,
+`rollout_reward_seconds` and `train_seconds`. Rollout timing includes weight
+sync, tokenization, candidate generation and rewards; training timing includes
+scoring, backward, optimizer and synchronization waits. ETA uses a smoothed
+update duration and drops the first update's one-off host startup after the
+second update. It excludes future validation/checkpoint costs and is approximate.
+Candidate scoring batches different completion lengths from the same source
+within `score_micro_batch_size`, preserving masks and gradient routes. The
+ROUGE-L reward uses an exact integer-bitset LCS, checked against the original
+dynamic program on Unicode/repeated-token cases; its scoring definition is unchanged.
+
+TIS reference: [TRL GRPO training-inference mismatch](https://huggingface.co/docs/trl/main/grpo_trainer#dealing-with-the-training-inference-mismatch).
+The local pinned TRL 1.16.0 implementation is the executable loss reference in
+`checks/test_sampling_correction.py`, including equality of losses and gradients.
 
 ## Verification and evidence
 

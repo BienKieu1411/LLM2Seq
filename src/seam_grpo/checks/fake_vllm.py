@@ -37,6 +37,8 @@ class NativeFacade:
             logps = result["old_logps"][index][mask].tolist()
             if getattr(self.trainer, "_test_bad_vllm_logps", False):
                 logps = [x - 1 for x in logps]
+            if index == 0 and getattr(self.trainer, "_test_vllm_outlier", False):
+                logps[0] -= 1.06443
             completion = SimpleNamespace(
                 token_ids=ids,
                 logprobs=[{token: SimpleNamespace(logprob=lp)} for token, lp in zip(ids, logps, strict=True)],

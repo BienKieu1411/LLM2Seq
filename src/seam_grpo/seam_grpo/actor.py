@@ -122,20 +122,14 @@ class SEAMActor(PreTrainedModel):
         compute_entropy_with_grad: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size = int(batch["input_ids"].shape[0])
-        action_lengths = batch["action_mask"].bool().sum(dim=-1).tolist()
         inverse_list = inverse_indices.detach().cpu().tolist()
         logps: list[torch.Tensor] = []
         entropies: list[torch.Tensor] = []
         start = 0
         while start < batch_size:
             u_idx = int(inverse_list[start])
-            act_len = int(action_lengths[start])
             stop = start + 1
-            while (
-                stop < min(batch_size, start + self.score_batch_size)
-                and int(inverse_list[stop]) == u_idx
-                and int(action_lengths[stop]) == act_len
-            ):
+            while stop < min(batch_size, start + self.score_batch_size) and int(inverse_list[stop]) == u_idx:
                 stop += 1
             candidate_batch = select_rows(batch, range(start, stop))
             zeros = torch.zeros(stop - start, dtype=torch.long, device=batch["input_ids"].device)

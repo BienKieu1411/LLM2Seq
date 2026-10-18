@@ -71,19 +71,17 @@ def _ngram_f1(prediction: list[str], reference: list[str], n: int) -> float:
 
 
 def _lcs_length(left: list[str], right: list[str]) -> int:
-    """Return LCS length in O(len(left) * len(right)) time and O(min(n,m)) space."""
+    """Exact token LCS using Python integer bitsets, without a Python DP grid."""
     if len(left) < len(right):
         left, right = right, left
-    previous = [0] * (len(right) + 1)
-    for left_token in left:
-        current = [0]
-        for index, right_token in enumerate(right, start=1):
-            if left_token == right_token:
-                current.append(previous[index - 1] + 1)
-            else:
-                current.append(max(previous[index], current[-1]))
-        previous = current
-    return previous[-1]
+    matches = {}
+    for index, token in enumerate(right):
+        matches[token] = matches.get(token, 0) | (1 << index)
+    state = 0
+    for token in left:
+        union = state | matches.get(token, 0)
+        state = union & ~(union - ((state << 1) | 1))
+    return state.bit_count()
 
 
 class RougeReward:

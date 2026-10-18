@@ -63,6 +63,12 @@ def check_rollout_device(settings, device_name):
         device_name == "cpu" or not torch.cuda.is_available()
     ):
         raise ValueError("SEAM vLLM rollout requires CUDA; use rollout_backend=native for CPU")
+    if (
+        settings["training"]["rollout_backend"] == "seam_vllm"
+        and settings["training"].get("vllm_mode", "colocate") == "dedicated"
+        and (int(os.environ.get("WORLD_SIZE", "1")) != 1 or torch.cuda.device_count() != 1)
+    ):
+        raise ValueError("Dedicated rollout requires one visible training GPU; use scripts/run_grpo_two_gpu.sh")
 
 
 def train(settings: dict, device_name: str | None = None, *, overwrite_output_dir: bool = False) -> dict:
@@ -235,12 +241,21 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--device")
     parser.add_argument("--dry-run", action="store_true", help="Validate paths/settings without loading model weights")
+    parser.add_argument("--vllm-mode", choices=("colocate", "dedicated"))
+    parser.add_argument("--rollout-gpu", help="Physical GPU index/UUID visible only to the dedicated rollout host")
     parser.add_argument(
         "--overwrite-output-dir", action="store_true", help="Delete previous output artifacts and restart from SFT"
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     settings = load(args.config)
+    if args.vllm_mode is not None:
+        settings["training"]["vllm_mode"] = args.vllm_mode
+        settings["training"]["rollout_backend"] = "seam_vllm"
+    if args.rollout_gpu is not None:
+        if not args.rollout_gpu.strip() or "," in args.rollout_gpu:
+            parser.error("--rollout-gpu must identify exactly one GPU")
+        settings["training"]["vllm_rollout_gpu"] = args.rollout_gpu
     if args.dry_run:
         base = prepare(settings)
         RougeReward(settings["reward"])

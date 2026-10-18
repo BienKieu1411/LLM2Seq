@@ -1,10 +1,11 @@
 import math
+import random
 
 import pytest
 import torch
 from seam_grpo.config import cosine_multiplier
 from seam_grpo.objective import clipped_terms, group_advantages
-from seam_grpo.reward import RougeReward
+from seam_grpo.reward import RougeReward, _lcs_length
 
 
 def test_zero_valued_centered_loss_still_has_policy_gradient():
@@ -96,3 +97,23 @@ def test_cosine_decay_and_zero_warmup():
     assert cosine_multiplier(100, 100, 0, 0.1) == pytest.approx(0.1)
     values = [cosine_multiplier(i, 100, 0, 0.1) for i in range(101)]
     assert all(a >= b for a, b in zip(values, values[1:]))
+
+
+def test_bitset_lcs_matches_original_dp_with_unicode_and_repetition():
+    def reference(left, right):
+        row = [0] * (len(right) + 1)
+        for token in left:
+            current = [0]
+            for j, other in enumerate(right):
+                current.append(row[j] + 1 if token == other else max(row[j + 1], current[-1]))
+            row = current
+        return row[-1]
+
+    rng = random.Random(73)
+    vocabulary = ["Việt", "việt", "cá", "ca", "tóm", "tắt", "1.2%", ","]
+    for _ in range(80):
+        left = rng.choices(vocabulary, k=rng.randrange(150))
+        right = rng.choices(vocabulary, k=rng.randrange(150))
+        assert _lcs_length(left, right) == reference(left, right)
+    assert _lcs_length([], []) == 0
+    assert _lcs_length(["x"] * 2048, ["x"] * 1024) == 1024
