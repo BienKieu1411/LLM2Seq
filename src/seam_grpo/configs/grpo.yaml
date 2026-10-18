@@ -16,7 +16,7 @@ training:
   vllm_max_num_seqs: 256          # all 32 sources x group_size 8 candidates decode concurrently; group_size is unchanged
   vllm_max_num_batched_tokens: 65536 # scheduler capacity: prefill of many long sources + 256 decode tokens per step
   vllm_encoder_max_batch_tokens: 32768 # encoder microbatch budget; source token cap is unchanged
-  vllm_logp_mean_tolerance: 0.05   # stop before backward if rollout/scorer diverge
+  vllm_logp_mean_tolerance: 0.10   # per-microbatch mean |logp diff|; normal BF16 is ~0.02, heavy-tail microbatches reach ~0.05; real bugs give >0.3
   vllm_logp_max_tolerance: 1.00    # warn on isolated outliers; mean/nonfinite errors still stop all ranks
   vllm_importance_sampling_clip_max: 2.0 # token-level TIS for train/inference numerical mismatch
   vllm_group_sampling: true        # encode each source once with SamplingParams(n=group_size)

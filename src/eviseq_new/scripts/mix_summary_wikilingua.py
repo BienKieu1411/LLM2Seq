@@ -34,6 +34,8 @@ class TrainSource:
     target_field: str
     id_field: str
     strip_icons: bool = False
+    max_records: int | None = None
+    group: str | None = None
 
 
 def _strip_icons(text: str) -> tuple[str, int]:
@@ -172,6 +174,9 @@ def mix(
     validation_source_field: str = "text",
     validation_target_field: str = "summary",
     validation_id_field: str = "id",
+    max_validation_records: int | None = None,
+    max_wikilingua_records: int | None = None,
+    max_summary_records: int | None = None,
 ) -> dict[str, Any]:
     wiki_dir = wiki_dir.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
@@ -187,6 +192,7 @@ def mix(
             validation_source_field,
             validation_target_field,
             validation_id_field,
+            max_records=max_validation_records,
         )
         if validation_file is not None
         else None
@@ -209,24 +215,33 @@ def mix(
         raise ValueError("Output directory must differ from every input directory")
     all_sources = [
         *extra_sources,
-        TrainSource("wikilingua", wiki_paths["train"], "text", "summary", "id"),
+        TrainSource(
+            "wikilingua",
+            wiki_paths["train"],
+            "text",
+            "summary",
+            "id",
+            max_records=max_wikilingua_records,
+            group="wikilingua",
+        ),
     ]
 
     validation_entries: list[tuple[int, int]] = []
     validation_source = "wikilingua_validation"
     external_validation_count: int | None = None
     external_validation_source: TrainSource | None = None
+    selected_val_records: list[tuple[int, CanonicalRecord]] | None = None
     if external_validation is not None:
         test_sources = {
             _source_key(record.source)
             for _, _, record in _records(TrainSource("test", wiki_paths["test"], "text", "summary", "id"))
         }
         validation_sources: set[bytes] = set()
-        external_validation_count = 0
-        for _, record in _external_records(external_validation):
+        raw_val_records: list[tuple[int, CanonicalRecord]] = []
+        for line_number, record in _external_records(external_validation):
             validation_sources.add(_source_key(record.source))
-            external_validation_count += 1
-        if not external_validation_count:
+            raw_val_records.append((line_number, record))
+        if not raw_val_records:
             raise ValueError(f"Validation file is empty: {external_validation.path}")
         overlap = validation_sources & test_sources
         if overlap:
@@ -234,6 +249,16 @@ def mix(
         held_out_sources = validation_sources | test_sources
         external_validation_source = external_validation
         validation_source = str(external_validation.path)
+
+        if max_validation_records is not None and len(raw_val_records) > max_validation_records:
+            rng_val = random.Random(seed)
+            indices = list(range(len(raw_val_records)))
+            rng_val.shuffle(indices)
+            selected_indices = sorted(indices[:max_validation_records])
+            selected_val_records = [raw_val_records[i] for i in selected_indices]
+        else:
+            selected_val_records = raw_val_records
+        external_validation_count = len(selected_val_records)
     elif validation_fraction is None:
         held_out_sources = {
             _source_key(record.source)
@@ -261,6 +286,8 @@ def mix(
                 "Cannot create WikiLingua validation: need at least two distinct non-test source documents"
             )
         target_count = min(eligible_count - 1, max(1, round(eligible_count * validation_fraction)))
+        if max_validation_records is not None:
+            target_count = min(target_count, max_validation_records)
         shuffled_groups = list(train_groups.items())
         random.Random(seed).shuffle(shuffled_groups)
         validation_sources: set[bytes] = set()
@@ -276,8 +303,8 @@ def mix(
         validation_source = "deterministic source-group split from WikiLingua train"
     # Store offsets rather than long documents; shuffled rows are read from their
     # original files only when the canonical output is written.
-    entries: list[tuple[int, int, int]] = []
-    counts = {source.label: 0 for source in all_sources}
+    eligible_entries_by_source: list[list[tuple[int, int, int]]] = [[] for _ in all_sources]
+    raw_counts = {source.label: 0 for source in all_sources}
     skipped_overlap = {source.label: 0 for source in all_sources}
     skipped_empty = {source.label: 0 for source in all_sources}
     icon_counts: dict[str, dict[str, int]] = {}
@@ -293,12 +320,44 @@ def mix(
             if _source_key(record.source) in held_out_sources:
                 skipped_overlap[source.label] += 1
                 continue
-            entries.append((source_index, offset, line_number))
-            counts[source.label] += 1
-    if not any(counts[source.label] for source in extra_sources):
+            eligible_entries_by_source[source_index].append((source_index, offset, line_number))
+            raw_counts[source.label] += 1
+    if not any(raw_counts[source.label] for source in extra_sources):
         raise ValueError("No usable records remain in the additional training sources")
-    if not counts["wikilingua"]:
+    if not raw_counts["wikilingua"]:
         raise ValueError("No usable WikiLingua training records remain")
+
+    # 1. Apply per-source caps
+    for source_index, source in enumerate(all_sources):
+        if source.max_records is not None and len(eligible_entries_by_source[source_index]) > source.max_records:
+            rng_src = random.Random(seed + source_index)
+            rng_src.shuffle(eligible_entries_by_source[source_index])
+            eligible_entries_by_source[source_index] = eligible_entries_by_source[source_index][: source.max_records]
+
+    # 2. Apply summary_data_dir group cap if specified
+    if max_summary_records is not None:
+        summary_indices = [idx for idx, src in enumerate(all_sources) if src.group == "summary_data_dir"]
+        if summary_indices:
+            pooled_summary: list[tuple[int, int, int]] = []
+            for idx in summary_indices:
+                pooled_summary.extend(eligible_entries_by_source[idx])
+            if len(pooled_summary) > max_summary_records:
+                rng_grp = random.Random(seed + 999)
+                rng_grp.shuffle(pooled_summary)
+                pooled_summary = pooled_summary[:max_summary_records]
+                for idx in summary_indices:
+                    eligible_entries_by_source[idx] = []
+                for item in pooled_summary:
+                    src_idx = item[0]
+                    eligible_entries_by_source[src_idx].append(item)
+
+    # 3. Combine and shuffle all kept entries
+    entries: list[tuple[int, int, int]] = []
+    counts = {source.label: 0 for source in all_sources}
+    for source_index, source in enumerate(all_sources):
+        source_kept = eligible_entries_by_source[source_index]
+        counts[source.label] = len(source_kept)
+        entries.extend(source_kept)
 
     random.Random(seed).shuffle(entries)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -324,7 +383,12 @@ def mix(
 
         def write_external_validation(temporary: Path) -> None:
             with temporary.open("w", encoding="utf-8") as handle:
-                for line_number, record in _external_records(external_validation_source):
+                records_to_write = (
+                    selected_val_records
+                    if selected_val_records is not None
+                    else _external_records(external_validation_source)
+                )
+                for line_number, record in records_to_write:
                     row = {
                         "id": f"external_validation:{line_number}:{record.example_id or line_number}",
                         "text": record.source,
@@ -364,6 +428,7 @@ def mix(
         "validation_source": validation_source,
         "validation_fraction_requested": validation_fraction,
         "validation_records": len(validation_entries) if validation_fraction is not None else external_validation_count,
+        "validation_records_max": max_validation_records,
         "validation_fraction_realized": len(validation_entries) / eligible_count
         if validation_fraction is not None
         else None,
@@ -373,7 +438,9 @@ def mix(
                 "path": str(source.path),
                 "source_field": source.source_field,
                 "target_field": source.target_field,
+                "records_eligible": raw_counts[source.label],
                 "records_kept": counts[source.label],
+                "max_records": source.max_records,
                 "records_skipped_empty_source_or_target": skipped_empty[source.label],
                 "first_empty_line_numbers": empty_line_numbers.get(source.label, []),
                 "records_skipped_for_exact_held_out_source_match": skipped_overlap[source.label],
@@ -408,8 +475,19 @@ def _source_from_file(
     target_field: str,
     id_field: str,
     strip_icons: bool = False,
+    max_records: int | None = None,
+    group: str | None = None,
 ) -> TrainSource:
-    return TrainSource(label, path.expanduser().resolve(), source_field, target_field, id_field, strip_icons)
+    return TrainSource(
+        label=label,
+        path=path.expanduser().resolve(),
+        source_field=source_field,
+        target_field=target_field,
+        id_field=id_field,
+        strip_icons=strip_icons,
+        max_records=max_records,
+        group=group,
+    )
 
 
 def main() -> None:
@@ -423,7 +501,11 @@ def main() -> None:
     )
     parser.add_argument("--prepared-train", type=Path, help="Previously prepared train JSONL")
     parser.add_argument(
-        "--other-train", type=Path, action="append", default=[], help="Additional train JSONL (can be repeated)"
+        "--other-train",
+        type=str,
+        action="append",
+        default=[],
+        help="Additional train JSONL, optionally with :MAX_RECORDS (e.g. path/to/train.jsonl:5000)",
     )
     parser.add_argument("--wikilingua-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -437,6 +519,53 @@ def main() -> None:
     parser.add_argument("--validation-target-field", default="summary")
     parser.add_argument("--validation-id-field", default="id")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--max-validation-records",
+        "--validation-max-records",
+        type=int,
+        default=None,
+        help="Maximum validation records to output (default: unlimited/all)",
+    )
+    parser.add_argument(
+        "--max-summary-records",
+        "--summary-max-records",
+        type=int,
+        default=None,
+        help="Maximum total records to keep from --summary-data-dir (default: unlimited/all)",
+    )
+    parser.add_argument(
+        "--max-wikilingua-records",
+        "--wikilingua-max-records",
+        type=int,
+        default=None,
+        help="Maximum records to keep from WikiLingua train (default: unlimited/all)",
+    )
+    parser.add_argument(
+        "--max-vietnews-records",
+        "--vietnews-max-records",
+        type=int,
+        default=None,
+        help="Maximum records to keep from VietNews train files (default: unlimited/all)",
+    )
+    parser.add_argument(
+        "--max-sds-records",
+        type=int,
+        default=None,
+        help="Maximum records to keep specifically from sds.jsonl (default: unlimited/all)",
+    )
+    parser.add_argument(
+        "--max-mds-records",
+        type=int,
+        default=None,
+        help="Maximum records to keep specifically from mds.jsonl (default: unlimited/all)",
+    )
+    parser.add_argument(
+        "--other-train-caps",
+        "--source-caps",
+        action="append",
+        default=[],
+        help="Per-source caps in format NAME_OR_INDEX=COUNT (e.g. vietnews=5000 or 1=5000)",
+    )
     parser.add_argument("--summary-source-field", "--batch-source-field", dest="batch_source_field", default="input")
     parser.add_argument(
         "--summary-target-field",
@@ -456,10 +585,22 @@ def main() -> None:
     extras: list[TrainSource] = []
     if args.summary_data_dir:
         summary_data_dir = args.summary_data_dir.expanduser().resolve()
-        for filename in ("sds.jsonl", "mds.jsonl"):
-            batch_path = summary_data_dir / filename
-            if not batch_path.is_file():
-                raise FileNotFoundError(f"Expected training data file: {batch_path}")
+        batch_paths = [
+            summary_data_dir / filename
+            for filename in ("sds.jsonl", "mds.jsonl")
+            if (summary_data_dir / filename).is_file()
+        ]
+        if not batch_paths:
+            batch_paths = sorted(summary_data_dir.glob("*.jsonl"))
+        if not batch_paths:
+            raise FileNotFoundError(f"Expected training data file in: {summary_data_dir}")
+        for batch_path in batch_paths:
+            file_cap = None
+            if batch_path.stem == "sds" and args.max_sds_records is not None:
+                file_cap = args.max_sds_records
+            elif batch_path.stem == "mds" and args.max_mds_records is not None:
+                file_cap = args.max_mds_records
+
             extras.append(
                 _source_from_file(
                     batch_path,
@@ -468,6 +609,8 @@ def main() -> None:
                     target_field=args.batch_target_field,
                     id_field=args.batch_id_field,
                     strip_icons=True,
+                    max_records=file_cap,
+                    group="summary_data_dir",
                 )
             )
     if args.prepared_train:
@@ -480,14 +623,46 @@ def main() -> None:
                 id_field=args.prepared_id_field,
             )
         )
-    for index, path in enumerate(args.other_train):
+    for index, raw_other in enumerate(args.other_train):
+        raw_str = str(raw_other)
+        other_cap: int | None = None
+        if ":" in raw_str:
+            path_part, sep, cap_part = raw_str.rpartition(":")
+            if cap_part.isdigit():
+                raw_path = Path(path_part)
+                other_cap = int(cap_part)
+            else:
+                raw_path = Path(raw_str)
+        else:
+            raw_path = Path(raw_str)
+
+        norm_path_str = str(raw_path).lower()
+        if "vietnews" in norm_path_str and args.max_vietnews_records is not None:
+            other_cap = args.max_vietnews_records
+
+        if args.other_train_caps:
+            for cap_spec in args.other_train_caps:
+                if "=" in cap_spec:
+                    k, v = cap_spec.split("=", 1)
+                elif ":" in cap_spec:
+                    k, v = cap_spec.split(":", 1)
+                else:
+                    continue
+                k = k.strip().lower()
+                v = v.strip()
+                if v.isdigit():
+                    v_int = int(v)
+                    if k in norm_path_str or k == str(index + 1) or k == f"other_train_{index + 1}":
+                        other_cap = v_int
+
         extras.append(
             _source_from_file(
-                path,
+                raw_path,
                 label=f"other_train_{index + 1}",
                 source_field=args.source_field,
                 target_field=args.target_field,
                 id_field=args.id_field,
+                max_records=other_cap,
             )
         )
     if not extras:
@@ -503,6 +678,9 @@ def main() -> None:
         validation_source_field=args.validation_source_field,
         validation_target_field=args.validation_target_field,
         validation_id_field=args.validation_id_field,
+        max_validation_records=args.max_validation_records,
+        max_wikilingua_records=args.max_wikilingua_records,
+        max_summary_records=args.max_summary_records,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
 

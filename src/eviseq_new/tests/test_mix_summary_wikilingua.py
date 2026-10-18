@@ -240,3 +240,139 @@ def test_sds_mds_replace_batch_files_and_only_icons_are_removed(tmp_path):
     assert by_label["sds"]["records_kept"] == 2
     assert by_label["sds"]["records_skipped_empty_source_or_target"] == 0
     assert by_label["mds"]["icons_removed"] == {"source": 1, "target": 1, "records_with_icons": 1}
+
+
+def test_caps_on_validation_summary_wikilingua_vietnews_and_unlimited_others(tmp_path):
+    wiki_dir = tmp_path / "wikilingua"
+    wiki_dir.mkdir()
+    _write_jsonl(
+        wiki_dir / "train.jsonl",
+        [{"id": f"wiki-{i}", "text": f"wiki source {i}", "summary": f"wiki summary {i}"} for i in range(12)],
+    )
+    _write_jsonl(wiki_dir / "test.jsonl", [{"id": "test", "text": "test source", "summary": "test summary"}])
+
+    val_file = tmp_path / "val.jsonl"
+    _write_jsonl(
+        val_file,
+        [{"id": f"val-{i}", "text": f"val source {i}", "summary": f"val summary {i}"} for i in range(10)],
+    )
+
+    data_dir = tmp_path / "summary_data"
+    data_dir.mkdir()
+    _write_jsonl(
+        data_dir / "sds.jsonl",
+        [{"id": f"sds-{i}", "input": f"sds source {i}", "abstract_sum": f"sds summary {i}"} for i in range(8)],
+    )
+    _write_jsonl(
+        data_dir / "mds.jsonl",
+        [{"id": f"mds-{i}", "input": f"mds source {i}", "abstract_sum": f"mds summary {i}"} for i in range(8)],
+    )
+
+    vietnews_file = tmp_path / "vietnews_train.jsonl"
+    _write_jsonl(
+        vietnews_file,
+        [{"id": f"vn-{i}", "text": f"vietnews source {i}", "summary": f"vietnews summary {i}"} for i in range(10)],
+    )
+
+    vims_file = tmp_path / "vims_train.jsonl"
+    _write_jsonl(
+        vims_file,
+        [{"id": f"vims-{i}", "text": f"vims source {i}", "summary": f"vims summary {i}"} for i in range(3)],
+    )
+
+    vlsp_file = tmp_path / "vlsp_train.jsonl"
+    _write_jsonl(
+        vlsp_file,
+        [{"id": f"vlsp-{i}", "text": f"vlsp source {i}", "summary": f"vlsp summary {i}"} for i in range(4)],
+    )
+
+    mixed = tmp_path / "mixed_capped"
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--summary-data-dir",
+            str(data_dir),
+            "--validation-file",
+            str(val_file),
+            "--wikilingua-dir",
+            str(wiki_dir),
+            "--other-train",
+            str(vietnews_file),
+            "--other-train",
+            str(vims_file),
+            "--other-train",
+            str(vlsp_file),
+            "--max-validation-records",
+            "4",
+            "--max-summary-records",
+            "7",
+            "--max-wikilingua-records",
+            "5",
+            "--max-vietnews-records",
+            "3",
+            "--output-dir",
+            str(mixed),
+        ],
+        check=True,
+        capture_output=True,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join((str(SCRIPT.parents[1]), os.environ.get("PYTHONPATH", "")))},
+        text=True,
+    )
+
+    train = _read_jsonl(mixed / "train.jsonl")
+    val = _read_jsonl(mixed / "validation.jsonl")
+    report = json.loads((mixed / "mix_report.json").read_text(encoding="utf-8"))
+
+    assert len(val) == 4
+    assert report["validation_records"] == 4
+
+    by_label = {row["label"]: row for row in report["train_sources"]}
+    assert by_label["sds"]["records_kept"] + by_label["mds"]["records_kept"] == 7
+    assert by_label["wikilingua"]["records_kept"] == 5
+    assert by_label["other_train_1"]["records_kept"] == 3  # vietnews capped at 3
+    assert by_label["other_train_2"]["records_kept"] == 3  # vims kept all 3
+    assert by_label["other_train_3"]["records_kept"] == 4  # vlsp kept all 4
+    assert len(train) == 7 + 5 + 3 + 3 + 4
+    assert report["train_total"] == 22
+
+    # Also test inline path:cap syntax for other-train
+    mixed2 = tmp_path / "mixed_capped2"
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--summary-data-dir",
+            str(data_dir),
+            "--validation-file",
+            str(val_file),
+            "--wikilingua-dir",
+            str(wiki_dir),
+            "--other-train",
+            f"{vietnews_file}:2",
+            "--other-train",
+            str(vims_file),
+            "--other-train",
+            str(vlsp_file),
+            "--max-validation-records",
+            "3",
+            "--max-summary-records",
+            "5",
+            "--max-wikilingua-records",
+            "4",
+            "--output-dir",
+            str(mixed2),
+        ],
+        check=True,
+        capture_output=True,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join((str(SCRIPT.parents[1]), os.environ.get("PYTHONPATH", "")))},
+        text=True,
+    )
+    val2 = _read_jsonl(mixed2 / "validation.jsonl")
+    report2 = json.loads((mixed2 / "mix_report.json").read_text(encoding="utf-8"))
+    assert len(val2) == 3
+    by_label2 = {row["label"]: row for row in report2["train_sources"]}
+    assert by_label2["other_train_1"]["records_kept"] == 2  # capped via :2
+    assert by_label2["other_train_2"]["records_kept"] == 3  # all
+    assert by_label2["other_train_3"]["records_kept"] == 4  # all
+
