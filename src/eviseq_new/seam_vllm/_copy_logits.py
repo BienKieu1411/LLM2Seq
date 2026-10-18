@@ -41,7 +41,6 @@ class CopyLogitsMixer:
             cls._fuse_enabled = False
             return None
 
-
     def mix(self, head: GroundedCopyHead, hidden: torch.Tensor, logits: torch.Tensor, state: CopyState):
         # The vLLM sampler selects one hidden row per request, including prefill.
         batch, vocab_size = logits.shape

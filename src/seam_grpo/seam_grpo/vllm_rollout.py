@@ -144,9 +144,7 @@ class VLLMRollout:
         group = 1
         if cfg.get("vllm_group_sampling"):
             group = trainer.num_generations if trainer.model.training else trainer.num_generations_eval
-            if len(prompts) % group or any(
-                prompts[row] != prompts[row - row % group] for row in range(len(prompts))
-            ):
+            if len(prompts) % group or any(prompts[row] != prompts[row - row % group] for row in range(len(prompts))):
                 raise RuntimeError("Grouped vLLM sampling needs contiguous identical-source groups")
             params.n = group
         outputs = self.engine.generate(prompts[::group], params)

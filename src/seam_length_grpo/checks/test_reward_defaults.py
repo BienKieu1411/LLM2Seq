@@ -47,4 +47,3 @@ def test_length_reward_gr3_mode():
     diff = reward(prediction, reference, target_words=6, error_budget=2)
     # error = 2 -> cost = 1.0 -> reward = quality * exp(-0.1)
     assert diff["reward"] == pytest.approx(diff["quality"] * math.exp(-0.1))
-

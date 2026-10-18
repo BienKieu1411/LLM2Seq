@@ -232,7 +232,9 @@ def test_completion_conversion_keeps_eos_and_processed_sampled_logprobs():
 
 def test_grouped_completion_conversion_expands_n_candidates_per_unique_prompt():
     def completion(token, logp):
-        return SimpleNamespace(token_ids=[token, 2], logprobs=[{token: SimpleNamespace(logprob=logp)}, {2: SimpleNamespace(logprob=-0.5)}])
+        return SimpleNamespace(
+            token_ids=[token, 2], logprobs=[{token: SimpleNamespace(logprob=logp)}, {2: SimpleNamespace(logprob=-0.5)}]
+        )
 
     outputs = [
         SimpleNamespace(prompt_token_ids=[1], outputs=[completion(7, -0.1), completion(8, -0.2)]),

@@ -95,7 +95,14 @@ def load(path: str | Path) -> dict:
     for key in integers:
         if isinstance(cfg[key], bool) or not isinstance(cfg[key], int) or cfg[key] < 1:
             raise ValueError(f"training.{key} must be a positive integer")
-    for key in ("seed", "num_workers", "max_steps", "max_train_examples", "validation_max_examples", "validate_every_steps"):
+    for key in (
+        "seed",
+        "num_workers",
+        "max_steps",
+        "max_train_examples",
+        "validation_max_examples",
+        "validate_every_steps",
+    ):
         if isinstance(cfg[key], bool) or not isinstance(cfg[key], int) or cfg[key] < 0:
             raise ValueError(f"training.{key} must be a nonnegative integer")
     if cfg["group_size"] < 2:

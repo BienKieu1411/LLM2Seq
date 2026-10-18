@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import torch
+from seam_grpo.actor import find_unique_source_indices
 from seam_grpo.data import move, trajectory
 from seam_grpo.rollout import select_rows
-
-
-from seam_grpo.actor import find_unique_source_indices
 
 
 class SourceTeacher:

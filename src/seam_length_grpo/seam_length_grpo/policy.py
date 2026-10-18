@@ -79,9 +79,7 @@ class LengthPolicy(Policy):
         for indices in prompt_groups(batch, batch["input_ids"].shape[0]):
             row = unpad_rows(batch, indices)
             row_bridge = (
-                bridge.index_select(torch.tensor(indices, device=bridge.memory.device))
-                if bridge is not None
-                else None
+                bridge.index_select(torch.tensor(indices, device=bridge.memory.device)) if bridge is not None else None
             )
             output = super().forward(
                 row,

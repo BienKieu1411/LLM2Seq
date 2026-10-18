@@ -316,4 +316,3 @@ def test_differentiable_entropy_when_enabled():
     diff_entropy.sum().backward()
     grads = [p.grad for p in model.decoder.lm_head.parameters() if p.grad is not None]
     assert len(grads) > 0 and all(g.abs().sum() > 0 for g in grads)
-

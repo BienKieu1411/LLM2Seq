@@ -253,7 +253,9 @@ class Policy(nn.Module):
                     with torch.no_grad():
                         distribution_log_probs = log_probs.detach()
                         probabilities = distribution_log_probs.exp()
-                        safe_log_probs = distribution_log_probs.masked_fill(~torch.isfinite(distribution_log_probs), 0.0)
+                        safe_log_probs = distribution_log_probs.masked_fill(
+                            ~torch.isfinite(distribution_log_probs), 0.0
+                        )
                         entropy = -(probabilities * safe_log_probs).sum(dim=-1)
                         entropy = torch.where(active, entropy, torch.zeros_like(entropy))
                 return selected, entropy

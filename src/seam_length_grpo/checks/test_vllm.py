@@ -111,4 +111,3 @@ def test_seam_vllm_state_hash_fallback():
     state.reset_encoder_cache()
     assert len(state.copy_states) == 0
     assert len(state.copy_states_by_hash) == 0
-
