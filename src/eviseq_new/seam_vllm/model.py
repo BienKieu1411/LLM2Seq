@@ -475,6 +475,57 @@ class SEAMForQwen3(Qwen3ForCausalLM, SupportsMultiModal):
         outputs = []
         device = self.decoder_prompt_ids.device
         budget = getattr(self.vllm_config.model_config.hf_config, "seam_encoder_max_batch_tokens", 8192)
+        if (
+            isinstance(encoder_input_ids, (list, tuple))
+            and len(encoder_input_ids) > 1
+            and not isinstance(encoder_input_ids[0], (int, float, bool))
+            and all(
+                v is None or not isinstance(v, (list, tuple)) or len(v) == len(encoder_input_ids)
+                for v in kwargs.values()
+            )
+        ):
+            total = len(encoder_input_ids)
+            shape_keys = ("copy_token_ids", "copy_encoder_indices", "bridge_prompt_ids")
+            sigs = [
+                (
+                    torch.as_tensor(encoder_input_ids[i]).numel(),
+                    *(0 if kwargs.get(k) is None else torch.as_tensor(kwargs[k][i]).numel() for k in shape_keys),
+                )
+                for i in range(total)
+            ]
+            if len(set(sigs)) > 1:
+                start = 0
+                while start < total:
+                    end = start + 1
+                    while end < total and sigs[end] == sigs[start]:
+                        end += 1
+                    sub_ids = _as_2d(encoder_input_ids[start:end], "encoder_input_ids", device, torch.long)
+                    sub_fields = {
+                        k: (
+                            v[start:end]
+                            if (isinstance(v, (list, tuple)) and len(v) == total)
+                            or (isinstance(v, torch.Tensor) and v.ndim > 0 and v.shape[0] == total)
+                            else v
+                        )
+                        for k, v in kwargs.items()
+                    }
+                    if sub_fields.get("encoder_attention_mask") is None:
+                        pad = getattr(getattr(self.encoder.model, "config", None), "pad_token_id", None)
+                        sub_fields["encoder_attention_mask"] = (
+                            sub_ids.ne(int(pad)) if pad is not None else torch.ones_like(sub_ids, dtype=torch.bool)
+                        )
+                    sub_mask = _as_2d(
+                        sub_fields["encoder_attention_mask"], "encoder_attention_mask", device, torch.bool
+                    )
+                    sub_lengths = sub_mask.sum(dim=-1).tolist()
+                    sub_offset = 0
+                    for batch_fields in encoder_batches(sub_ids, sub_fields, device, budget):
+                        count = batch_fields["encoder_input_ids"].shape[0]
+                        batch_fields["_source_lengths"] = sub_lengths[sub_offset : sub_offset + count]
+                        sub_offset += count
+                        outputs.extend(self._embed_multimodal_batch(**batch_fields))
+                    start = end
+                return outputs
         ids = _as_2d(encoder_input_ids, "encoder_input_ids", device, torch.long)
         fields = dict(kwargs)
         if fields.get("encoder_attention_mask") is None:

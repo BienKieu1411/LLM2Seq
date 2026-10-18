@@ -12,6 +12,7 @@ from eviseq_afmr.data.copy_alignment import COPY_INPUT_KEYS
 from torch.utils.checkpoint import checkpoint
 
 from .context import validate_context
+from .rollout import trim_source_batch
 
 
 class Policy(nn.Module):
@@ -50,6 +51,7 @@ class Policy(nn.Module):
 
     def encode_source(self, batch: dict[str, Any]) -> Any:
         self.seam.eval()
+        batch = trim_source_batch(batch)
         input_ids = batch["input_ids"]
         batch_size = int(input_ids.shape[0])
         budget = self._output_budget(batch, self.seam, batch_size, input_ids.device)
@@ -76,6 +78,8 @@ class Policy(nn.Module):
         bridge: Any | None = None,
         compute_entropy_with_grad: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        if bridge is None:
+            batch = trim_source_batch(batch)
         input_ids = batch["input_ids"]
         batch_size = int(input_ids.shape[0])
         budget = self._output_budget(batch, self.seam, batch_size, input_ids.device)
@@ -91,6 +95,17 @@ class Policy(nn.Module):
             decoder_attention_mask = batch.get("gold_decoder_attention_mask", batch.get("decoder_attention_mask"))
             if decoder_input_ids is None or decoder_input_ids.shape != labels.shape:
                 raise ValueError("CE requires gold decoder inputs aligned with labels")
+            if (
+                decoder_attention_mask is not None
+                and decoder_attention_mask.ndim == 2
+                and decoder_attention_mask.shape[1] > 1
+            ):
+                active_gold = decoder_attention_mask.bool().any(dim=0).nonzero(as_tuple=True)[0]
+                gold_width = int(active_gold[-1].item()) + 1 if active_gold.numel() else 1
+                if gold_width < decoder_input_ids.shape[1]:
+                    decoder_input_ids = decoder_input_ids[:, :gold_width]
+                    decoder_attention_mask = decoder_attention_mask[:, :gold_width]
+                    labels = labels[:, :gold_width]
             if bridge is None:
                 output = self.seam(
                     input_ids,
@@ -162,6 +177,14 @@ class Policy(nn.Module):
         if not torch.equal(decoder_attention_mask[:, prompt_width:], action_mask):
             raise ValueError("decoder attention mask after the prompt must equal action_mask")
 
+        active_action_cols = action_mask.any(dim=0).nonzero(as_tuple=True)[0]
+        active_action_width = int(active_action_cols[-1].item()) + 1 if active_action_cols.numel() else 1
+        if active_action_width < action_width:
+            action_ids = action_ids[:, :active_action_width]
+            action_mask = action_mask[:, :active_action_width]
+            decoder_input_ids = decoder_input_ids[:, : prompt_width + active_action_width]
+            decoder_attention_mask = decoder_attention_mask[:, : prompt_width + active_action_width]
+
         # Generation runs in eval mode. Keep dropout disabled while retaining
         # autograd so policy scores match the rollout distribution.
         self.seam.eval()
@@ -222,8 +245,8 @@ class Policy(nn.Module):
         first_action_position = prompt_width - 1
         chunks = []
         entropy_chunks = []
-        for start in range(0, action_width, self.chunk_size):
-            stop = min(action_width, start + self.chunk_size)
+        for start in range(0, active_action_width, self.chunk_size):
+            stop = min(active_action_width, start + self.chunk_size)
             hidden_start = first_action_position + start
             hidden_stop = first_action_position + stop
             hidden_chunk = hidden[:, hidden_start:hidden_stop]
@@ -275,6 +298,11 @@ class Policy(nn.Module):
                 entropy_chunks.append(entropy if compute_entropy_with_grad else entropy.detach())
 
         log_probs = torch.cat(chunks, dim=1)
+        if active_action_width < action_width:
+            log_probs = F.pad(log_probs, (0, action_width - active_action_width), value=0.0)
         if return_entropy:
-            return log_probs, torch.cat(entropy_chunks, dim=1)
+            entropies = torch.cat(entropy_chunks, dim=1)
+            if active_action_width < action_width:
+                entropies = F.pad(entropies, (0, action_width - active_action_width), value=0.0)
+            return log_probs, entropies
         return log_probs

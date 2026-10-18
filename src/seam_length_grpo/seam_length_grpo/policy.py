@@ -65,6 +65,11 @@ def prompt_groups(batch, maximum):
 
 
 class LengthPolicy(Policy):
+    def encode_source(self, batch):
+        if "decoder_prompt_mask" in batch and not bool(batch["decoder_prompt_mask"].bool().all()):
+            batch = unpad_rows(batch, list(range(int(batch["input_ids"].shape[0]))))
+        return super().encode_source(batch)
+
     def forward(
         self,
         batch,

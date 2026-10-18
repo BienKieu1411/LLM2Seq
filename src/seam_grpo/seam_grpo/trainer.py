@@ -143,11 +143,13 @@ class SEAMGRPOTrainer(GRPOTrainer):
             expected = (inputs[offset]["id"], inputs[offset]["prompt"], inputs[offset]["reference"])
             if any((row["id"], row["prompt"], row["reference"]) != expected for row in inputs[offset : offset + group]):
                 raise RuntimeError("Pinned TRL sampler no longer supplies contiguous identical-source groups")
+        from .rollout import repeat_batch
+
         records = [
             CanonicalRecord.from_mapping(row, source_field="prompt", target_field="reference", id_field="id")
-            for row in inputs
+            for row in inputs[::group]
         ]
-        source = move(self.collator(records), self.accelerator.device)
+        source = move(repeat_batch(self.collator(records), group), self.accelerator.device)
         self._likelihood_source = source
         try:
             # TRL performs generation assembly, global reward grouping/advantages,
@@ -168,10 +170,28 @@ class SEAMGRPOTrainer(GRPOTrainer):
         result["seam_policy_version"] = torch.full(
             (len(inputs),), self.state.global_step, device=self.accelerator.device, dtype=torch.long
         )
-        # Flat fields are shuffled/split TOGETHER by TRL's _prepare_inputs.
+        # Flat fields are split TOGETHER by _prepare_inputs.
         for key, value in source.items():
             result[f"seam_source_{key}"] = value
         return result
+
+    def _prepare_inputs(self, generation_batch):
+        mode = "train" if self.model.training else "eval"
+        if mode == "train":
+            generate_every = self.args.steps_per_generation * self.num_iterations
+            if self._step % generate_every == 0 or self._buffered_inputs is None:
+                from trl.trainer.grpo_trainer import (
+                    split_pixel_values_by_grid,
+                    split_tensor_dict,
+                    unsplit_pixel_values_by_grid,
+                )
+
+                generation_batch = self._generate_and_score_completions(generation_batch)
+                generation_batch = split_pixel_values_by_grid(generation_batch)
+                generation_batches = split_tensor_dict(generation_batch, self.args.steps_per_generation)
+                self._buffered_inputs = [unsplit_pixel_values_by_grid(batch) for batch in generation_batches]
+            return self._buffered_inputs[self._step % self.args.steps_per_generation]
+        return self._generate_and_score_completions(generation_batch)
 
     def _get_per_token_logps_and_entropies(
         self,

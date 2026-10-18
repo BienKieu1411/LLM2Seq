@@ -44,17 +44,23 @@ class SourceTeacher:
         means = []
         for source in (true_source, wrong_source):
             unique_indices, inverse_indices = find_unique_source_indices(source)
-            unique_batch = select_rows(source, unique_indices)
-            unique_bridge = self.actor.policy.encode_source(unique_batch)
+            unique_bridges = [self.actor.policy.encode_source(select_rows(source, [u])) for u in unique_indices]
+            inverse_list = inverse_indices.detach().cpu().tolist()
             values = []
-            for start in range(0, len(rows), self.micro_batch_size):
-                end = min(len(rows), start + self.micro_batch_size)
+            start = 0
+            while start < len(rows):
+                u_idx = int(inverse_list[start])
+                end = start + 1
+                while end < min(len(rows), start + self.micro_batch_size) and int(inverse_list[end]) == u_idx:
+                    end += 1
                 batch = trajectory(
                     select_rows(source, range(start, end)), actions[start:end], mask[start:end], self.budget
                 )
-                slice_bridge = select_bridge_state(unique_bridge, inverse_indices[start:end])
+                zeros = torch.zeros(end - start, dtype=torch.long, device=device)
+                slice_bridge = select_bridge_state(unique_bridges[u_idx], zeros)
                 logps = self.actor.policy(batch, temperature=1.0, bridge=slice_bridge)
                 values.append(logps.masked_fill(~mask[start:end], 0).sum(-1) / mask[start:end].sum(-1))
+                start = end
             means.append(torch.cat(values))
         delta = means[0] - means[1]
         if not torch.isfinite(delta).all():

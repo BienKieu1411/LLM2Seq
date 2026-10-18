@@ -101,31 +101,45 @@ class SEAMActor(PreTrainedModel):
         self.seam.eval()
         return self
 
-    def _encode_unique_sources(self, batch: dict[str, Any]) -> tuple[Any, torch.Tensor]:
+    def _encode_unique_sources(self, batch: dict[str, Any]) -> tuple[list[Any], torch.Tensor]:
         unique_indices, inverse_indices = find_unique_source_indices(batch)
-        unique_batch = select_rows(batch, unique_indices)
-        if torch.is_grad_enabled():
-            unique_bridge = checkpoint(self.policy.encode_source, unique_batch, use_reentrant=False)
-        else:
-            unique_bridge = self.policy.encode_source(unique_batch)
-        return unique_bridge, inverse_indices
+        unique_bridges: list[Any] = []
+        for u in unique_indices:
+            single_batch = select_rows(batch, [u])
+            if torch.is_grad_enabled():
+                bridge_u = checkpoint(self.policy.encode_source, single_batch, use_reentrant=False)
+            else:
+                bridge_u = self.policy.encode_source(single_batch)
+            unique_bridges.append(bridge_u)
+        return unique_bridges, inverse_indices
 
     def _score_candidates(
         self,
         batch: dict[str, Any],
         temperature: float,
-        unique_bridge: Any,
+        unique_bridges: list[Any],
         inverse_indices: torch.Tensor,
         compute_entropy_with_grad: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size = int(batch["input_ids"].shape[0])
+        action_lengths = batch["action_mask"].bool().sum(dim=-1).tolist()
+        inverse_list = inverse_indices.detach().cpu().tolist()
         logps: list[torch.Tensor] = []
         entropies: list[torch.Tensor] = []
-        for start in range(0, batch_size, self.score_batch_size):
-            stop = min(batch_size, start + self.score_batch_size)
+        start = 0
+        while start < batch_size:
+            u_idx = int(inverse_list[start])
+            act_len = int(action_lengths[start])
+            stop = start + 1
+            while (
+                stop < min(batch_size, start + self.score_batch_size)
+                and int(inverse_list[stop]) == u_idx
+                and int(action_lengths[stop]) == act_len
+            ):
+                stop += 1
             candidate_batch = select_rows(batch, range(start, stop))
-            row_indices = inverse_indices[start:stop]
-            slice_bridge = select_bridge_state(unique_bridge, row_indices)
+            zeros = torch.zeros(stop - start, dtype=torch.long, device=batch["input_ids"].device)
+            slice_bridge = select_bridge_state(unique_bridges[u_idx], zeros)
 
             def score(batch_arg: dict[str, Any], bridge_arg: Any) -> tuple[torch.Tensor, torch.Tensor]:
                 return self.policy(
@@ -142,6 +156,7 @@ class SEAMActor(PreTrainedModel):
                 logp_chunk, entropy_chunk = score(candidate_batch, slice_bridge)
             logps.append(logp_chunk)
             entropies.append(entropy_chunk if compute_entropy_with_grad else entropy_chunk.detach())
+            start = stop
         return torch.cat(logps, dim=0), torch.cat(entropies, dim=0)
 
     def _score_gold(
@@ -149,7 +164,7 @@ class SEAMActor(PreTrainedModel):
         batch: dict[str, Any],
         gold_selector: torch.Tensor | None,
         logps: torch.Tensor,
-        unique_bridge: Any,
+        unique_bridges: list[Any],
         inverse_indices: torch.Tensor,
     ) -> torch.Tensor:
         zero = logps.sum() * 0.0
@@ -167,15 +182,16 @@ class SEAMActor(PreTrainedModel):
             raise ValueError("Gold CE requires preserved gold_decoder_input_ids and gold_decoder_attention_mask")
 
         ce_sum = zero
-        for offset in range(0, selected.numel(), self.score_batch_size):
-            indices = selected[offset : offset + self.score_batch_size]
+        for offset in range(selected.numel()):
+            indices = selected[offset : offset + 1]
             gold_batch = select_rows(batch, indices)
             labels = gold_batch.get("labels")
             if labels is None:
                 raise ValueError("Gold CE requires collator labels")
             token_count = labels[:, 1:].ne(-100).sum()
-            row_indices = inverse_indices[indices]
-            slice_bridge = select_bridge_state(unique_bridge, row_indices)
+            u_idx = int(inverse_indices[indices[0]].item())
+            zeros = torch.zeros(1, dtype=torch.long, device=batch["input_ids"].device)
+            slice_bridge = select_bridge_state(unique_bridges[u_idx], zeros)
 
             def score_ce(batch_arg: dict[str, Any], bridge_arg: Any) -> torch.Tensor:
                 return self.policy(batch_arg, temperature=1.0, ce=True, bridge=bridge_arg)
@@ -196,13 +212,13 @@ class SEAMActor(PreTrainedModel):
         gold_selector: torch.Tensor | None = None,
         compute_entropy_with_grad: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        unique_bridge, inverse_indices = self._encode_unique_sources(batch)
+        unique_bridges, inverse_indices = self._encode_unique_sources(batch)
         logps, entropies = self._score_candidates(
             batch,
             temperature,
-            unique_bridge,
+            unique_bridges,
             inverse_indices,
             compute_entropy_with_grad=compute_entropy_with_grad,
         )
-        ce_sum = self._score_gold(batch, gold_selector, logps, unique_bridge, inverse_indices)
+        ce_sum = self._score_gold(batch, gold_selector, logps, unique_bridges, inverse_indices)
         return logps, entropies if compute_entropy_with_grad else entropies.detach(), ce_sum

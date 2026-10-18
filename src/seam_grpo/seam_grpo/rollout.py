@@ -75,6 +75,51 @@ def select_bridge_state(bridge, indices: torch.Tensor):
     return replace(bridge, **selected)
 
 
+def trim_source_batch(batch: Mapping[str, Any]) -> dict[str, Any]:
+    """Slice right-padded source and copy fields to the active width of the batch."""
+    result = dict(batch)
+    attention_mask = result.get("attention_mask")
+    if isinstance(attention_mask, torch.Tensor) and attention_mask.ndim == 2 and attention_mask.shape[1] > 1:
+        active_cols = attention_mask.bool().any(dim=0).nonzero(as_tuple=True)[0]
+        src_width = int(active_cols[-1].item()) + 1 if active_cols.numel() else 1
+        if src_width < attention_mask.shape[1]:
+            for key in ("input_ids", "attention_mask", "source_content_mask"):
+                if isinstance(result.get(key), torch.Tensor) and result[key].ndim == 2:
+                    result[key] = result[key][:, :src_width]
+    copy_mask = result.get("copy_token_mask")
+    if isinstance(copy_mask, torch.Tensor) and copy_mask.ndim == 2 and copy_mask.shape[1] > 1:
+        active_copy = copy_mask.bool().any(dim=0).nonzero(as_tuple=True)[0]
+        copy_width = int(active_copy[-1].item()) + 1 if active_copy.numel() else 1
+        if copy_width < copy_mask.shape[1]:
+            for key in ("copy_token_ids", "copy_token_mask"):
+                if isinstance(result.get(key), torch.Tensor) and result[key].ndim == 2:
+                    result[key] = result[key][:, :copy_width]
+    copy_weights = result.get("copy_alignment_weights")
+    if isinstance(copy_weights, torch.Tensor) and copy_weights.ndim == 2 and copy_weights.shape[1] > 1:
+        src_limit = int(result["input_ids"].shape[1]) if isinstance(result.get("input_ids"), torch.Tensor) else 1
+        copy_limit = (
+            int(result["copy_token_ids"].shape[1]) if isinstance(result.get("copy_token_ids"), torch.Tensor) else 1
+        )
+        enc_idx = result.get("copy_encoder_indices")
+        tok_idx = result.get("copy_token_indices")
+        valid_pair = copy_weights.gt(0)
+        if isinstance(enc_idx, torch.Tensor):
+            valid_pair = valid_pair & enc_idx.lt(src_limit)
+        if isinstance(tok_idx, torch.Tensor):
+            valid_pair = valid_pair & tok_idx.lt(copy_limit)
+        active_align = valid_pair.any(dim=0).nonzero(as_tuple=True)[0]
+        align_width = int(active_align[-1].item()) + 1 if active_align.numel() else 1
+        if align_width < copy_weights.shape[1]:
+            for key in ("copy_encoder_indices", "copy_token_indices", "copy_alignment_weights"):
+                if isinstance(result.get(key), torch.Tensor) and result[key].ndim == 2:
+                    result[key] = result[key][:, :align_width]
+        if isinstance(result.get("copy_encoder_indices"), torch.Tensor):
+            result["copy_encoder_indices"] = result["copy_encoder_indices"].clamp(max=max(0, src_limit - 1))
+        if isinstance(result.get("copy_token_indices"), torch.Tensor):
+            result["copy_token_indices"] = result["copy_token_indices"].clamp(max=max(0, copy_limit - 1))
+    return result
+
+
 def repeat_batch(batch: Mapping[str, Any], group_size: int) -> dict[str, Any]:
     """Repeat each source row contiguously ``group_size`` times."""
 
@@ -115,6 +160,7 @@ def rollout(
     if prompt_ids.shape[1] == 0 or not bool(prompt_mask.all()):
         raise ValueError("rollout requires fixed-width, non-empty, unpadded prompts")
 
+    batch = trim_source_batch(batch)
     model = _unwrap(seam)
     seam.eval()
     device = prompt_ids.device

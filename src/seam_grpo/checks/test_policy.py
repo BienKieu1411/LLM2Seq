@@ -332,3 +332,51 @@ def test_differentiable_entropy_when_enabled():
     diff_entropy.sum().backward()
     grads = [p.grad for p in model.decoder.lm_head.parameters() if p.grad is not None]
     assert len(grads) > 0 and all(g.abs().sum() > 0 for g in grads)
+
+
+@pytest.mark.parametrize("copy_enabled", [False, True])
+def test_ragged_sources_and_actions_preserve_scores_ce_and_gradients(copy_enabled):
+    cfg, tokenizer, _ = tiny(copy_enabled)
+    records = [
+        CanonicalRecord.from_mapping(
+            {"id": str(i), "text": text, "summary": summary},
+            source_field="text",
+            target_field="summary",
+            id_field="id",
+        )
+        for i, (text, summary) in enumerate(
+            [("alpha beta", "alpha"), ("alpha beta gamma delta epsilon zeta", "beta gamma delta")]
+        )
+    ]
+    batch = SummarizationCollator(tokenizer, tokenizer, cfg["data"], grounded_copy=copy_enabled)(records)
+    repeated = repeat_batch(batch, 3)
+    actions = repeated["decoder_input_ids"][:, -3:]
+    lengths = torch.tensor([1, 3, 3, 2, 1, 3])
+    mask = torch.arange(3)[None, :] < lengths[:, None]
+    packed = trajectory(repeated, actions, mask, 4)
+    packed["gold_decoder_input_ids"] = repeated["decoder_input_ids"]
+    packed["gold_decoder_attention_mask"] = repeated["decoder_attention_mask"]
+    seam = EviSeqAFMR(cfg).eval()
+    reference = copy.deepcopy(seam)
+    actor = SEAMActor(seam, chunk_size=2, score_batch_size=2).train()
+    logps, entropies, ce_sum = actor(
+        packed,
+        temperature=0.8,
+        gold_selector=torch.tensor([True, False, False, True, False, False]),
+        compute_entropy_with_grad=True,
+    )
+    policy = Policy(reference, chunk_size=2)
+    expected_logps, expected_entropy = policy(
+        packed, temperature=0.8, return_entropy=True, compute_entropy_with_grad=True
+    )
+    expected_ce = policy(batch, temperature=1.0, ce=True) * batch["labels"][:, 1:].ne(-100).sum()
+    torch.testing.assert_close(logps, expected_logps, rtol=2e-5, atol=2e-6)
+    torch.testing.assert_close(entropies, expected_entropy, rtol=2e-5, atol=2e-6)
+    torch.testing.assert_close(ce_sum, expected_ce, rtol=2e-5, atol=2e-6)
+    weights = torch.tensor([1.0, -0.5, 0.3, -1.0, 0.8, -0.2])[:, None]
+    (logps.mul(weights).sum() + 0.05 * ce_sum + 0.01 * entropies.sum()).backward()
+    (expected_logps.mul(weights).sum() + 0.05 * expected_ce + 0.01 * expected_entropy.sum()).backward()
+    for (name, actual), (_, expected) in zip(seam.named_parameters(), reference.named_parameters(), strict=True):
+        assert (actual.grad is None) == (expected.grad is None), name
+        if actual.grad is not None:
+            torch.testing.assert_close(actual.grad, expected.grad, rtol=4e-4, atol=3e-5, msg=name)

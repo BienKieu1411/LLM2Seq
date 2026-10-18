@@ -30,6 +30,9 @@ def begin_actor_update(worker, manifest, spec, version):
     model._completed_copy_states.clear()
     model._pending_copy_state = None
     model._has_copy_requests = False
+    state.copy_states.clear()
+    if hasattr(state, "copy_states_by_hash"):
+        state.copy_states_by_hash.clear()
     state.encoder_outputs = []
     state._warmup_requests.clear()
     state._dummy_inputs_pending = False
