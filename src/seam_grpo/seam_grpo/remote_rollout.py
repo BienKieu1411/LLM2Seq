@@ -21,12 +21,21 @@ def free_port():
         return sock.getsockname()[1]
 
 
+def indexed_device(device):
+    """Resolve Accelerate's bare CUDA device in the current process namespace."""
+    device = torch.device(device)
+    if device.type == "cuda" and device.index is None:
+        device = torch.device("cuda", torch.cuda.current_device())
+    return device
+
+
 def transfer_communicator(port, rank, device, timeout):
     # Separate from the trainer's default process group: never turn its single
     # training GPU into a two-rank DDP job with the inference worker.
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.utils import StatelessProcessGroup
 
+    device = indexed_device(device)
     group = StatelessProcessGroup.create("127.0.0.1", port, rank, 2, store_timeout=timeout)
     comm = PyNcclCommunicator(group, device=device)
     if not comm.available or comm.disabled:
@@ -85,7 +94,7 @@ class RemoteSEAMLLM:
             raise ValueError("Dedicated rollout requires one visible TRAIN GPU and NPROC_PER_NODE=1")
         cfg = trainer.settings
         self.timeout = cfg["vllm_server_timeout"]
-        self.device = trainer.accelerator.device
+        self.device = indexed_device(trainer.accelerator.device)
         self.version = -1
         self.failed = False
         self.connection = self.process = self.comm = None

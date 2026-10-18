@@ -2,18 +2,57 @@
 
 import os
 import subprocess
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
 from eviseq_afmr.modeling.model import EviSeqAFMR
 from eviseq_afmr.training.checkpoint import architecture_spec
-from seam_grpo.remote_rollout import RemoteSEAMLLM, pack_outputs, unpack_outputs
+from seam_grpo.remote_rollout import RemoteSEAMLLM, pack_outputs, transfer_communicator, unpack_outputs
 from seam_grpo.rollout_worker import RolloutSession
 from seam_grpo.train import check_rollout_device
 from seam_grpo.vllm_rollout import completion_rows
 from test_policy import tiny
+
+
+@pytest.mark.parametrize(
+    "device,current,expected",
+    [("cuda", 0, "cuda:0"), (torch.device("cuda"), 2, "cuda:2"), ("cuda:0", 2, "cuda:0"), ("cuda:3", 0, "cuda:3")],
+)
+def test_nccl_warmup_uses_explicit_process_local_cuda_index(monkeypatch, device, current, expected):
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: current)
+    groups = []
+
+    def create(*args, **kwargs):
+        groups.append((args, kwargs))
+        return SimpleNamespace(rank=args[2])
+
+    def communicator(group, *, device):
+        device = torch.device(device)
+        # Reproduce PyNcclCommunicator's warmup tensor/device comparison
+        # without allocating a real CUDA tensor on the development Mac.
+        allocated = torch.device("cuda", current if device.index is None else device.index)
+        assert allocated == device, f"communicator device {device} differs from warmup tensor {allocated}"
+        assert device == torch.device(expected)
+        return SimpleNamespace(available=True, disabled=False, device=device)
+
+    for name in ("vllm", "vllm.distributed", "vllm.distributed.device_communicators"):
+        module = ModuleType(name)
+        module.__path__ = []
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm.distributed.device_communicators.pynccl",
+        SimpleNamespace(PyNcclCommunicator=communicator),
+    )
+    monkeypatch.setitem(
+        sys.modules, "vllm.distributed.utils", SimpleNamespace(StatelessProcessGroup=SimpleNamespace(create=create))
+    )
+    comm = transfer_communicator(12345, 0, device, 30)
+    assert comm.device == torch.device(expected)
+    assert groups == [(("127.0.0.1", 12345, 0, 2), {"store_timeout": 30})]
 
 
 def test_receiver_transfers_complete_actor_and_rejects_stale_generation(monkeypatch):
