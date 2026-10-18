@@ -7,7 +7,7 @@ import math
 import torch
 from seam_grpo.context import validate_context
 from seam_grpo.policy import Policy
-from seam_grpo.rollout import select_rows
+from seam_grpo.rollout import select_bridge_state, select_rows
 
 
 def validate_budgets(seam, collator, token_cap):
@@ -79,7 +79,9 @@ class LengthPolicy(Policy):
         for indices in prompt_groups(batch, batch["input_ids"].shape[0]):
             row = unpad_rows(batch, indices)
             row_bridge = (
-                bridge.index_select(torch.tensor(indices, device=bridge.memory.device)) if bridge is not None else None
+                select_bridge_state(bridge, torch.tensor(indices, device=bridge.memory.device))
+                if bridge is not None
+                else None
             )
             output = super().forward(
                 row,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from seam_grpo.actor import find_unique_source_indices
 from seam_grpo.data import move, trajectory
-from seam_grpo.rollout import select_rows
+from seam_grpo.rollout import select_bridge_state, select_rows
 
 
 class SourceTeacher:
@@ -52,7 +52,7 @@ class SourceTeacher:
                 batch = trajectory(
                     select_rows(source, range(start, end)), actions[start:end], mask[start:end], self.budget
                 )
-                slice_bridge = unique_bridge.index_select(inverse_indices[start:end])
+                slice_bridge = select_bridge_state(unique_bridge, inverse_indices[start:end])
                 logps = self.actor.policy(batch, temperature=1.0, bridge=slice_bridge)
                 values.append(logps.masked_fill(~mask[start:end], 0).sum(-1) / mask[start:end].sum(-1))
             means.append(torch.cat(values))

@@ -260,8 +260,16 @@ def test_context_guard_and_cache_cleanup_on_encoder_failure(monkeypatch):
     assert len(calls) == 2
 
 
-def test_unique_source_encoding_call_count_and_grad_equivalence(monkeypatch):
-    cfg, _, batch = tiny()
+@pytest.mark.parametrize("legacy_state", [False, True])
+@pytest.mark.parametrize("copy_enabled", [False, True])
+def test_unique_source_encoding_call_count_and_grad_equivalence(monkeypatch, legacy_state, copy_enabled):
+    if legacy_state:
+        from eviseq_afmr.modeling.grounded_copy import CopyState
+        from eviseq_afmr.modeling.outputs import BridgeState
+
+        monkeypatch.delattr(BridgeState, "index_select")
+        monkeypatch.delattr(CopyState, "index_select")
+    cfg, _, batch = tiny(copy_enabled=copy_enabled)
     model = EviSeqAFMR(cfg).eval()
     expected_model = copy.deepcopy(model)
 

@@ -12,6 +12,13 @@ from seam_length_grpo import train as runtime
 
 @pytest.mark.parametrize("source_weight,beta", [(0.0, 0.0), (0.05, 0.0), (0.05, 0.01)])
 def test_real_trl_updates_ragged_prompts_and_frozen_teacher(tmp_path, monkeypatch, source_weight, beta):
+    if source_weight and not beta:
+        from eviseq_afmr.modeling.grounded_copy import CopyState
+        from eviseq_afmr.modeling.outputs import BridgeState
+
+        # Original SFT states have tensor fields but no GRPO slicing methods.
+        monkeypatch.delattr(BridgeState, "index_select")
+        monkeypatch.delattr(CopyState, "index_select")
     settings, tokenizer, path = settings_file(tmp_path, source_weight=source_weight)
     settings["training"]["beta"] = beta
     if source_weight == 0:

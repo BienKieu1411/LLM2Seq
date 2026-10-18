@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 import torch
@@ -49,6 +50,29 @@ def select_rows(batch: Mapping[str, Any], indices: Sequence[int] | torch.Tensor)
         else:
             result[key] = value
     return result
+
+
+def select_bridge_state(bridge, indices: torch.Tensor):
+    """Select source rows without requiring methods added to the SFT dataclasses.
+
+    Tensor index_select retains autograd, including accumulation from several
+    candidates back into the same encoded source. Never detach these states.
+    """
+    selected = {
+        name: getattr(bridge, name).index_select(0, indices)
+        for name in ("memory", "memory_mask", "content_mask", "source_bias", "controller")
+    }
+    selected["value_memory"] = None if bridge.value_memory is None else bridge.value_memory.index_select(0, indices)
+    copy = bridge.copy_state
+    selected["copy_state"] = (
+        None
+        if copy is None
+        else replace(
+            copy,
+            **{name: getattr(copy, name).index_select(0, indices) for name in ("keys", "token_ids", "mask", "bias")},
+        )
+    )
+    return replace(bridge, **selected)
 
 
 def repeat_batch(batch: Mapping[str, Any], group_size: int) -> dict[str, Any]:

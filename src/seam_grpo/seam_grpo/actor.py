@@ -9,7 +9,7 @@ from torch.utils.checkpoint import checkpoint
 from transformers import GenerationConfig, PretrainedConfig, PreTrainedModel
 
 from .policy import Policy
-from .rollout import select_rows
+from .rollout import select_bridge_state, select_rows
 
 
 def find_unique_source_indices(batch: dict[str, Any]) -> tuple[list[int], torch.Tensor]:
@@ -125,7 +125,7 @@ class SEAMActor(PreTrainedModel):
             stop = min(batch_size, start + self.score_batch_size)
             candidate_batch = select_rows(batch, range(start, stop))
             row_indices = inverse_indices[start:stop]
-            slice_bridge = unique_bridge.index_select(row_indices)
+            slice_bridge = select_bridge_state(unique_bridge, row_indices)
 
             def score(batch_arg: dict[str, Any], bridge_arg: Any) -> tuple[torch.Tensor, torch.Tensor]:
                 return self.policy(
@@ -175,7 +175,7 @@ class SEAMActor(PreTrainedModel):
                 raise ValueError("Gold CE requires collator labels")
             token_count = labels[:, 1:].ne(-100).sum()
             row_indices = inverse_indices[indices]
-            slice_bridge = unique_bridge.index_select(row_indices)
+            slice_bridge = select_bridge_state(unique_bridge, row_indices)
 
             def score_ce(batch_arg: dict[str, Any], bridge_arg: Any) -> torch.Tensor:
                 return self.policy(batch_arg, temperature=1.0, ce=True, bridge=bridge_arg)

@@ -39,6 +39,10 @@ modules stay in eval mode to disable dropout; gradient tracking is enabled for
 the loss forwards. The action scorer checkpoints decoder activations and computes
 vocabulary logits in small token chunks to reduce memory.
 
+Candidate/gold row selection slices the bridge/copy dataclass tensor fields
+inside this adapter, preserving autograd. It also supports original SFT
+`BridgeState`/`CopyState` classes that do not implement `index_select` methods.
+
 EOS is included in the action loss. Padding after EOS and decoder prompts are
 excluded. Budget-truncated outputs retain their real sampled actions and receive
 their measured reward; no artificial EOS or extra length penalty is inserted.
