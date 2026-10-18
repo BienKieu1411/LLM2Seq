@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import socket
+import time
 from copy import deepcopy
 from pathlib import Path
 
@@ -75,6 +76,7 @@ class VLLMRollout:
         self.trainer = trainer
         self.engine = None
         self.version = -1
+        self.timings = {}
 
     def initialize(self):
         from seam_vllm import SEAMLLM
@@ -137,18 +139,22 @@ class VLLMRollout:
         )
 
     def __call__(self, prompts, source):
+        started = time.perf_counter()
         if self.engine is None:
             self.initialize()
             # A recreated engine starts from SFT, regardless of the training
             # step at which the previous engine was closed.
             self.version = -1
+        startup_seconds = time.perf_counter() - started
         trainer = self.trainer
         cfg = trainer.settings
         actor = trainer.accelerator.unwrap_model(trainer.model).policy.seam
         version = trainer.state.global_step
+        started = time.perf_counter()
         if self.version != version:
             self.engine.sync_weights(actor, policy_version=version)
             self.version = version
+        sync_seconds = time.perf_counter() - started
         from vllm import SamplingParams
 
         params = SamplingParams(
@@ -175,7 +181,13 @@ class VLLMRollout:
             if len(prompts) % group or any(prompts[row] != prompts[row - row % group] for row in range(len(prompts))):
                 raise RuntimeError("Grouped vLLM sampling needs contiguous identical-source groups")
             params.n = group
+        started = time.perf_counter()
         outputs = self.engine.generate(prompts[::group], params)
+        self.timings = {
+            "rollout_startup_seconds": startup_seconds,
+            "rollout_sync_seconds": sync_seconds,
+            "rollout_generate_seconds": time.perf_counter() - started,
+        }
         if trainer.state.global_step != version:
             raise RuntimeError("Actor changed during vLLM rollout")
         return completion_rows(

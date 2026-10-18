@@ -55,7 +55,9 @@ def test_stale_rollout_is_rejected_before_policy_forward():
         trainer.compute_loss(None, {"seam_policy_version": torch.tensor([1, 1])})
 
 
-@pytest.mark.parametrize("rollout_backend", ["native", "seam_vllm", "seam_vllm_bad", "seam_vllm_outlier"])
+@pytest.mark.parametrize(
+    "rollout_backend", ["native", "seam_vllm", "seam_vllm_bad", "seam_vllm_outlier", "seam_vllm_b200"]
+)
 def test_real_trl_objective_new_versions_and_frozen_full_reference(tmp_path, monkeypatch, rollout_backend):
     bad_logps = rollout_backend == "seam_vllm_bad"
     if rollout_backend.startswith("seam_vllm"):
@@ -119,6 +121,16 @@ def test_real_trl_objective_new_versions_and_frozen_full_reference(tmp_path, mon
         },
         "reward": {},
     }
+    b200 = rollout_backend == "seam_vllm_b200"
+    if b200:
+        settings["training"].update(
+            prompt_batch_size=8,
+            group_size=8,
+            gradient_accumulation_steps=4,
+            score_micro_batch_size=8,
+            logprob_chunk_size=64,
+            vllm_group_sampling=True,
+        )
     if bad_logps:
         with pytest.raises(RuntimeError, match="likelihood mismatch"):
             train(settings, "cpu")
@@ -127,21 +139,25 @@ def test_real_trl_objective_new_versions_and_frozen_full_reference(tmp_path, mon
     result = train(settings, "cpu")
     trainer = holder["trainer"]
     assert isinstance(trainer, GRPOTrainer)
-    assert counters["loss"] == 4  # two updates, two accumulation microsteps
+    assert counters["loss"] == (8 if b200 else 4)
     assert [row["policy_version"] for row in result["rollouts"]] == [0, 1]
-    assert [row["candidates"] for row in result["rollouts"]] == [4, 4]
+    assert [row["candidates"] for row in result["rollouts"]] == ([256, 256] if b200 else [4, 4])
     assert trainer._buffered_inputs is None
     assert trainer._likelihood_source is None
     assert trainer._active_loss_inputs is None
     metrics = [json.loads(line) for line in (tmp_path / "out/training_metrics.jsonl").read_text().splitlines()]
     assert any("eta" in row and "rollout_reward_seconds" in row and "train_seconds" in row for row in metrics)
+    if rollout_backend.startswith("seam_vllm"):
+        assert any(
+            row.get("rollout_generate_seconds", -1) >= 0 and row.get("rollout_sync_seconds", -1) >= 0 for row in metrics
+        )
     if rollout_backend == "seam_vllm_outlier":
         assert any(row.get("behavior_logp_max_error", 0) > 1.0 for row in metrics)
         assert any(row.get("sampling/importance_sampling_clipped_ratio", 0) > 0 for row in metrics)
     for name, p in trainer.ref_model.named_parameters():
         assert not p.requires_grad and p.grad is None
         torch.testing.assert_close(p, holder["ref"][name], rtol=0, atol=0)
-    assert len(trainer.train_dataset) == 4  # original three sources retained, one padded
+    assert len(trainer.train_dataset) == (32 if b200 else 4)  # retain original three, pad the last update
     implementation = json.loads((tmp_path / "out/implementation.json").read_text())
     assert implementation["trl"] == "1.16.0"
     versions = [json.loads(line) for line in (tmp_path / "out/rollout_versions.jsonl").read_text().splitlines()]

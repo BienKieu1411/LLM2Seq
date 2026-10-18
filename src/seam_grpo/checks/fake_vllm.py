@@ -27,11 +27,13 @@ class NativeFacade:
     def generate(self, prompts, params):
         assert self.version == self.trainer.state.global_step
         batch = self.trainer._likelihood_source
-        assert prompts == batch["sources"]
+        group = params.n
+        assert [prompt for prompt in prompts for _ in range(group)] == batch["sources"]
         with torch.no_grad():
             result = rollout(self.actor, batch, self.trainer.decoder_tokenizer, params.max_tokens, params.temperature)
         outputs = []
-        for index in range(len(prompts)):
+        candidates = []
+        for index in range(len(batch["sources"])):
             mask = result["action_mask"][index]
             ids = result["action_ids"][index][mask].tolist()
             logps = result["old_logps"][index][mask].tolist()
@@ -43,9 +45,12 @@ class NativeFacade:
                 token_ids=ids,
                 logprobs=[{token: SimpleNamespace(logprob=lp)} for token, lp in zip(ids, logps, strict=True)],
             )
-            outputs.append(
-                SimpleNamespace(prompt_token_ids=batch["decoder_prompt_ids"][index].tolist(), outputs=[completion])
-            )
+            candidates.append(completion)
+            if len(candidates) == group:
+                outputs.append(
+                    SimpleNamespace(prompt_token_ids=batch["decoder_prompt_ids"][index].tolist(), outputs=candidates)
+                )
+                candidates = []
         return outputs
 
 

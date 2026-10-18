@@ -135,19 +135,16 @@ class SEAMActor(PreTrainedModel):
             zeros = torch.zeros(stop - start, dtype=torch.long, device=batch["input_ids"].device)
             slice_bridge = select_bridge_state(unique_bridges[u_idx], zeros)
 
-            def score(batch_arg: dict[str, Any], bridge_arg: Any) -> tuple[torch.Tensor, torch.Tensor]:
-                return self.policy(
-                    batch_arg,
-                    temperature=temperature,
-                    return_entropy=True,
-                    bridge=bridge_arg,
-                    compute_entropy_with_grad=compute_entropy_with_grad,
-                )
-
-            if torch.is_grad_enabled():
-                logp_chunk, entropy_chunk = checkpoint(score, candidate_batch, slice_bridge, use_reentrant=False)
-            else:
-                logp_chunk, entropy_chunk = score(candidate_batch, slice_bridge)
+            # Policy already checkpoints its backbone and vocabulary chunks.
+            # Wrapping it again recomputes the backbone an extra time per
+            # candidate microbatch. Keep the source and gold CE checkpoints.
+            logp_chunk, entropy_chunk = self.policy(
+                candidate_batch,
+                temperature=temperature,
+                return_entropy=True,
+                bridge=slice_bridge,
+                compute_entropy_with_grad=compute_entropy_with_grad,
+            )
             logps.append(logp_chunk)
             entropies.append(entropy_chunk if compute_entropy_with_grad else entropy_chunk.detach())
             start = stop

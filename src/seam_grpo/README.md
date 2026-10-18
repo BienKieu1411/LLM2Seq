@@ -157,6 +157,19 @@ TRAIN_GPU=0 ROLLOUT_GPU=1 bash src/seam_grpo/scripts/run_grpo_two_gpu.sh \
   --config src/seam_grpo/configs/grpo.yaml
 ```
 
+The example is tuned as a starting profile for **two B200 180 GiB GPUs**:
+256 concurrent inference sequences (all 32 sources x 8 candidates of one update),
+scheduler budget 65536, encoder activation budget 32768 and vLLM memory fraction
+0.80 on the dedicated host. Training uses
+8 sources per microbatch, accumulation 4, candidate score microbatch 8 and
+log-prob chunk 64. This retains the earlier 32 sources / 256 candidates per
+optimizer update; group size, source/output limits, reward and learning rates
+are unchanged. It uses more VRAM to reduce small launches; it is not a measured
+GPU speed guarantee. If scoring runs out of memory, lower
+`score_micro_batch_size` to 4, then `logprob_chunk_size` to 32, keeping the
+effective source batch unchanged. If the host runs out of memory, first lower
+`vllm_max_num_seqs` to 32 and the encoder budget to 8192.
+
 The host runs in a separate local process with its own `CUDA_VISIBLE_DEVICES`.
 Control messages use authenticated loopback IPC; full actor weights travel
 directly GPU-to-GPU through a separate NCCL communicator, without checkpoint
@@ -170,6 +183,9 @@ addition to its inference model and KV/encoder caches.
 
 For one GPU or the earlier two-training-GPU DDP setup, explicitly use
 `--vllm-mode colocate` with `run_grpo.sh` (including `NPROC_PER_NODE=2` for DDP).
+For colocate, restore the earlier engine memory fraction 0.20, inference
+concurrency 8 and encoder budget 8192 before using this B200 dedicated profile;
+the training model then shares that GPU's memory with the rollout engine.
 In dedicated mode, sources/update are `prompt_batch_size * accumulation`;
 there is no factor of two. Double accumulation if you want to preserve the
 effective batch of a previous two-rank run. No batch setting is silently changed.
@@ -299,7 +315,13 @@ update duration and drops the first update's one-off host startup after the
 second update. It excludes future validation/checkpoint costs and is approximate.
 Candidate scoring batches different completion lengths from the same source
 within `score_micro_batch_size`, preserving masks and gradient routes. The
-ROUGE-L reward uses an exact integer-bitset LCS, checked against the original
+policy retains decoder-backbone and vocabulary-chunk activation checkpoints;
+removing the outer policy checkpoint avoids a third backbone execution during
+backward. Source encoding and gold CE still retain their own checkpoints.
+Logs separate `rollout_generate_seconds`, `rollout_sync_seconds` and initial
+`rollout_startup_seconds`; the difference from `rollout_reward_seconds` includes
+tokenization, reward calculation and other generation-window processing.
+The ROUGE-L reward uses an exact integer-bitset LCS, checked against the original
 dynamic program on Unicode/repeated-token cases; its scoring definition is unchanged.
 
 TIS reference: [TRL GRPO training-inference mismatch](https://huggingface.co/docs/trl/main/grpo_trainer#dealing-with-the-training-inference-mismatch).

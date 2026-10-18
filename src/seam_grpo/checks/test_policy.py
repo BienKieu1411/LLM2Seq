@@ -335,7 +335,34 @@ def test_differentiable_entropy_when_enabled():
 
 
 @pytest.mark.parametrize("copy_enabled", [False, True])
-def test_ragged_sources_and_actions_preserve_scores_ce_and_gradients(copy_enabled):
+def test_candidate_scoring_only_recomputes_backbone_once(monkeypatch, copy_enabled):
+    cfg, _, batch = tiny(copy_enabled)
+    seam = EviSeqAFMR(cfg).eval()
+    actor = SEAMActor(seam, chunk_size=2, score_batch_size=2).train()
+    # One source with two candidates forms one decoder scoring microbatch.
+    first = {key: value[:1] if isinstance(value, torch.Tensor) else value for key, value in batch.items()}
+    repeated = repeat_batch(first, 2)
+    actions = repeated["decoder_input_ids"][:, -3:]
+    packed = trajectory(repeated, actions, torch.ones_like(actions, dtype=torch.bool), 4)
+    calls = []
+    forward = seam.decoder.backbone.forward
+
+    def counted_forward(*args, **kwargs):
+        calls.append(1)
+        return forward(*args, **kwargs)
+
+    monkeypatch.setattr(seam.decoder.backbone, "forward", counted_forward)
+    logps, _, _ = actor(packed, temperature=0.8)
+    assert len(calls) == 1
+    logps.sum().backward()
+    # Policy already checkpoints the backbone. An outer checkpoint around
+    # the whole policy used to make it execute three times instead of two.
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("copy_enabled", [False, True])
+@pytest.mark.parametrize("score_batch_size", [2, 8])
+def test_ragged_sources_and_actions_preserve_scores_ce_and_gradients(copy_enabled, score_batch_size):
     cfg, tokenizer, _ = tiny(copy_enabled)
     records = [
         CanonicalRecord.from_mapping(
@@ -358,7 +385,7 @@ def test_ragged_sources_and_actions_preserve_scores_ce_and_gradients(copy_enable
     packed["gold_decoder_attention_mask"] = repeated["decoder_attention_mask"]
     seam = EviSeqAFMR(cfg).eval()
     reference = copy.deepcopy(seam)
-    actor = SEAMActor(seam, chunk_size=2, score_batch_size=2).train()
+    actor = SEAMActor(seam, chunk_size=2, score_batch_size=score_batch_size).train()
     logps, entropies, ce_sum = actor(
         packed,
         temperature=0.8,

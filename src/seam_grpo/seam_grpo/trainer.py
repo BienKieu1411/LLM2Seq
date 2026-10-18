@@ -213,6 +213,8 @@ class SEAMGRPOTrainer(GRPOTrainer):
                 started = time.perf_counter()
                 generation_batch = self._generate_and_score_completions(generation_batch)
                 self.progress.rollout_seconds += time.perf_counter() - started
+                for name, seconds in getattr(self.rollout_engine, "timings", {}).items():
+                    self._metrics["train"][name].append(seconds)
                 generation_batch = split_pixel_values_by_grid(generation_batch)
                 generation_batches = split_tensor_dict(generation_batch, self.args.steps_per_generation)
                 self._buffered_inputs = [unsplit_pixel_values_by_grid(batch) for batch in generation_batches]
