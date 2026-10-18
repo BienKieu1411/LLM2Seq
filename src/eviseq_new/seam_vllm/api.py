@@ -92,6 +92,10 @@ class SEAMLLM:
                 "seam_checkpoint_path": str(self.checkpoint_path),
                 "max_source_positions": int(self.config["data"]["max_source_length"]),
                 "eos_token_id": self.tokenizer.eos_token_id,
+                # The vLLM renderer resolves this even when our processor
+                # skips prepending it. Use an existing trained prompt token;
+                # do not add BOS to Qwen3 or change the actual decoder IDs.
+                "decoder_start_token_id": self.prompt_token_ids[0],
                 "seam_encoder_max_batch_tokens": encoder_max_batch_tokens,
             },
             "tensor_parallel_size": 1,

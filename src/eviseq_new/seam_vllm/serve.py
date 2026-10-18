@@ -13,6 +13,7 @@ from eviseq_afmr.config import load_config, resolve_path
 
 from ._bootstrap import ensure_source_plugin
 from ._compat import validate_decoder_config
+from ._prompt import configured_decoder_prompt_ids
 
 
 def build_command(config_path: Path, checkpoint_path: Path, args) -> list[str]:
@@ -44,6 +45,9 @@ def build_command(config_path: Path, checkpoint_path: Path, args) -> list[str]:
         "seam_checkpoint_path": str(checkpoint_path),
         "max_source_positions": int(config["data"]["max_source_length"]),
         "eos_token_id": tokenizer.eos_token_id,
+        # Required by vLLM's renderer even though the SEAM processor preserves
+        # the complete prompt and skips prepending a decoder start token.
+        "decoder_start_token_id": configured_decoder_prompt_ids(tokenizer, config["data"])[0],
         "seam_encoder_max_batch_tokens": encoder_budget,
     }
     command = [

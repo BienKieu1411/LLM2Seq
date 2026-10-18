@@ -202,6 +202,12 @@ Dropout tắt ở cả hai bước. Learning rate dùng cosine decay.
 
 ### SEAM vLLM rollout
 
+Ngân sách `vllm_max_num_batched_tokens` được tự nâng lên tối thiểu bằng giới hạn
+encoder thực tế (gồm phần dành cho prompt), giới hạn context decoder và số
+sequence đồng thời. vLLM 0.25.1 tắt chunked prefill/MM input cho encoder-decoder;
+không thể dùng ngân sách 2048 nếu một source có thể dài 8192 token. Việc nâng
+ngân sách được ghi log và không cắt ngắn source hay output.
+
 Đặt `training.rollout_backend: seam_vllm` với vLLM **0.25.1** và plugin SEAM
 trong checkout. Chạy cùng script 1/2 GPU bên trên. Đây là engine nội bộ mỗi
 rank, không gọi HTTP host và không dùng causal-only trainer vLLM mặc định.

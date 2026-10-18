@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 import yaml
 from seam_grpo.context import validate_context
-from seam_grpo.vllm_rollout import completion_rows
+from seam_grpo.vllm_rollout import completion_rows, rollout_token_budget
 
 
 class LengthVLLMRollout:
@@ -64,7 +64,7 @@ class LengthVLLMRollout:
             gpu_memory_utilization=cfg["vllm_gpu_memory_utilization"],
             max_model_len=prompt_width + cfg["max_new_tokens"],
             max_num_seqs=cfg["vllm_max_num_seqs"],
-            max_num_batched_tokens=cfg["vllm_max_num_batched_tokens"],
+            max_num_batched_tokens=rollout_token_budget(trainer, prompt_width + cfg["max_new_tokens"]),
             encoder_max_batch_tokens=cfg["vllm_encoder_max_batch_tokens"],
             mm_processor_cache_gb=0,
             logprobs_mode="processed_logprobs",

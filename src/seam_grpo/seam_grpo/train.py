@@ -27,6 +27,7 @@ from transformers import PreTrainedTokenizerBase, PreTrainedTokenizerFast
 
 from .config import load
 from .data import make_loader, prepare, trajectory
+from .output import reset_output
 from .reward import RougeReward
 
 
@@ -64,7 +65,7 @@ def check_rollout_device(settings, device_name):
         raise ValueError("SEAM vLLM rollout requires CUDA; use rollout_backend=native for CPU")
 
 
-def train(settings: dict, device_name: str | None = None) -> dict:
+def train(settings: dict, device_name: str | None = None, *, overwrite_output_dir: bool = False) -> dict:
     # Fail before constructing full backbones or running baseline validation.
     check_rollout_device(settings, device_name)
     from trl import GRPOConfig
@@ -76,10 +77,12 @@ def train(settings: dict, device_name: str | None = None) -> dict:
     base = prepare(settings)
     cfg = settings["training"]
     output = Path(settings["output_dir"])
-    if output.exists() and any(output.iterdir()):
-        raise FileExistsError(f"Use a fresh output_dir to avoid mixing GRPO artifacts: {output}")
     if device_name and device_name != "cpu" and not device_name.startswith("cuda"):
         raise ValueError("Use --device cpu for offline checks or CUDA_VISIBLE_DEVICES for GPU training")
+    if overwrite_output_dir:
+        reset_output(settings, base, use_cpu=device_name == "cpu" or not torch.cuda.is_available())
+    elif output.exists() and any(output.iterdir()):
+        raise FileExistsError(f"Use a fresh output_dir or --overwrite-output-dir to restart GRPO: {output}")
     seed_everything(cfg["seed"])
     if torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = bool(base["training"].get("tf32", False))
@@ -232,6 +235,9 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--device")
     parser.add_argument("--dry-run", action="store_true", help="Validate paths/settings without loading model weights")
+    parser.add_argument(
+        "--overwrite-output-dir", action="store_true", help="Delete previous output artifacts and restart from SFT"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     settings = load(args.config)
@@ -244,7 +250,10 @@ def main():
             )
         )
     else:
-        result = train(settings, args.device)
+        output = Path(settings["output_dir"]).resolve()
+        if args.overwrite_output_dir and Path(args.config).resolve().is_relative_to(output):
+            parser.error("GRPO config must be outside output_dir when overwriting")
+        result = train(settings, args.device, overwrite_output_dir=args.overwrite_output_dir)
         if int(os.environ.get("RANK", "0")) == 0:
             print(json.dumps(result, ensure_ascii=False))
 

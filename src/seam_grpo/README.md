@@ -96,6 +96,11 @@ Batch controls are independent:
 - `gradient_accumulation_steps`: source microbatches per optimizer update.
 - `rollout_micro_batch_size`: candidates decoded together with native rollout.
 - `vllm_max_num_seqs`: concurrent rollout requests per GPU with SEAM vLLM.
+- `vllm_max_num_batched_tokens`: scheduler token budget, automatically raised
+  to at least the complete encoder input cap, decoder context cap and sequence
+  count. vLLM 0.25.1 disables chunked prefill/MM input for encoder-decoder models;
+  a source cap of 8192 therefore requires a scheduler budget of at least 8192,
+  even if the decoder only generates 512 tokens. The adapter logs any increase.
 - `vllm_encoder_max_batch_tokens`: encoder microbatch token budget per GPU.
 - `score_micro_batch_size`: trajectories scored per gradient forward.
 - `logprob_chunk_size`: decoder positions in each vocabulary projection.
@@ -127,7 +132,15 @@ CUDA_VISIBLE_DEVICES=0,1 NPROC_PER_NODE=2 bash src/seam_grpo/scripts/run_grpo.sh
   --config src/seam_grpo/configs/grpo.yaml
 ```
 
-Each run must use a fresh output directory. Initial loading transfers only SFT
+By default, each run must use a fresh output directory. To intentionally restart
+in the same directory, append `--overwrite-output-dir` to the launch command.
+This deletes old GRPO checkpoints, metrics and dataset cache; only rank 0 resets
+the directory before the other ranks proceed. Keep configs, SFT checkpoints,
+backbones and input data outside the output directory. `--dry-run` never resets
+it, even when the overwrite flag is present. This is a restart, not a resume.
+The flag currently applies to `seam_grpo`.
+
+Initial loading transfers only SFT
 weights: optimizer, cosine schedule, and update counter start fresh. Automatic
 mid-epoch resume is not implemented. `beta>0` loads an additional complete frozen
 SFT model and increases memory use. `beta=0` means the logged KL term is disabled,

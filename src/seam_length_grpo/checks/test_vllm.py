@@ -14,6 +14,8 @@ def test_initializer_reserves_variable_decoder_prompts(tmp_path, monkeypatch, wo
     import seam_vllm
 
     cfg, _, length, _, _ = fixture()
+    # The production trainer stores content + encoder prompt reserve here.
+    cfg["data"]["max_source_length"] = 8192 + length["encoder_prompt_reserve"]
     calls = []
     for key in ("RANK", "WORLD_SIZE", "LOCAL_RANK", "VLLM_ENABLE_V1_MULTIPROCESSING"):
         monkeypatch.setenv(key, "0")
@@ -43,6 +45,7 @@ def test_initializer_reserves_variable_decoder_prompts(tmp_path, monkeypatch, wo
     )
     LengthVLLMRollout(trainer).initialize()
     assert calls[0][1]["max_model_len"] == length["decoder_prompt_reserve"] + 4
+    assert calls[0][1]["max_num_batched_tokens"] == cfg["data"]["max_source_length"]
     assert calls[0][1]["mm_processor_cache_gb"] == 0
     assert calls[0][1]["distributed_executor_backend"] == "external_launcher"
     if rank == 0:

@@ -191,7 +191,15 @@ def test_post_sft_train_and_standard_checkpoint_reload(tmp_path, beta):
         },
         "reward": {},
     }
-    result = train(settings, "cpu")
+    if beta == 0:
+        output = Path(settings["output_dir"])
+        output.mkdir()
+        (output / "stale.txt").write_text("previous run")
+        with pytest.raises(FileExistsError, match="overwrite-output-dir"):
+            train(settings, "cpu")
+    result = train(settings, "cpu", overwrite_output_dir=beta == 0)
+    assert not (tmp_path / "grpo/stale.txt").exists()
+    assert checkpoint.is_file() and base.is_file()
     assert result["steps"] == 1
     restored = EviSeqAFMR(cfg)
     info = load_checkpoint(tmp_path / "grpo/last.pt", restored, config=cfg, restore_rng=False)

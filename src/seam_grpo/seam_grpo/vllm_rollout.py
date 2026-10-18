@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import socket
@@ -12,6 +13,25 @@ import torch
 import yaml
 
 from .context import validate_context
+
+
+def rollout_token_budget(trainer, decoder_limit: int) -> int:
+    """vLLM 0.25.1 cannot chunk encoder-decoder inputs during scheduling."""
+    cfg = trainer.settings
+    requested = int(cfg["vllm_max_num_batched_tokens"])
+    source_limit = int(trainer.base_config["data"]["max_source_length"])
+    effective = max(requested, source_limit, decoder_limit, int(cfg["vllm_max_num_seqs"]))
+    if effective != requested:
+        logging.getLogger(__name__).warning(
+            "Raising vllm_max_num_batched_tokens from %d to %d: SEAM encoder-decoder "
+            "requires room for a complete source (%d), decoder context (%d), and scheduled sequences (%d)",
+            requested,
+            effective,
+            source_limit,
+            decoder_limit,
+            cfg["vllm_max_num_seqs"],
+        )
+    return effective
 
 
 def completion_rows(outputs, prompt_ids, *, eos_token_id, budget, group_size=1):
@@ -101,7 +121,7 @@ class VLLMRollout:
             gpu_memory_utilization=cfg["vllm_gpu_memory_utilization"],
             max_model_len=prompt_width + cfg["max_new_tokens"],
             max_num_seqs=cfg["vllm_max_num_seqs"],
-            max_num_batched_tokens=cfg["vllm_max_num_batched_tokens"],
+            max_num_batched_tokens=rollout_token_budget(trainer, prompt_width + cfg["max_new_tokens"]),
             encoder_max_batch_tokens=cfg["vllm_encoder_max_batch_tokens"],
             mm_processor_cache_gb=0,
             logprobs_mode="processed_logprobs",

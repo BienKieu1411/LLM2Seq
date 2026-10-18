@@ -54,6 +54,10 @@ def test_two_process_gradient_and_weight_synchronization(tmp_path, ce_weight, ro
         )
     )
     root = Path(__file__).resolve().parents[1]
+    overwrite = rollout_backend == "native" and ce_weight == 0.05
+    if overwrite:
+        (tmp_path / "output").mkdir()
+        (tmp_path / "output/stale.txt").write_text("previous run")
     env = {
         **os.environ,
         "PYTHONPATH": os.pathsep.join([str(root), str(root.parent / "eviseq_new")]),
@@ -76,6 +80,7 @@ def test_two_process_gradient_and_weight_synchronization(tmp_path, ce_weight, ro
             str(root / "checks/ddp_worker.py"),
             "--config",
             str(grpo),
+            *(["--overwrite-output-dir"] if overwrite else []),
         ],
         env=env,
         capture_output=True,
@@ -86,3 +91,5 @@ def test_two_process_gradient_and_weight_synchronization(tmp_path, ce_weight, ro
     metrics = json.loads((tmp_path / "output/training_metrics.jsonl").read_text().splitlines()[0])
     assert metrics["step"] == 1 and metrics["grad_norm"] > 0
     assert metrics["behavior_logp_mae"] < 1e-4
+    assert not (tmp_path / "output/stale.txt").exists()
+    assert base.is_file() and checkpoint.is_file()

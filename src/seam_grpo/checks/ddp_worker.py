@@ -24,6 +24,7 @@ class ToyReward:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--overwrite-output-dir", action="store_true")
     args = parser.parse_args()
     torch.set_num_threads(1)
     settings = load(args.config)
@@ -52,7 +53,7 @@ def main():
         return result
 
     torch.optim.AdamW.step = checked_step
-    runtime.train(settings, "cpu")
+    runtime.train(settings, "cpu", overwrite_output_dir=args.overwrite_output_dir)
 
 
 if __name__ == "__main__":
