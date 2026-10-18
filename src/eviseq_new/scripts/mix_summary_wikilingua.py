@@ -10,12 +10,16 @@ import os
 import random
 import re
 import shutil
+import sys
 import tempfile
 import unicodedata
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# Support direct execution from any working directory without PYTHONPATH.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eviseq_afmr.data.schema import CanonicalRecord
 
