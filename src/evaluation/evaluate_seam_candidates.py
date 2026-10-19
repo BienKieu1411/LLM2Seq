@@ -105,6 +105,7 @@ def generate(args, config, samples, budget):
         gpu_memory_utilization=args.gpu_memory_utilization,
         encoder_max_batch_tokens=args.encoder_max_batch_tokens,
         mm_processor_cache_gb=0,
+        attention_config={"backend": args.attention_backend},
     )
     started = time.monotonic()
     with destination.open("a", encoding="utf-8") as stream:
@@ -234,6 +235,12 @@ def parse_args():
     parser.add_argument("--max-num-batched-tokens", type=int, default=8192)
     parser.add_argument("--encoder-max-batch-tokens", type=int, default=8192)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.8)
+    parser.add_argument(
+        "--attention-backend",
+        choices=("auto", "FLASH_ATTN", "TRITON_ATTN", "FLASHINFER"),
+        default="auto",
+        help="Explicit vLLM attention backend; FLASH_ATTN avoids auto-selecting a broken FlashInfer installation",
+    )
     parser.add_argument("--rouge-path", type=Path, default=legacy.ROUGE_PATH)
     parser.add_argument("--score-only", action="store_true", help="Score saved candidates without loading any model")
     return parser.parse_args()
@@ -281,13 +288,19 @@ def main():
         "top_k": args.top_k,
         "max_input_tokens": args.max_input_tokens,
         "max_new_tokens": budget,
+        "attention_backend": args.attention_backend,
     }
     args.output_dir.mkdir(parents=True, exist_ok=True)
     manifest = args.output_dir / "manifest.json"
+    candidates_path = args.output_dir / "candidates.jsonl"
+    has_candidates = candidates_path.exists() and candidates_path.stat().st_size > 0
     if manifest.exists():
         if json.loads(manifest.read_text(encoding="utf-8")) != signature:
-            raise ValueError("Output directory belongs to a different experiment; choose a new --output-dir")
-    elif (args.output_dir / "candidates.jsonl").exists():
+            if has_candidates:
+                raise ValueError("Output directory belongs to a different experiment; choose a new --output-dir")
+            # An engine-startup failure saved no predictions; retrying is safe.
+            write_json(manifest, signature)
+    elif has_candidates:
         raise ValueError("Candidate file has no manifest; choose a new --output-dir")
     else:
         write_json(manifest, signature)

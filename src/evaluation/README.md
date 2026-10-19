@@ -215,3 +215,11 @@ quality. ROUGE is in [0, 1] in JSON and displayed as percentages in the console.
 `scored_candidates.jsonl` preserves all candidates and individual scores;
 `rouge_raw.txt` preserves the Perl output. Add `--score-only` to the same
 command to rescore saved candidates without loading model weights.
+
+If engine startup fails while importing an incompatible FlashInfer cache,
+pass `--attention-backend FLASH_ATTN` to select FlashAttention explicitly
+through vLLM's `attention_config`. Set `VLLM_USE_FLASHINFER_SAMPLER=0` for the
+same command so sampling also avoids importing FlashInfer. This does not bypass FlashInfer's version
+checks. The choice is recorded in the experiment manifest; keep it fixed for
+checkpoint comparisons. A failed startup with no saved candidates can reuse
+the same output directory when changing this option.
