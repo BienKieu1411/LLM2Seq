@@ -91,6 +91,9 @@ def build_command(config_path: Path, checkpoint_path: Path, args) -> list[str]:
     ]
     if trust:
         command.append("--trust-remote-code")
+    backend = getattr(args, "attention_backend", "auto")
+    if backend != "auto":
+        command.extend(["--attention-config", json.dumps({"backend": backend})])
     for name in ("max_model_len", "max_num_batched_tokens", "api_key"):
         value = getattr(args, name)
         if value is not None:
@@ -109,6 +112,9 @@ def parse_args():
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     parser.add_argument("--max-model-len", type=int, default=None, help="Decoder context limit")
     parser.add_argument("--max-num-batched-tokens", type=int, default=None)
+    parser.add_argument(
+        "--attention-backend", choices=("auto", "FLASH_ATTN", "TRITON_ATTN", "FLASHINFER"), default="auto"
+    )
     parser.add_argument(
         "--encoder-max-batch-tokens",
         type=int,

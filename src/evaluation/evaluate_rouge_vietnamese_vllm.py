@@ -118,7 +118,14 @@ def managed_seam_server(args, model_dir: Path, config_path: Path, checkpoint_pat
         "--encoder-max-batch-tokens",
         str(args.encoder_max_batch_tokens if args.encoder_max_batch_tokens is not None else 8192),
     ]
+    # Optional SI host controls; existing evaluation callers keep their defaults.
+    for name in ("attention_backend", "max_num_batched_tokens"):
+        value = getattr(args, name, None)
+        if value is not None:
+            command.extend(["--" + name.replace("_", "-"), str(value)])
     env = os.environ.copy()
+    if getattr(args, "gpu_id", None) is not None:
+        env["CUDA_VISIBLE_DEVICES"] = str(args.gpu_id)
     package_root = EVALUATION_DIR.parent / "eviseq_new"
     env["PYTHONPATH"] = str(package_root) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env.update(VLLM_USE_V2_MODEL_RUNNER="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
@@ -131,9 +138,14 @@ def managed_seam_server(args, model_dir: Path, config_path: Path, checkpoint_pat
         print(f"[host] starting {base_url} | log={log_path}", flush=True)
         process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         try:
+            if getattr(args, "on_server_started", None) is not None:
+                args.on_server_started(process)
             started = time.monotonic()
             next_progress = started + 30
             while True:
+                cancel_event = getattr(args, "cancel_event", None)
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeError("SI host startup cancelled")
                 if process.poll() is not None:
                     raise RuntimeError(f"SEAM host exited with code {process.returncode}; inspect {log_path}")
                 if time.monotonic() - started >= args.startup_timeout:
