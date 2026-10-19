@@ -224,6 +224,42 @@ class SIIntegration(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Data/model/generation changed"):
             self.predict()
 
+    def test_parallel_selection_matches_serial_and_reuses_cache_across_worker_counts(self):
+        self.predict()
+        self.select()
+        train = (self.args.output_dir / "train_si.jsonl").read_bytes()
+        audit = (self.args.output_dir / "selected.jsonl").read_bytes()
+        for path in (self.args.output_dir / "rouge155").glob("batch_*"):
+            path.unlink()
+        self.args.score_workers = 2
+        barrier = threading.Barrier(2)
+
+        def concurrent_score(*args):
+            barrier.wait(timeout=3)  # Both independent Perl jobs must run concurrently.
+            return self.score(*args)
+
+        self.select(scorer=concurrent_score)
+        self.assertEqual((self.args.output_dir / "train_si.jsonl").read_bytes(), train)
+        self.assertEqual((self.args.output_dir / "selected.jsonl").read_bytes(), audit)
+        self.args.score_workers = 1
+        self.select(scorer=lambda *_: self.fail("Worker-count change must reuse completed cache"))
+
+    def test_parallel_selection_failure_preserves_cache_without_publishing_partial_train(self):
+        self.predict()
+        self.args.score_workers = 2
+
+        def fail_last_batch(rows, *args):
+            if len(rows) == 1:
+                raise RuntimeError("parallel Perl interrupted")
+            return self.score(rows, *args)
+
+        with self.assertRaisesRegex(RuntimeError, "parallel Perl interrupted"):
+            self.select(scorer=fail_last_batch)
+        self.assertFalse((self.args.output_dir / "train_si.jsonl").exists())
+        self.assertTrue((self.args.output_dir / "rouge155" / "batch_000000.jsonl").exists())
+        self.select()
+        self.assertEqual(len(list(si_common.read_rows(self.args.output_dir / "train_si.jsonl"))), 3)
+
     def test_r2_ties_use_lower_index_and_all_empty_is_error(self):
         row = {
             "row_index": 0,

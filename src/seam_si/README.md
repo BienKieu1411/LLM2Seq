@@ -133,13 +133,23 @@ bash src/seam_si/scripts/run_si.sh \
   --stage select \
   --output-dir src/eviseq_new/datasets/si_rouge2 \
   --rouge-path /workspace/storage-shared/nlp/dungdx4/textsum_platform_eval/pyrouge-master/tools/ROUGE-1.5.5 \
-  --score-batch-size 128
+  --score-batch-size 128 \
+  --score-workers 8
 ```
 
 Perl runs on bounded batches (default 128 sources / 1024 candidates). Completed
 scoring batches are cached for resume. Selection refuses incomplete/duplicate
 predictions; final train and audit files are published only after every source
 has a selected target. There is no score threshold and no source filtering.
+
+`--score-workers` runs independent Perl jobs concurrently on CPU (default 1).
+Start with 4 or 8 according to available CPU cores and temporary-disk capacity.
+Each worker has a separate temporary directory; scoring flags, R2 selection,
+tie handling and final row order remain unchanged. At most one batch per worker
+is queued. Changing worker count reuses existing scoring caches; keep
+`--score-batch-size` unchanged when resuming. Do not run two selection commands
+against the same output directory simultaneously. `TMPDIR` can point at a fast
+local scratch disk; concurrent jobs increase temporary storage and RAM use.
 
 ## Outputs inside `--output-dir`
 

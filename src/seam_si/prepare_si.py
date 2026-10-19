@@ -54,6 +54,7 @@ def parse_args():
     parser.add_argument(
         "--score-batch-size", type=int, default=128, help="Sources per Perl job; RAM/temp files remain bounded"
     )
+    parser.add_argument("--score-workers", type=int, default=1, help="Concurrent independent Perl scoring jobs on CPU")
     args = parser.parse_args()
     if args.stage in ("all", "predict") and args.config is None:
         parser.error("--config is required for prediction")
@@ -73,6 +74,7 @@ def parse_args():
         min(
             args.batch_size,
             args.score_batch_size,
+            args.score_workers,
             args.max_num_seqs,
             args.max_num_batched_tokens,
             args.encoder_max_batch_tokens,

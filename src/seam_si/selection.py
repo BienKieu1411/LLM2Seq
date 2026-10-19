@@ -6,6 +6,8 @@ import json
 import shutil
 import tempfile
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from evaluate_rouge_vietnamese import validate_rouge_install
@@ -31,7 +33,48 @@ def best_rouge2(row):
     }
 
 
+def score_batch(index, batch, work, rouge_path):
+    """Each job owns its Perl temporary directory and atomic cache file."""
+    shard = work / f"batch_{index:06d}.jsonl"
+    if shard.exists():
+        selected = list(read_rows(shard))
+        if [item["row_index"] for item in selected] != [item["row_index"] for item in batch]:
+            raise ValueError(f"Scoring shard disagrees with candidate order: {shard}")
+        return selected
+    with tempfile.TemporaryDirectory(prefix="rouge-si-") as temporary:
+        temporary = Path(temporary)
+        scored = score_candidates(batch, rouge_path, temporary)
+        selected = [best_rouge2(row) for row in scored]
+        shutil.copyfile(temporary / "rouge_raw.txt", work / f"batch_{index:06d}.rouge.txt")
+    shard_tmp = shard.with_suffix(".jsonl.tmp")
+    with shard_tmp.open("w", encoding="utf-8") as stream:
+        for row in selected:
+            stream.write(json_line(row))
+    shard_tmp.replace(shard)
+    return selected
+
+
+def scored_batches(destination, batch_size, workers, work, rouge_path):
+    """Bound queued batches by worker count; publish in original order."""
+    jobs = iter(enumerate(batches(read_rows(destination), batch_size)))
+    if workers == 1:
+        for index, batch in jobs:
+            yield score_batch(index, batch, work, rouge_path)
+        return
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        pending = deque()
+        for index, batch in jobs:
+            pending.append(pool.submit(score_batch, index, batch, work, rouge_path))
+            if len(pending) >= workers:
+                yield pending.popleft().result()
+        while pending:
+            yield pending.popleft().result()
+
+
 def select(args):
+    workers = getattr(args, "score_workers", 1)
+    if workers < 1:
+        raise ValueError("score-workers must be positive")
     destination = args.output_dir / "candidates.jsonl"
     manifest = json.loads((args.output_dir / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("sharding"):
@@ -75,23 +118,7 @@ def select(args):
     train_tmp, audit_tmp = train_path.with_suffix(".jsonl.tmp"), audit_path.with_suffix(".jsonl.tmp")
     sums, winners = {metric: 0.0 for metric in ("rouge1", "rouge2", "rougeL")}, [0] * 8
     with train_tmp.open("w", encoding="utf-8") as train_stream, audit_tmp.open("w", encoding="utf-8") as audit_stream:
-        for index, batch in enumerate(batches(read_rows(destination), args.score_batch_size)):
-            shard = work / f"batch_{index:06d}.jsonl"
-            if shard.exists():
-                selected = list(read_rows(shard))
-                if [item["row_index"] for item in selected] != [item["row_index"] for item in batch]:
-                    raise ValueError(f"Scoring shard disagrees with candidate order: {shard}")
-            else:
-                with tempfile.TemporaryDirectory(prefix="rouge-si-") as temporary:
-                    temporary = Path(temporary)
-                    scored = score_candidates(batch, rouge_path, temporary)
-                    selected = [best_rouge2(row) for row in scored]
-                    shutil.copyfile(temporary / "rouge_raw.txt", work / f"batch_{index:06d}.rouge.txt")
-                shard_tmp = shard.with_suffix(".jsonl.tmp")
-                with shard_tmp.open("w", encoding="utf-8") as stream:
-                    for row in selected:
-                        stream.write(json_line(row))
-                shard_tmp.replace(shard)
+        for selected in scored_batches(destination, args.score_batch_size, workers, work, rouge_path):
             for row in selected:
                 train_stream.write(json_line({key: row[key] for key in ("id", "text", "summary")}))
                 audit_stream.write(json_line({key: value for key, value in row.items() if key != "text"}))
