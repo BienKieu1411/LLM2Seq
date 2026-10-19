@@ -32,6 +32,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Initialize model weights from a checkpoint and start a fresh optimizer, scheduler, and epoch count",
     )
     train.add_argument("--train-file", default=None, help="Override data.train_file with one JSONL file")
+    train.add_argument("--epochs", type=int, default=None, help="Full fine-tuning epochs; disables interface warmup")
+    train.add_argument("--batch-size", type=int, default=None, help="Training batch size per GPU")
+    train.add_argument(
+        "--gradient-accumulation", "--accum", type=int, default=None, help="Microbatches per optimizer update"
+    )
     train.add_argument(
         "--train-only",
         action="store_true",
@@ -81,6 +86,11 @@ def main(argv: list[str] | None = None) -> None:
     prepare_dataset.add_argument("--allow-duplicate-ids", action="store_true")
     prepare_dataset.add_argument("--allow-cross-split-content", action="store_true")
     args = parser.parse_args(argv)
+    if args.command == "train":
+        for name in ("epochs", "batch_size", "gradient_accumulation"):
+            value = getattr(args, name)
+            if value is not None and value < 1:
+                parser.error("--" + name.replace("_", "-") + " must be positive")
     if args.command == "smoke":
         script = Path(__file__).resolve().parents[1] / "scripts" / "smoke_test.py"
         raise SystemExit(subprocess.call([args.python, str(script)]))
@@ -97,6 +107,9 @@ def main(argv: list[str] | None = None) -> None:
             resume_checkpoint=args.resume_checkpoint,
             init_checkpoint=args.init_checkpoint,
             train_file=args.train_file,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            gradient_accumulation=args.gradient_accumulation,
             train_only=args.train_only,
             max_train_examples=args.max_train_examples,
             max_validation_examples=args.max_validation_examples,

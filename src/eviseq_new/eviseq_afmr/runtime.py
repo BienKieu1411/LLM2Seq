@@ -25,7 +25,7 @@ import yaml
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, Subset
 
-from .config import load_config, resolve_path
+from .config import load_config, resolve_path, validate_config
 from .data.collate import SummarizationCollator
 from .data.copy_alignment import COPY_INPUT_KEYS
 from .data.dataset import JsonlSummarizationDataset
@@ -286,6 +286,9 @@ def train(
     resume_checkpoint: str | None = None,
     init_checkpoint: str | None = None,
     train_file: str | Path | None = None,
+    epochs: int | None = None,
+    batch_size: int | None = None,
+    gradient_accumulation: int | None = None,
     train_only: bool = False,
     max_train_examples: int = 0,
     max_validation_examples: int = 0,
@@ -295,6 +298,20 @@ def train(
     selected_device, initialized_here = _init_distributed(device)
     try:
         config = load_config(config_path, train_only=train_only)
+        for name, value in (
+            ("epochs", epochs),
+            ("batch_size", batch_size),
+            ("gradient_accumulation", gradient_accumulation),
+        ):
+            if value is not None and value < 1:
+                raise ValueError(f"{name} must be positive")
+        if epochs is not None:
+            config["training"].update(interface_warmup_epochs=0, full_finetune_epochs=epochs)
+        if batch_size is not None:
+            config["training"]["batch_size"] = batch_size
+        if gradient_accumulation is not None:
+            config["training"]["gradient_accumulation_steps"] = gradient_accumulation
+        validate_config(config, train_only=train_only)
         config["model"]["dtype"] = "float32"
         config["model"].setdefault("compute_dtype", "bfloat16")
         _configure_precision(config)
