@@ -172,3 +172,46 @@ overlap, sentence splitter, and aggregation rule for every model comparison.
 
 Paper: <https://aclanthology.org/2023.emnlp-main.105/>. Reference
 implementation: <https://github.com/asappresearch/scale-score>.
+
+## SEAM candidate sampling diagnostic
+
+Run from the repository root on a CUDA server with the existing SEAM vLLM
+0.25.1 environment and Perl ROUGE installation:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python3 src/evaluation/evaluate_seam_candidates.py \
+  --config src/eviseq_new/runs/afmr/train/resolved_config.yaml \
+  --checkpoint src/eviseq_new/runs/afmr/train/epoch_004.pt \
+  --train-file src/eviseq_new/datasets/grpo_rouge/train.jsonl \
+  --output-dir runs/candidates_sft_train100 \
+  --num-samples 100 --seed 42 \
+  --temperature 1.0 --top-p 1.0 --top-k 0 \
+  --max-new-tokens 1024 --batch-size 8
+```
+
+The script randomly samples 100 train rows without replacement, saves their
+IDs and physical line numbers, and generates eight candidates per source via
+`SEAMLLM.generate()` and `SamplingParams(n=8)`. Comparisons use the same nested
+first 1, 4, and 8 candidates. Input limits and encoder/decoder prompts come
+from the resolved config; `--max-input-tokens` can lower the input budget.
+Only local model files are loaded. Each completed source is immediately
+appended to `candidates.jsonl`; rerunning the same command resumes completed
+rows. Use a new output directory for another checkpoint, keeping seed and
+train file unchanged for a comparison on the same examples.
+
+`comparison.json` reports the macro mean of per-candidate Perl ROUGE-1.5.5 F1
+with the Vietnamese evaluator's preprocessing and `-a -m -n 2 -d` flags:
+
+- `random_candidate_expectation`: mean over all candidates in each group,
+  estimating selection uniformly at random.
+- `oracle_weighted_rouge`: choose each source's candidate using gold and
+  `(R1 + 2*R2 + RL)/4`, then report that candidate's R1/R2/RL.
+- `oracle_rouge2`: choose using gold ROUGE-2, then report its R1/R2/RL.
+
+The oracle rows measure available candidate quality, not an inference method
+that can be used without a reference. N=1 is a sampled candidate at temperature
+1, not a greedy baseline. These scores describe 100 train samples, not held-out
+quality. ROUGE is in [0, 1] in JSON and displayed as percentages in the console.
+`scored_candidates.jsonl` preserves all candidates and individual scores;
+`rouge_raw.txt` preserves the Perl output. Add `--score-only` to the same
+command to rescore saved candidates without loading model weights.
