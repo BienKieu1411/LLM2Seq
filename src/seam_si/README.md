@@ -14,6 +14,35 @@ not IDs, identify requests and resume records. Output order follows HTTP
 completion order; every input row appears once. No validation/test file is
 read, and no training/weight update is started by these scripts.
 
+## Dependencies
+
+One requirements file lists the direct dependencies for SI generation with
+vLLM, CPU Perl ROUGE selection, AFMR fine-tuning and regression checks.
+Install it in the compatible Python/CUDA environment on the GPU server:
+
+```bash
+python3 -m pip install -r src/seam_si/requirements.txt
+```
+
+vLLM, Python ROUGE and PyROUGE have exact version pins. Other constraints
+follow the AFMR package requirements; this is not a full environment lockfile.
+pip must also satisfy vLLM's transitive Torch/CUDA requirements. This full
+requirements file is for the CUDA server, not the Mac verification environment.
+
+If that environment already trains/hosts SEAM successfully, no reinstall is
+required. SI uses no TRL dependency. `--score-workers` uses the Python standard
+library and independent Perl processes; no extra parallel-computing package
+is needed.
+
+The ROUGE Python wrapper does not install the Perl ROUGE-1.5.5 script or its
+data directory. Keep the existing local ROUGE installation and pass its path
+with `--rouge-path`. On Debian/Ubuntu, install the Perl modules if missing:
+
+```bash
+apt-get update
+apt-get install -y perl libxml-parser-perl libxml-dom-perl libdb-file-perl
+```
+
 ## One command, including an automatically started host
 
 Run from the repository root on the CUDA server, using its vLLM 0.25.1,

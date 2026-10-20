@@ -1,0 +1,17 @@
+# CUDA server: SI generation, Perl ROUGE selection, and AFMR fine-tuning.
+# vLLM resolves its own compatible Torch/CUDA dependencies.
+vllm==0.25.1
+torch>=2.6
+transformers>=5.19.0,<6
+accelerate>=1.2
+safetensors>=0.4
+PyYAML>=6.0
+numpy>=1.24
+rouge==1.0.0
+pyrouge==0.1.3
+
+# CPU regression checks.
+pytest>=8.0
+
+# Not installed by pip: Perl, XML::Parser, XML::DOM, DB_File,
+# and the local ROUGE-1.5.5 script/data directory (see README.md).
