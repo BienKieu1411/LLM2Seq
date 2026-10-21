@@ -126,7 +126,7 @@ def managed_seam_server(args, model_dir: Path, config_path: Path, checkpoint_pat
     env = os.environ.copy()
     if getattr(args, "gpu_id", None) is not None:
         env["CUDA_VISIBLE_DEVICES"] = str(args.gpu_id)
-    if args.disable_flashinfer_sampler:
+    if getattr(args, "disable_flashinfer_sampler", False):
         env["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
     package_root = EVALUATION_DIR.parent / "eviseq_new"
     env["PYTHONPATH"] = str(package_root) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
