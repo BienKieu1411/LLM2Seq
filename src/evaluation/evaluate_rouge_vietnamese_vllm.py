@@ -684,6 +684,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--rouge-path", type=Path, default=rouge_eval.ROUGE_PATH)
     parser.add_argument("--allow-missing", action="store_true")
     parser.add_argument("--keep-temp", type=Path, default=None)
+    parser.add_argument(
+        "--skip-scoring",
+        "--no-score",
+        "--generate-only",
+        dest="skip_scoring",
+        action="store_true",
+        help="Generate predictions only; do not run ROUGE scoring",
+    )
     args = parser.parse_args(argv)
     args.backend = args.backend or (
         "http" if args.start_server or args.base_url or not (args.afmr_config or args.afmr_checkpoint) else "local"
@@ -768,12 +776,13 @@ def main() -> int:
         return 2
 
     rouge_path = args.rouge_path.expanduser().resolve()
-    try:
-        rouge_eval.validate_rouge_install(rouge_path)
-        import pyrouge  # noqa: F401
-    except (ImportError, OSError) as exc:
-        print(f"ERROR: ROUGE-1.5.5 dependency unavailable: {exc}", file=sys.stderr)
-        return 2
+    if not args.skip_scoring:
+        try:
+            rouge_eval.validate_rouge_install(rouge_path)
+            import pyrouge  # noqa: F401
+        except (ImportError, OSError) as exc:
+            print(f"ERROR: ROUGE-1.5.5 dependency unavailable: {exc}", file=sys.stderr)
+            return 2
 
     max_num_seqs = args.max_num_seqs if args.max_num_seqs is not None else args.batch_size
     local_memory = 0.90 if args.gpu_memory_utilization is None else args.gpu_memory_utilization
@@ -839,14 +848,17 @@ def main() -> int:
                 }
             )
         generation["existing_predictions_reused"] = generation["reused"] > 0
-        score_and_report(
-            model_name,
-            pairs,
-            model_dir,
-            rouge_path,
-            args.keep_temp,
-            generation,
-        )
+        if not args.skip_scoring:
+            score_and_report(
+                model_name,
+                pairs,
+                model_dir,
+                rouge_path,
+                args.keep_temp,
+                generation,
+            )
+        else:
+            print(f"\n[INFO] Predictions saved to {model_dir}. Skipping ROUGE scoring as requested (--skip-scoring).")
     except (ImportError, OSError, ValueError, RuntimeError, NotImplementedError) as exc:
         print(f"ERROR during SEAM vLLM evaluation: {exc}", file=sys.stderr)
         return 2
