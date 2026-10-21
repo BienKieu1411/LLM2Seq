@@ -126,6 +126,8 @@ def managed_seam_server(args, model_dir: Path, config_path: Path, checkpoint_pat
     env = os.environ.copy()
     if getattr(args, "gpu_id", None) is not None:
         env["CUDA_VISIBLE_DEVICES"] = str(args.gpu_id)
+    if args.disable_flashinfer_sampler:
+        env["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
     package_root = EVALUATION_DIR.parent / "eviseq_new"
     env["PYTHONPATH"] = str(package_root) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env.update(VLLM_USE_V2_MODEL_RUNNER="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
@@ -643,6 +645,17 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--gpu-memory-utilization", type=float, default=None, help="Local backend/auto host only; defaults to 0.90"
     )
+    parser.add_argument(
+        "--attention-backend",
+        choices=("auto", "FLASH_ATTN", "TRITON_ATTN", "FLASHINFER"),
+        default=None,
+        help="Attention backend for an automatically started SEAM vLLM host",
+    )
+    parser.add_argument(
+        "--disable-flashinfer-sampler",
+        action="store_true",
+        help="Set VLLM_USE_FLASHINFER_SAMPLER=0 for an automatically started host",
+    )
     parser.add_argument("--max-input-tokens", type=int, default=None, help="Encoder token cap including its prefix")
     parser.add_argument(
         "--encoder-max-batch-tokens",
@@ -687,6 +700,8 @@ def parse_args(argv=None) -> argparse.Namespace:
             parser.error("--start-server requires --afmr-config and --afmr-checkpoint")
         if not 1 <= args.server_port <= 65535 or not args.startup_timeout > 0:
             parser.error("server-port must be in [1, 65535] and startup-timeout must be positive")
+    elif args.attention_backend is not None or args.disable_flashinfer_sampler:
+        parser.error("Attention/sampler overrides apply to an automatically started host; use --start-server")
     if args.backend == "local":
         if not args.afmr_config or not args.afmr_checkpoint:
             parser.error("Local evaluation requires --afmr-config and --afmr-checkpoint")

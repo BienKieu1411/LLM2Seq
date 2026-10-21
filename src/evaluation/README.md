@@ -56,6 +56,26 @@ to this evaluator. Resumable intermediate JSONL files are kept under the
 model's hidden `.afmr_work/` directory. Use `--overwrite-predictions` to
 regenerate summaries instead of reusing existing per-file predictions.
 
+### Generate with SEAM's local vLLM HTTP host
+
+The Vietnamese vLLM evaluator can start its own SEAM HTTP host. If FlashInfer
+fails during JIT kernel compilation on startup, select another attention
+backend and disable its separate sampling kernel:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python3 src/evaluation/evaluate_rouge_vietnamese_vllm.py \
+  --backend http --start-server \
+  --afmr-config /path/to/resolved_config.yaml \
+  --afmr-checkpoint /path/to/last.pt \
+  --attention-backend FLASH_ATTN \
+  --disable-flashinfer-sampler \
+  --model-name seam_vllm_test --batch-size 16
+```
+
+These options affect only a host started by this command. For an already
+running external host, set the backend and `VLLM_USE_FLASHINFER_SAMPLER=0`
+when launching `seam_vllm.serve` instead.
+
 ## BERTScore with a local model
 
 `evaluate_bertscore.py` requires an existing Hugging Face model directory and
