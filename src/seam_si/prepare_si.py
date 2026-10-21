@@ -25,7 +25,9 @@ def parse_args():
         "--checkpoint", type=Path, help="Auto host: local .pt; existing host: verify checkpoint identity"
     )
     parser.add_argument("--start-server", action="store_true")
-    parser.add_argument("--gpus", help="Two independent host GPUs, e.g. 0,1; requires --start-server")
+    parser.add_argument(
+        "--gpus", help="Comma-separated allocated host GPUs, e.g. 0 or 0,1,2,3; requires --start-server"
+    )
     parser.add_argument("--shard-rank", type=int, default=0, help="Worker-only contiguous shard rank")
     parser.add_argument("--num-shards", type=int, default=1, help="Worker-only shard count")
     parser.add_argument("--server-port", type=int, default=8000)
@@ -66,10 +68,14 @@ def parse_args():
         parser.error("Shard workers require --stage predict and no --gpus; merge before selection")
     if args.gpus:
         gpu_ids = [value.strip() for value in args.gpus.split(",")]
-        if len(gpu_ids) != 2 or not all(gpu_ids) or len(set(gpu_ids)) != 2:
-            parser.error("--gpus must name two distinct GPUs, e.g. 0,1")
+        if not all(gpu_ids) or len(set(gpu_ids)) != len(gpu_ids):
+            parser.error("--gpus must name one or more distinct GPUs, e.g. 0 or 0,1,2,3")
+        if args.stage not in ("all", "predict"):
+            parser.error("--gpus applies only to prediction stages")
         if args.stage in ("all", "predict") and not args.start_server:
             parser.error("--gpus requires --start-server")
+        if args.server_port + len(gpu_ids) - 1 > 65535:
+            parser.error(f"{len(gpu_ids)} hosts from --server-port would exceed port 65535")
     if (
         min(
             args.batch_size,
@@ -92,8 +98,6 @@ def parse_args():
         parser.error("Require 0 < gpu-memory-utilization < 1 and positive timeouts")
     if not 1 <= args.server_port <= 65535:
         parser.error("--server-port must be in [1, 65535]")
-    if args.gpus and args.server_port == 65535:
-        parser.error("Two hosts need --server-port <= 65534; second host uses port+1")
     args.output_dir = args.output_dir.expanduser().resolve()
     return args
 
@@ -102,9 +106,9 @@ def main():
     args = parse_args()
     if args.stage in ("all", "predict"):
         if args.gpus:
-            from parallel import predict_two_gpu
+            from parallel import predict_multi_gpu
 
-            predict_two_gpu(args)
+            predict_multi_gpu(args)
         else:
             from prediction import predict
 

@@ -17,8 +17,9 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import si_common
-from parallel import merge_shards, predict_two_gpu
+from parallel import merge_shards, predict_multi_gpu, predict_two_gpu
 from prediction import predict
+from prepare_si import parse_args
 from selection import best_rouge2, select
 
 
@@ -41,6 +42,9 @@ class SIIntegration(unittest.TestCase):
             train_file=self.train,
             output_dir=self.root / "si",
             start_server=False,
+            server_port=8012,
+            server_log=None,
+            attention_backend="FLASH_ATTN",
             checkpoint=None,
             server_model="seam",
             api_key=None,
@@ -278,6 +282,28 @@ class SIIntegration(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source is not dropped"):
             best_rouge2(row)
 
+    def test_cli_accepts_one_or_four_allocated_gpus(self):
+        for gpu_list in ("3", "0,1,2,3"):
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "prepare_si.py",
+                    "--stage",
+                    "predict",
+                    "--config",
+                    "resolved_config.yaml",
+                    "--checkpoint",
+                    "teacher.pt",
+                    "--output-dir",
+                    "si-output",
+                    "--gpus",
+                    gpu_list,
+                    "--start-server",
+                ],
+            ):
+                self.assertEqual(parse_args().gpus, gpu_list)
+
     def run_shards(self):
         for rank in range(2):
             args = copy.copy(self.args)
@@ -375,6 +401,71 @@ class SIIntegration(unittest.TestCase):
         self.assertEqual(len(self.calls), 3)
         merged = list(si_common.read_rows(self.args.output_dir / "candidates.jsonl"))
         self.assertEqual(sorted(row["row_index"] for row in merged), [0, 1, 2])
+
+    def test_coordinator_adapts_to_one_allocated_gpu(self):
+        self.args.gpus, self.args.start_server = "3", True
+        self.args.checkpoint = self.root / "teacher.pt"
+        self.args.checkpoint.write_bytes(b"not real model weights")
+        self.info["checkpoint"] = {"path": str(self.args.checkpoint.resolve())}
+        hosts = []
+
+        @contextmanager
+        def fake_host(child, *_):
+            hosts.append(
+                (child.gpu_id, child.server_port, getattr(child, "shard_rank", 0), getattr(child, "num_shards", 1))
+            )
+            register_host = getattr(child, "on_server_started", None)
+            if register_host is not None:
+                register_host(SimpleNamespace(pid=100000, poll=lambda: 0))
+            yield self.args.base_url
+
+        with (
+            patch("eviseq_afmr.config.load_config", return_value=self.config),
+            patch("prediction.managed_seam_server", fake_host),
+        ):
+            predict_multi_gpu(self.args)
+
+        self.assertEqual(hosts, [("3", 8012, 0, 1)])
+        self.assertEqual(len(self.calls), 3)
+        self.assertFalse((self.args.output_dir / "shard0").exists())
+        rows = list(si_common.read_rows(self.args.output_dir / "candidates.jsonl"))
+        self.assertEqual(sorted(row["row_index"] for row in rows), [0, 1, 2])
+
+    def test_coordinator_balances_four_gpu_shards_and_merges_all_rows(self):
+        self.train.write_text(
+            "".join(
+                si_common.json_line({"id": f"id-{i}", "text": f"source {i}", "summary": f"gold {i} ,"})
+                for i in range(4)
+            ),
+            encoding="utf-8",
+        )
+        self.args.gpus, self.args.start_server = "0,1,2,3", True
+        self.args.checkpoint = self.root / "teacher.pt"
+        self.args.checkpoint.write_bytes(b"not real model weights")
+        self.info["checkpoint"] = {"path": str(self.args.checkpoint.resolve())}
+        barrier, hosts = threading.Barrier(4), []
+
+        @contextmanager
+        def fake_host(child, *_):
+            hosts.append((child.gpu_id, child.server_port, child.shard_rank, child.num_shards))
+            child.on_server_started(SimpleNamespace(pid=100000 + child.shard_rank, poll=lambda: 0))
+            barrier.wait(timeout=5)
+            yield self.args.base_url
+
+        with (
+            patch("eviseq_afmr.config.load_config", return_value=self.config),
+            patch("prediction.managed_seam_server", fake_host),
+        ):
+            predict_multi_gpu(self.args)
+
+        self.assertEqual(
+            set(hosts),
+            {(str(gpu), 8012 + gpu, gpu, 4) for gpu in range(4)},
+        )
+        self.assertEqual(len(self.calls), 4)
+        merged = list(si_common.read_rows(self.args.output_dir / "candidates.jsonl"))
+        self.assertEqual(sorted(row["row_index"] for row in merged), [0, 1, 2, 3])
+        self.assertFalse((self.args.output_dir / "shard4").exists())
 
     def test_coordinator_failure_cancels_owned_hosts_and_never_merges(self):
         self.args.gpus, self.args.server_port, self.args.server_log = "0,1", 8012, None

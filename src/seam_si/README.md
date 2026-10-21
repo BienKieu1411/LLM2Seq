@@ -74,14 +74,14 @@ avoid the incompatible FlashInfer cache encountered on the server.
 The host's config/checkpoint remain unchanged throughout this single SI round.
 This pipeline does not sync weights or run GRPO during generation.
 
-## Two GPUs: one host per GPU, half the train rows each
+## Adapt to the allocated GPU count
 
 ```bash
-GPU_IDS=0,1 bash src/seam_si/scripts/run_si_two_gpu.sh \
+GPU_IDS=0,1,2,3 bash src/seam_si/scripts/run_si_multi_gpu.sh \
   --config src/eviseq_new/runs/afmr/train/resolved_config.yaml \
   --checkpoint src/eviseq_new/runs/afmr/train/epoch_004.pt \
   --train-file src/eviseq_new/datasets/grpo_rouge/train.jsonl \
-  --output-dir src/eviseq_new/datasets/si_rouge2_two_gpu \
+  --output-dir src/eviseq_new/datasets/si_rouge2_multi_gpu \
   --server-port 8012 \
   --temperature 1.0 --top-p 1.0 --top-k 0 \
   --max-new-tokens 1024 \
@@ -89,40 +89,44 @@ GPU_IDS=0,1 bash src/seam_si/scripts/run_si_two_gpu.sh \
   --attention-backend FLASH_ATTN
 ```
 
-The script starts two independent hosts concurrently: GPU 0 on port 8012,
-GPU 1 on 8013. Each host loads the same complete teacher checkpoint with
-tensor parallel size 1. Sources are divided into contiguous halves by
-nonblank input-row index. With N rows, shard 0 gets `[0, floor(N/2))`, shard 1
-gets `[floor(N/2), N)`. The original train file is read directly; no intermediate
-train copies are needed. Every source still produces eight candidates. The
-source seed is `seed + original_row_index`, independent of GPU/shard assignment.
-Small floating-point differences across serving batches can still affect samples.
+Pass the allocated GPU IDs through `GPU_IDS`; if it is unset, the wrapper uses
+`CUDA_VISIBLE_DEVICES`, then falls back to the GPUs reported by `nvidia-smi`.
+The same command supports one GPU as well as multiple GPUs. With one GPU, it
+runs the normal single-host prediction directly. With G GPUs, it starts G
+independent hosts concurrently, each with tensor parallel size 1, and assigns
+host r to port `server-port + r`. Make sure these consecutive ports are free.
 
-`--batch-size 8` and `--max-num-seqs 64` apply **per GPU**: up to eight sources /
-64 candidate sequences per host. `GPU_IDS` can also contain the two GPU UUIDs;
-if omitted, the wrapper uses `CUDA_VISIBLE_DEVICES`, falling back to `0,1`.
+For multiple GPUs, sources are split into contiguous, near-equal ranges by
+nonblank input-row index: GPU r gets
+`[floor(N*r/G), floor(N*(r+1)/G))`. The original train file is read directly;
+no intermediate train copies are needed. Every source still produces eight
+candidates. Its seed is `seed + original_row_index`, independent of GPU
+assignment. Small floating-point differences across serving batches can still
+affect samples. The train set must have at least one source per GPU.
 
-Each GPU saves/resumes its own `shard0/` or `shard1/` directory. The two host
-logs are `<output>/shard0/seam_vllm_server.log` and
-`<output>/shard1/seam_vllm_server.log`. After both workers and hosts exit,
-the parent verifies the teacher/config/sampling identities and merges exactly
-N unique row indices into `<output>/candidates.jsonl`. Perl selection then
-creates the same final `train_si.jsonl` layout as the single-GPU pipeline.
-If either GPU fails, owned hosts are stopped, completed predictions are kept,
-and merging/scoring do not run. Rerun the same command to resume both shards.
+`--batch-size 8`, `--max-num-seqs 64`, and GPU memory utilization apply
+**per GPU**. Each GPU saves/resumes its own `shard0/` through `shard(G-1)/`
+directory. Its server log is saved in the corresponding shard directory. Once
+all workers finish, the parent verifies the teacher/config/sampling identity,
+then merges exactly N unique rows into `<output>/candidates.jsonl`. Perl
+selection creates the same final `train_si.jsonl` layout as the single-GPU
+pipeline. If any GPU fails, owned hosts stop, completed predictions remain
+available, and merging/scoring do not run. Rerun the same command with the same
+GPU count to resume. Use a fresh output directory if the GPU count changes.
 
 If prediction finished but merging was interrupted, merge on CPU without hosts:
 
 ```bash
 bash src/seam_si/scripts/run_si.sh --stage merge \
-  --output-dir src/eviseq_new/datasets/si_rouge2_two_gpu
+  --output-dir src/eviseq_new/datasets/si_rouge2_multi_gpu
 bash src/seam_si/scripts/run_si.sh --stage select \
-  --output-dir src/eviseq_new/datasets/si_rouge2_two_gpu
+  --output-dir src/eviseq_new/datasets/si_rouge2_multi_gpu
 ```
 
-Use `--stage predict` with the two-GPU wrapper to generate and merge without
-scoring yet. Worker-level `--shard-rank` / `--num-shards` flags are only for
-manual prediction dispatch; a shard cannot be selected as a full training set.
+The legacy `run_si_two_gpu.sh` wrapper remains available for existing commands;
+its `GPU_IDS` value now accepts any allocated GPU count. Worker-level
+`--shard-rank` / `--num-shards` flags are only for manual prediction dispatch;
+a partial shard cannot be selected as a full training set.
 Update the shared HTTP-host helper along with this folder so its subprocess
 environment pins each host to its assigned GPU.
 

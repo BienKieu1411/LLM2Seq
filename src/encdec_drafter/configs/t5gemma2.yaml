@@ -1,0 +1,64 @@
+target:
+  checkpoint: ../../../src/runs/t5gemma2_1b_1b_full_pubmed_4096/final_model
+  identity: null
+  tokenizer: null
+  local_files_only: true
+  trust_remote_code: false
+  device: cuda
+  dtype: bfloat16
+  attn_implementation: null
+
+data:
+  training_file: ../../../src/eviseq_new/datasets/pubmed/train.jsonl
+  validation_file: ../../../src/eviseq_new/datasets/pubmed/validation.jsonl
+  test_file: ../../../src/eviseq_new/datasets/pubmed/test.jsonl
+  id_field: id
+  source_field: text
+  target_field: summary
+  detokenize: true
+  source_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
+  max_source_tokens: 4096
+
+generation:
+  max_new_tokens: 512
+  min_new_tokens: 32
+  repetition_penalty: 1.05
+  no_repeat_ngram_size: 3
+  temperature: 0.0
+  top_k: 0
+  top_p: 1.0
+  num_beams: 1
+
+draft:
+  width: 256
+  layers: 2
+  heads: 4
+  ffn_width: 1024
+  max_block_size: 8
+  target_feature_window: 64
+  max_source_tokens: 4096
+  checkpoint: null
+
+source_memory:
+  mode: full
+  budget: 256
+
+speculation:
+  block_size: 4
+
+training:
+  trace_file: ../../../runs/encdec_drafter/teacher_traces.jsonl
+  output_checkpoint: ../../../runs/encdec_drafter/last.pt
+  steps: 1000
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  seed: 42
+  log_every: 10
+  save_every: 100
+  max_grad_norm: 1.0
+
+benchmark:
+  output_dir: ../../../runs/encdec_drafter/benchmark
+  warmup: 1
+  repeats: 3
+

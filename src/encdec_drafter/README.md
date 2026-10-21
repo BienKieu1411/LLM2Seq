@@ -1,11 +1,38 @@
-# Encoder-decoder drafter prototype
+# T5Gemma2 inference drafter
 
-This directory starts the final-source-memory drafter prototype from the implementation plan. The Colab notebook trains a small draft module against the frozen T5Gemma 2 1B-1B teacher and checks greedy speculative decoding on a small CNN/DailyMail slice.
+This package is the first runtime implementation from the T5Gemma2 acceleration plan. It keeps the target checkpoint frozen and uses its native encoder, decoder, tokenizer, and output head. The first runtime supports one request at a time, greedy generation, full target source attention, a compact parallel drafter, and transactional target-cache rollback.
 
-## Colab
+## Requirements
 
-Open `colab/t5gemma2_drafter.ipynb` in Google Colab with a GPU runtime. Before running it, accept the Gemma license for `google/t5gemma-2-1b-1b` on Hugging Face and authenticate with a Hugging Face token that can read the gated model. The notebook does not contain or save a token.
+Use the project environment on Mac for code work. The target checkpoint and tokenizer must exist locally; remote model loading is disabled. The Mac does not need a copy of the target model to edit this package. Runtime expects PyTorch with the appropriate device build, Transformers 5.14.1, and PyYAML. Avoid allowing package installation to replace a working CUDA PyTorch build.
 
-It downloads 128 CNN/DailyMail training articles and 32 validation articles, generates teacher continuations, trains only the small drafter, and saves its checkpoint under `/content/t5gemma2_drafter/`. The teacher remains frozen. CNN/DailyMail references are not used as teacher targets: the drafter learns to predict the frozen teacher's own greedy outputs.
+Install the package without replacing the environment's PyTorch or Transformers build:
 
-This is the plan's final-memory prototype. It does not yet capture a live intermediate encoder state or overlap drafting with the encoder. The notebook reports token equality and draft acceptance diagnostics, not a production speedup. Exact token equality with ordinary greedy generation is a prerequisite before implementing and benchmarking a KV-cache-aware verifier.
+```bash
+python -m pip install --no-deps -e src/encdec_drafter
+```
+
+## Prepare a local config
+
+The sample config follows the repository's current PubMed T5Gemma2 evaluation settings, including its prompt, detokenization, 4096-token source cap, 512-token output cap, minimum output length, repetition penalty, and trigram blocking. Point `target.checkpoint` at the same locally available fine-tuned checkpoint used by the baseline. For another dataset, copy the prompt, source/output limits, and greedy decoding settings from its matching file under `src/T5Gemma/configs/`. Data paths in YAML resolve relative to that YAML file; paths passed on the command line resolve relative to the current shell directory.
+
+```bash
+python -m encdec_drafter profile --config src/encdec_drafter/configs/t5gemma2.yaml
+python -m encdec_drafter collect-traces --config src/encdec_drafter/configs/t5gemma2.yaml --output "$PWD/runs/encdec_drafter/traces.jsonl" --limit 128
+python -m encdec_drafter train --config src/encdec_drafter/configs/t5gemma2.yaml --traces "$PWD/runs/encdec_drafter/traces.jsonl"
+python -m encdec_drafter benchmark --config src/encdec_drafter/configs/t5gemma2.yaml --draft-checkpoint "$PWD/runs/encdec_drafter/last.pt" --limit 32 --repeats 3
+```
+
+On Mac, activate `~/bienkieu_env` before running Python. If the drafter is trained on one machine and evaluated against an identical copy of the target checkpoint on another, set the same explicit `target.identity` in both configs; otherwise the local checkpoint metadata fingerprint must match.
+
+The target remains the verifier. The drafter proposes a block from the final source memory, the pending token, and only already-processed target features. Unsupported sampling and beam search fail explicitly. The initial cache stores full decoder history so that rejection can be rolled back safely even for local-attention layers; this uses more memory than the native sliding cache and is a correctness implementation, not a claim of speedup.
+
+## Colab smoke pilot
+
+`colab/t5gemma2_pubmed_l4_colab_cli.ipynb` runs the frozen base `google/t5gemma-2-1b-1b` checkpoint on an L4 through Colab CLI. It downloads weights only to the Colab VM and uses 8 train examples, 4 validation examples, a 4096-token source cap, 64 generated tokens, and 32 drafter updates. The saved run is in `runs/colab_cli_l4_20261021_230721/`.
+
+This smoke run did not pass the correctness gate: target-only decoding matched native generation, but speculative generation had 50% exact sequence parity over four examples. The median raw speed ratio was 0.874x, and proposal acceptance was below 1% across the timed sample. Since token parity failed, the timing is diagnostic only and is not evidence of acceleration. The detailed token IDs and first mismatch positions are in the run's `benchmark/*/requests.jsonl`.
+
+## Current limits
+
+The runtime is deliberately single-request and greedy. It does not yet include a custom merged-attention kernel, CUDA graphs, a serving scheduler, adaptive source budgets, sampling, or multi-GPU execution. No speedup claim is supported until speculative decoding achieves exact token parity and beats native cached `generate` on a representative validation set.
