@@ -256,13 +256,19 @@ class T5Gemma2Adapter:
         )
         return output.last_hidden_state
 
-    def native_generate(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    def native_generate(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        max_new_tokens: Optional[int] = None,
+    ) -> torch.Tensor:
         generation = self.config["generation"]
+        effective_max_new_tokens = int(max_new_tokens if max_new_tokens is not None else generation["max_new_tokens"])
         kwargs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "max_new_tokens": int(generation["max_new_tokens"]),
-            "min_new_tokens": int(generation.get("min_new_tokens", 0)),
+            "max_new_tokens": effective_max_new_tokens,
+            "min_new_tokens": min(int(generation.get("min_new_tokens", 0)), effective_max_new_tokens),
             "do_sample": False,
             "num_beams": 1,
             "repetition_penalty": float(generation.get("repetition_penalty", 1.0)),

@@ -158,7 +158,327 @@ bash scripts/prepare_afmr.sh --dataset booksum \
   --source-field chapter --target-field summary_text --id-field chapter_id
 ```
 
-## A100 training/evaluation
+## Training guide
+
+This section shows the direct training path for `eviseq_new`. The commands use
+the source-tree entry point, so they do not require installing this project as
+a package. Run them from `src/eviseq_new`; replace every example model and data
+path with a path that exists on the machine running the job. For offline
+training, set the model paths to local checkpoint directories. The generic
+runner does not prepare datasets or copy pretrained weights into the project.
+
+### 1. Check the Python environment
+
+Use the Python environment that already contains a CUDA-enabled PyTorch build
+and the required Transformers version. The project metadata requires Python
+3.10 or newer, PyTorch 2.6 or newer, Transformers `>=5.19,<6`, Accelerate,
+PyYAML, NumPy, Safetensors, and `rouge==1.0.0`. On a managed GPU server, do not replace
+its CUDA PyTorch build just to install the source package. If the dependencies
+are already installed, the scripts work directly from this checkout:
+
+```bash
+cd /path/to/LLM2Seq/src/eviseq_new
+export PYTHON=/path/to/your/environment/bin/python
+"$PYTHON" -m pip show torch transformers accelerate pyyaml numpy safetensors rouge
+```
+
+If you want the `eviseq-afmr` console command, install the source package into
+that environment after its runtime dependencies are available:
+
+```bash
+"$PYTHON" -m pip install -e . --no-deps
+```
+
+The examples below use `scripts/run_afmr.sh`, which sets `PYTHONPATH` for the
+source tree and invokes `run_afmr.py` with the selected Python executable.
+
+### 2. Prepare the dataset
+
+The dataloader expects one JSON object per line. The default canonical fields
+are `id`, `text`, and `summary`; set `data.id_field`, `data.source_field`, and
+`data.target_field` in the task config if your JSONL uses different names.
+Keep separate `train.jsonl`, `validation.jsonl`, and `test.jsonl` files when
+available. `validation` is the split name used by the trainer; `val` is only
+accepted as an input filename by the dataset preparation utility.
+
+For a supported benchmark, create canonical splits from the downloaded raw
+files. The preparation command writes the three JSONL files and a report under
+the output directory:
+
+```bash
+PYTHON="$PYTHON" bash scripts/prepare_afmr.sh \
+  --dataset pubmed \
+  --input-dir /data/pubmed/raw \
+  --output-dir datasets/pubmed
+```
+
+Replace `pubmed` with `arxiv`, `cnndm`, `wikilingua`, `booksum`, or
+`govreport` as needed. The input directory must contain that dataset's
+downloaded split files. Field names can be supplied with `--source-field`,
+`--target-field`, and `--id-field`. Preparation checks duplicate IDs and
+cross-split source leakage by default; the report records skipped rows.
+
+For an existing JSONL with noncanonical keys, convert a single file to the
+canonical schema before training:
+
+```bash
+PYTHON="$PYTHON" bash scripts/run_afmr.sh prepare \
+  /data/custom/train.jsonl datasets/custom/train.jsonl \
+  --source-field input --target-field abstract_sum --id-field id --detokenize
+```
+
+Repeat this for validation and test if they also need conversion. If there is
+only a training file, use the train-only mode described below; it deliberately
+does not calculate validation metrics or create a validation-selected
+`best.pt`.
+
+### 3. Create a task config
+
+Task configs inherit the shared architecture and optimizer defaults from
+`configs/afmr_base.yaml`. Start from the closest task recipe rather than
+editing the shared base in place:
+
+```bash
+cp configs/afmr_pubmed.yaml configs/my_task.yaml
+```
+
+Edit `configs/my_task.yaml` and set the local encoder/decoder checkpoint
+directories, split paths, run directory, prompt, sequence limits, and batch
+settings. For example:
+
+```yaml
+_base_: afmr_base.yaml
+
+experiment:
+  name: my_task
+  output_dir: runs/afmr/my_task
+
+model:
+  encoder_name: /models/local-encoder
+  decoder_name: /models/local-causal-decoder
+
+data:
+  train_file: datasets/my_task/train.jsonl
+  validation_file: datasets/my_task/validation.jsonl
+  test_file: datasets/my_task/test.jsonl
+  source_field: text
+  target_field: summary
+  id_field: id
+  max_source_length: 4096
+  max_target_length: 512
+
+training:
+  interface_warmup_epochs: 1
+  full_finetune_epochs: 4
+  batch_size: 4
+  gradient_accumulation_steps: 8
+  validation_batch_size: 4
+  max_grad_norm: 1.0
+  lr_scheduler: cosine
+  save_each_epoch: true
+  save_best: true
+
+generation:
+  batch_size: 16
+  max_new_tokens: 512
+```
+
+Keep the prompts and preprocessing fixed between training and evaluation.
+`max_source_length` and `max_target_length` control training truncation;
+`generation.max_new_tokens` is a separate inference limit. Do not increase
+these limits without checking tokenizer lengths and GPU memory. Paths in
+configs bundled under `configs/` are resolved relative to `eviseq_new/`; an
+external config resolves relative paths from its own directory.
+
+Validate the merged config before loading any model:
+
+```bash
+PYTHON="$PYTHON" bash scripts/run_afmr.sh validate-config configs/my_task.yaml
+```
+
+### 4. Train on one GPU
+
+The task config controls the warm-up/full-finetuning split, batch size,
+accumulation, optimizer rates, clipping, data paths, and output directory.
+The standard command is:
+
+```bash
+PYTHON="$PYTHON" CUDA_VISIBLE_DEVICES=0 \
+  bash scripts/run_afmr.sh train configs/my_task.yaml
+```
+
+The CLI can override common resource settings without editing the YAML. These
+overrides apply to this run and are saved into `resolved_config.yaml`:
+
+```bash
+PYTHON="$PYTHON" CUDA_VISIBLE_DEVICES=0 \
+  bash scripts/run_afmr.sh train configs/my_task.yaml \
+  --batch-size 8 --gradient-accumulation 4 --output-dir runs/afmr/my_task_b8a4
+```
+
+`--epochs N` means **N full-finetuning epochs with interface warm-up disabled**;
+it overrides the two stage counts in the config. Omit it when you want the
+configured warm-up followed by full fine-tuning. To run a bounded pipeline
+check before committing to a full job, use `--max-train-examples` and
+`--max-validation-examples`, or use `scripts/smoke_a100.sh` with the local
+checkpoint paths configured.
+
+The usual schedule has two stages. During `interface_warmup_epochs`, only the
+bridge and decoder cross-attention are trainable. During
+`full_finetune_epochs`, the encoder and decoder are unfrozen as well. The
+objective is token-level cross-entropy. Each stage uses the configured
+learning-rate schedule (`cosine` by default), and optimizer moments are carried
+from warm-up into full fine-tuning. Parameters and optimizer state are FP32;
+CUDA matrix operations use BF16 autocast by default. `max_grad_norm` clips the
+global gradient norm before every optimizer update. The logged `grad` value is
+the norm measured before clipping, so it can be larger than the configured
+limit even though clipping is active.
+
+### 5. Train on multiple GPUs with DDP
+
+Training uses DistributedDataParallel: each GPU holds a full model replica and
+processes a different part of the batch. It is not model parallelism. Launch
+one process per visible GPU with `torch.distributed.run`:
+
+```bash
+cd /path/to/LLM2Seq/src/eviseq_new
+export PYTHON=/path/to/your/environment/bin/python
+export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+CUDA_VISIBLE_DEVICES=0,1 "$PYTHON" -m torch.distributed.run \
+  --standalone --nproc_per_node=2 run_afmr.py train configs/my_task.yaml
+```
+
+For four GPUs, set `CUDA_VISIBLE_DEVICES=0,1,2,3` and
+`--nproc_per_node=4`. The IDs in `CUDA_VISIBLE_DEVICES` can be physical server
+IDs such as `4,5,6,7`; inside each process they are remapped to `cuda:0` through
+`cuda:3`.
+
+The approximate effective global batch is:
+
+```text
+per-GPU batch_size × gradient_accumulation_steps × number_of_GPUs
+```
+
+For example, batch 4 × accumulation 8 on two GPUs is approximately 64
+examples per optimizer update. If a run runs out of memory, first lower the
+per-GPU `batch_size`; increase accumulation if you want to keep a similar
+effective batch. Long-context datasets need substantially smaller per-GPU
+batches than PubMed. Use a fresh output directory for each independent run.
+
+### 6. Resume, initialize, or train without validation
+
+Use `--resume-checkpoint` to continue the same run from a full checkpoint. It
+restores model, optimizer, scheduler, epoch/step, and saved training state. Use
+the run's `resolved_config.yaml` as the config so model structure and data
+settings match the checkpoint. This resumes at the next epoch. Do not pass
+`--overwrite-output-dir` when resuming. To extend a run beyond its configured
+epoch count, copy `resolved_config.yaml`, increase the relevant stage count in
+the copy, and pass that config with `--resume-checkpoint`. An optional new
+`--output-dir` keeps the extended run's artifacts separate.
+
+```bash
+PYTHON="$PYTHON" CUDA_VISIBLE_DEVICES=0 \
+  bash scripts/run_afmr.sh train runs/afmr/my_task/resolved_config.yaml \
+  --resume-checkpoint runs/afmr/my_task/last.pt
+```
+
+Use `--init-checkpoint` when a new training phase should start from existing
+weights but get a fresh optimizer, scheduler, epoch counter, and validation
+best score. This is appropriate for a new dataset or a deliberate new phase;
+choose a new output directory. `--resume-checkpoint` and `--init-checkpoint`
+are mutually exclusive:
+
+```bash
+PYTHON="$PYTHON" CUDA_VISIBLE_DEVICES=0 \
+  bash scripts/run_afmr.sh train configs/new_phase.yaml \
+  --init-checkpoint runs/afmr/my_task/best.pt \
+  --output-dir runs/afmr/new_phase
+```
+
+For a single training file with no validation split, use:
+
+```bash
+PYTHON="$PYTHON" CUDA_VISIBLE_DEVICES=0 \
+  bash scripts/run_afmr.sh train configs/my_task.yaml \
+  --train-file /data/custom/train.jsonl --train-only
+```
+
+Train-only mode skips validation entirely. Evaluate a chosen checkpoint
+separately if you have a held-out set. A directory with existing `.pt`
+checkpoints is protected from accidental reuse; prefer a new `--output-dir`.
+`--overwrite-output-dir` explicitly deletes run checkpoint/JSON artifacts and
+the resolved config before starting fresh.
+
+### 7. Evaluate a checkpoint
+
+Evaluate the selected checkpoint with the exact resolved config from its run.
+Greedy decoding is the default; use a new prediction filename for a different
+checkpoint or decoding setting:
+
+```bash
+RUN=runs/afmr/my_task
+PYTHON="${PYTHON:-python3}"
+PYTHON="$PYTHON" CUDA_VISIBLE_DEVICES=0 \
+  bash scripts/run_afmr.sh evaluate \
+  "$RUN/resolved_config.yaml" "$RUN/best.pt" "$RUN/test_predictions.jsonl" \
+  --split test --batch-size 16
+```
+
+Use `last.pt` when evaluating the final epoch. `best.pt` is only written when
+`training.save_best: true` and a validation split is available; it tracks the
+lowest validation cross-entropy, not ROUGE. `--batch-size` controls evaluation
+batch size independently from training. The generated JSONL is flushed batch
+by batch and can resume only when its existing ID/reference rows exactly match
+a prefix of the active split. Use a fresh output filename after changing the
+checkpoint, prompt, split, or generation parameters.
+
+For sampled candidate generation, opt in explicitly; temperature, top-k, and
+top-p affect evaluation generation only and do not change the training path:
+
+```bash
+PYTHON="$PYTHON" CUDA_VISIBLE_DEVICES=0 \
+  bash scripts/run_afmr.sh evaluate \
+  "$RUN/resolved_config.yaml" "$RUN/last.pt" "$RUN/candidates.jsonl" \
+  --split validation --do-sample --temperature 0.7 --top-k 50 --top-p 0.9
+```
+
+The built-in metrics use the Python `rouge==1.0.0` package. They are useful
+for quick comparisons but are not ROUGE-1.5.5. Use the separate project
+ROUGE-1.5.5 evaluator when reporting Perl ROUGE numbers.
+
+### 8. Evaluate one split on two GPUs
+
+Evaluation runs one process per shard rather than DDP. Give each process a
+different visible GPU and shard rank, then merge the JSONL files in dataset
+order. For long-form GovReport, the repository also provides
+`scripts/eval_govreport_checkpoint_2gpu.sh`.
+
+```bash
+RUN=runs/afmr/my_task
+OUT="$RUN/test_predictions.jsonl"
+CUDA_VISIBLE_DEVICES=0 PYTHON="$PYTHON" bash scripts/run_afmr.sh evaluate \
+  "$RUN/resolved_config.yaml" "$RUN/best.pt" "$OUT.shard0.jsonl" \
+  --split test --batch-size 4 --shard-rank 0 --num-shards 2 > "$OUT.shard0.log" 2>&1 &
+P0=$!
+CUDA_VISIBLE_DEVICES=1 PYTHON="$PYTHON" bash scripts/run_afmr.sh evaluate \
+  "$RUN/resolved_config.yaml" "$RUN/best.pt" "$OUT.shard1.jsonl" \
+  --split test --batch-size 4 --shard-rank 1 --num-shards 2 > "$OUT.shard1.log" 2>&1 &
+P1=$!
+STATUS=0
+wait "$P0" || STATUS=$?
+wait "$P1" || STATUS=$?
+if [ "$STATUS" -ne 0 ]; then
+  echo "At least one evaluation shard failed; inspect $OUT.shard0.log and $OUT.shard1.log." >&2
+  exit "$STATUS"
+fi
+PYTHONPATH=. "$PYTHON" scripts/merge_eval_shards.py \
+  --output "$OUT" "$OUT.shard0.jsonl" "$OUT.shard1.jsonl"
+```
+
+The merged file gets `<output>.metrics.json`. If either shard fails, inspect
+its log and rerun that exact shard; do not merge incomplete shards.
+
+## Dataset-specific training recipes
 
 Start from `configs/afmr_base.yaml`, copy it to a task recipe, and set only model locations, data files, lengths, batch resources, and output directory. The generic base uses one warm-up epoch and four full-finetuning epochs; benchmark recipes override this to match the corresponding T5Gemma total. WikiLingua uses six full-finetuning epochs with no warm-up. The benchmark defaults to greedy decoding (`num_beams: 1`, `do_sample: false`, `temperature: 0.0`, `top_k: 0`, `top_p: 1.0`), and training is CE-only.
 
@@ -169,8 +489,9 @@ PYTHON=/absolute/path/to/bienkieu_env/bin/python \
 
 PYTHON=/absolute/path/to/bienkieu_env/bin/python \
   CUDA_VISIBLE_DEVICES=0 bash scripts/run_afmr.sh evaluate \
-  configs/afmr_pubmed.yaml runs/afmr/pubmed_value_anchor_copy/last.pt \
-runs/afmr/pubmed_value_anchor_copy/test_predictions.jsonl --split test
+  runs/afmr/pubmed_value_anchor_copy/resolved_config.yaml \
+  runs/afmr/pubmed_value_anchor_copy/last.pt \
+  runs/afmr/pubmed_value_anchor_copy/test_predictions.jsonl --split test
 ```
 
 To train WikiLingua directly from the local pretrained encoder and decoder,
@@ -348,7 +669,7 @@ nucleus top-p; this path is never called during training:
 
 ```bash
 PYTHON=/absolute/path/to/bienkieu_env/bin/python \
-  bash scripts/run_afmr.sh evaluate configs/afmr_pubmed.yaml \
+  bash scripts/run_afmr.sh evaluate runs/afmr/pubmed_value_anchor_wide/resolved_config.yaml \
   runs/afmr/pubmed_value_anchor_wide/last.pt \
   runs/afmr/pubmed_value_anchor_wide/test_candidates.jsonl \
   --split test --do-sample --temperature 0.7 --top-k 50 --top-p 0.9
@@ -398,11 +719,25 @@ The benchmark recipes retain the exact T5Gemma encoder/source instruction. The Q
 
 Train a new checkpoint for the new prompt and architecture. Do not edit an old `resolved_config.yaml` and evaluate old weights as if they had been trained with these inputs. Changing `afmr_v1` to `afmr_value_anchor` is rejected by checkpoint compatibility checks; their parameter shapes alone do not imply semantic compatibility.
 
-The token-wise graph (`afmr_token_depth_lowrank_v3`) is intentionally incompatible with earlier document-wise AFMR checkpoints. Do not use `strict=False` to force-load those checkpoints. Train this graph from pretrained backbones in a separate output directory. New token-wise checkpoints resume normally.
+Checkpoint metadata records the graph version and structural settings. A
+checkpoint from an older graph or a different architecture may be rejected
+even when tensor shapes happen to match. Do not bypass these checks with
+`strict=False`; train from the configured pretrained backbones or use the
+matching run's checkpoint and resolved config.
 
 Training stores parameters, gradients and AdamW moments in FP32; `model.compute_dtype: bfloat16` enables CUDA BF16 autocast for the heavy operations. CPU tests use FP32. This avoids directly accumulating tiny updates into BF16 parameters; see [Mixed Precision Training](https://arxiv.org/abs/1710.03740) for the FP32 accumulated-update principle. It is not all-FP32 matrix computation. CUDA evaluation loads the backbone/cross-attention in `compute_dtype`, keeping BF16 KV caches by default; legacy configs retain their configured inference dtype.
 
-Non-reentrant backbone checkpointing, token-weighted gradient accumulation (including a partial final window), and per-stage linear LR decay remain enabled. Optimizer moments are carried from warm-up to full fine-tuning. LM-head CE is computed in checkpointed token chunks instead of retaining full `[B,T,V]` logits. Encoder KV caching is disabled; only the requested depth taps are captured. The PubMed Nemotron and ArXiv wrappers support one or two GPUs with DDP; two-GPU evaluation uses independent shards and merges them by dataset index so the final prediction JSONL remains ordered. FP32 training storage requires more VRAM than direct BF16 updates; a B200 smoke/profile is necessary before reusing the maximum old batch size.
+Non-reentrant backbone checkpointing, token-weighted gradient accumulation
+(including a partial final window), and per-stage cosine learning-rate decay
+are enabled by default; linear decay is also supported. Optimizer moments are
+carried from warm-up to full fine-tuning. LM-head CE is computed in
+checkpointed token chunks instead of retaining full `[B,T,V]` logits. Encoder
+KV caching is disabled; only the requested depth taps are captured. The
+PubMed Nemotron and ArXiv wrappers support one or two GPUs with DDP; two-GPU
+evaluation uses independent shards and merges them by dataset index so the
+final prediction JSONL remains ordered. FP32 training storage requires more
+VRAM than direct BF16 updates; profile the target hardware before reusing a
+large batch size.
 
 Training prints reusable, machine-readable progress lines with stage, epoch
 percentage, epoch/total optimizer steps, token-weighted CE, gradient norm,
@@ -430,7 +765,12 @@ Checkpoints are `epoch_001.pt`, ..., `last.pt`; `best.pt` is optional and off in
 
 All local verification uses tiny random backbones with network disabled, including BF16 attention backward, CE-only focus gradients, cache parity, accumulation and warm-up resume equivalence. A real PPLX/Qwen GPU smoke and throughput profile remain necessary; local tests do not establish B200 kernel efficiency or ROUGE improvement.
 
-For bundled `configs/*.yaml`, relative data/output paths are rooted at `eviseq_new/`, independent of the calling directory or whether files already exist. An external YAML resolves relative paths against its own directory. At encoder/decoder hidden size 1024, the main AFMR bridge contains 1,981,446 parameters; this excludes both pretrained backbones and the copied decoder cross-attention. Token-wise depth selection adds 1,024 parameters over the previous document-wise graph and does not stack a second full-depth memory tensor.
+For bundled `configs/*.yaml`, relative data/output paths are rooted at
+`eviseq_new/`, independent of the calling directory or whether files already
+exist. An external YAML resolves relative paths against its own directory. At
+encoder/decoder hidden size 1024, the main AFMR bridge contains 1,981,446
+parameters; this excludes both pretrained backbones and the copied decoder
+cross-attention. The count depends on the configured ranks and hidden sizes.
 
 ## Performance controls
 

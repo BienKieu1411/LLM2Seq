@@ -33,6 +33,23 @@ The target remains the verifier. The drafter proposes a block from the final sou
 
 This smoke run did not pass the correctness gate: target-only decoding matched native generation, but speculative generation had 50% exact sequence parity over four examples. The median raw speed ratio was 0.874x, and proposal acceptance was below 1% across the timed sample. Since token parity failed, the timing is diagnostic only and is not evidence of acceleration. The detailed token IDs and first mismatch positions are in the run's `benchmark/*/requests.jsonl`.
 
+## Gated PubMed retraining
+
+`diagnose-verifier` compares same-prefix target logits from full-prefix, token-by-token cached, and block-cached execution. It also checks that cached target-only generation matches the native Transformers generation. A non-passing gate exits with code 2, so `scripts/retrain_gated.sh` will stop before collecting traces or training.
+
+The new `configs/t5gemma2_pubmed_margin.yaml` is for the base `google/t5gemma-2-1b-1b` target. Point `target.checkpoint` at a local copy on the GPU machine first. No target weights are downloaded by this package or the shell script. The script defaults to 1,000 PubMed training traces, 5,000 drafter steps, and 128 validation requests. Override `TRAIN_LIMIT`, `TRAIN_STEPS`, `BENCHMARK_LIMIT`, and `PYTHON` as needed.
+
+The drafter uses 1,000 cross-entropy warm-up updates, then a sigmoid top-1 logit-margin surrogate for accepted prefix length, with a small cross-entropy term. The runtime proposes tokens with `argmax`, so this is an adaptation for greedy proposals, not the paper's probability-mass EAL objective and not a calibrated acceptance probability. It is not the sampling-based WTV objective. Run it from the repository root:
+
+```bash
+bash src/encdec_drafter/scripts/retrain_gated.sh \
+  src/encdec_drafter/configs/t5gemma2_pubmed_margin.yaml \
+  src/eviseq_new/datasets/pubmed/train.jsonl \
+  src/eviseq_new/datasets/pubmed/validation.jsonl
+```
+
+The script saves the parity report, teacher traces, drafter checkpoint, and benchmark outputs under one timestamped run directory. Benchmarking fails if output IDs do not exactly match the native target. A speedup still must be assessed from the reported timing distribution; acceptance rate alone is not a performance claim.
+
 ## Current limits
 
 The runtime is deliberately single-request and greedy. It does not yet include a custom merged-attention kernel, CUDA graphs, a serving scheduler, adaptive source budgets, sampling, or multi-GPU execution. No speedup claim is supported until speculative decoding achieves exact token parity and beats native cached `generate` on a representative validation set.

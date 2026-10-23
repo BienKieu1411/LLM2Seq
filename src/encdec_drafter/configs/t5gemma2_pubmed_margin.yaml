@@ -1,0 +1,70 @@
+# Copy this config to the GPU host and point target.checkpoint at an already
+# downloaded base google/t5gemma-2-1b-1b directory. This file never downloads it.
+target:
+  checkpoint: /path/to/google/t5gemma-2-1b-1b
+  identity: google/t5gemma-2-1b-1b@dd0a2683227859151b1730ca3a63087df5b5f39b
+  tokenizer: null
+  local_files_only: true
+  trust_remote_code: false
+  device: cuda
+  dtype: bfloat16
+  attn_implementation: null
+
+data:
+  training_file: ../../../src/eviseq_new/datasets/pubmed/train.jsonl
+  validation_file: ../../../src/eviseq_new/datasets/pubmed/validation.jsonl
+  test_file: ../../../src/eviseq_new/datasets/pubmed/test.jsonl
+  id_field: id
+  source_field: text
+  target_field: summary
+  detokenize: true
+  source_prefix: "Summarize the following biomedical research article into a concise, factual abstract. Preserve the key objective, methods, results, and conclusion; do not add information.\nArticle:\n"
+  max_source_tokens: 4096
+
+generation:
+  max_new_tokens: 512
+  min_new_tokens: 32
+  repetition_penalty: 1.05
+  no_repeat_ngram_size: 3
+  temperature: 0.0
+  top_k: 0
+  top_p: 1.0
+  num_beams: 1
+
+draft:
+  width: 256
+  layers: 2
+  heads: 4
+  ffn_width: 1024
+  max_block_size: 8
+  target_feature_window: 64
+  max_source_tokens: 4096
+  checkpoint: null
+
+source_memory:
+  mode: full
+  budget: 256
+
+speculation:
+  block_size: 4
+  ambiguity_fallback_margin: 0.5
+
+training:
+  trace_file: ../../../runs/encdec_drafter_margin/teacher_traces.jsonl
+  output_checkpoint: ../../../runs/encdec_drafter_margin/drafter.pt
+  steps: 5000
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  seed: 42
+  log_every: 10
+  save_every: 500
+  max_grad_norm: 1.0
+  loss_type: greedy_margin_accepted_length
+  margin_warmup_steps: 1000
+  margin_ce_weight: 0.05
+  margin_temperature: 1.0
+
+benchmark:
+  output_dir: ../../../runs/encdec_drafter_margin/benchmark
+  warmup: 4
+  repeats: 3

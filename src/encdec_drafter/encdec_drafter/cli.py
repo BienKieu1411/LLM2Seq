@@ -10,6 +10,7 @@ import torch
 from .benchmark import benchmark_runtime, profile_t5gemma2
 from .config import load_config, resolve_path
 from .data import collect_teacher_traces, load_source_path, read_jsonl, source_text, write_jsonl
+from .diagnostics import diagnose_t5gemma2_verifier
 from .drafter import load_drafter
 from .generation import GreedySpeculativeGenerator
 from .model import load_adapter
@@ -25,10 +26,10 @@ def _resolve_cli_path(value: Optional[str]) -> Optional[Path]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="encdec_drafter")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("profile", "collect-traces", "train", "generate", "benchmark"):
+    for command in ("profile", "collect-traces", "train", "generate", "benchmark", "diagnose-verifier"):
         child = subparsers.add_parser(command)
         child.add_argument("--config", required=True)
-        if command in ("profile", "collect-traces", "generate", "benchmark"):
+        if command in ("profile", "collect-traces", "generate", "benchmark", "diagnose-verifier"):
             child.add_argument("--input-file", default=None)
         if command == "profile":
             child.add_argument("--output", default=None)
@@ -53,6 +54,12 @@ def _parser() -> argparse.ArgumentParser:
             child.add_argument("--limit", type=int, default=32)
             child.add_argument("--repeats", type=int, default=3)
             child.add_argument("--warmup", type=int, default=1)
+            child.add_argument("--require-exact", action="store_true")
+        elif command == "diagnose-verifier":
+            child.add_argument("--output", default=None)
+            child.add_argument("--limit", type=int, default=8)
+            child.add_argument("--prefix-tokens", type=int, default=32)
+            child.add_argument("--block-sizes", type=int, nargs="+", default=[2, 4, 8])
     return parser
 
 
@@ -203,6 +210,21 @@ def _command_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     )
 
 
+def _command_diagnose_verifier(args: argparse.Namespace) -> Dict[str, Any]:
+    config, adapter = _load(args)
+    input_path = load_source_path(config, args.input_file, default_key="validation_file")
+    output_path = Path(args.output).expanduser().resolve() if args.output else None
+    return diagnose_t5gemma2_verifier(
+        adapter,
+        config,
+        input_path,
+        limit=args.limit,
+        prefix_tokens=args.prefix_tokens,
+        block_sizes=args.block_sizes,
+        output_path=output_path,
+    )
+
+
 def main() -> None:
     args = _parser().parse_args()
     handlers = {
@@ -211,6 +233,11 @@ def main() -> None:
         "train": _command_train,
         "generate": _command_generate,
         "benchmark": _command_benchmark,
+        "diagnose-verifier": _command_diagnose_verifier,
     }
     result = handlers[args.command](args)
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    if args.command == "diagnose-verifier" and result["status"] != "passed":
+        raise SystemExit(2)
+    if args.command == "benchmark" and args.require_exact and result["exact_token_match_rate"] != 1.0:
+        raise SystemExit(2)

@@ -13,6 +13,50 @@ from .data import RandomAccessJsonl
 from .drafter import ParallelBlockDrafter
 
 
+def greedy_margin_accepted_length_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    *,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Smoothly reward target top-1 margins across a greedy proposal block.
+
+    The exact greedy accept rule is discrete: a proposed token is accepted
+    only when it is the target argmax. This loss uses sigmoid of the draft's
+    target-token-vs-best-competitor logit margin as a differentiable surrogate,
+    then sums cumulative products to approximate accepted prefix length. These
+    sigmoid values are *not* calibrated acceptance probabilities and this is
+    not the paper's probability-mass EAL objective.
+    """
+    if logits.ndim != 3 or labels.ndim != 2 or logits.shape[:2] != labels.shape:
+        raise ValueError("Expected logits [batch, block, vocab] and labels [batch, block]")
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    valid = labels.ne(-100)
+    if not valid.any(dim=1).all():
+        raise ValueError("Every margin-loss window must contain at least one target token")
+    # Block labels must be a contiguous prefix followed only by padding.
+    if ((~valid).cummax(dim=1).values & valid).any():
+        raise ValueError("Ignored labels must form a contiguous suffix of each block")
+    vocab_size = logits.shape[-1]
+    if ((labels[valid] < 0) | (labels[valid] >= vocab_size)).any():
+        raise ValueError("A target label is outside the draft vocabulary")
+
+    safe_labels = labels.clamp_min(0)
+    scores = logits.float()
+    target_scores = scores.gather(-1, safe_labels.unsqueeze(-1)).squeeze(-1)
+    competitors = scores.scatter(-1, safe_labels.unsqueeze(-1), -torch.inf)
+    best_competitor = competitors.max(dim=-1).values
+    margins = (target_scores - best_competitor) / temperature
+    acceptance_surrogate = torch.sigmoid(margins)
+    # P(prefix through position t) is the product of the per-token surrogates.
+    # Padding contributes a neutral factor and is excluded from the objective.
+    acceptance_surrogate = torch.where(valid, acceptance_surrogate, torch.ones_like(acceptance_surrogate))
+    prefix_surrogate = torch.cumprod(acceptance_surrogate, dim=1)
+    prefix_surrogate = prefix_surrogate * valid.to(prefix_surrogate.dtype)
+    return -prefix_surrogate.sum(dim=1).mean()
+
+
 def train_drafter(
     adapter,
     config: Dict[str, Any],
@@ -70,6 +114,16 @@ def train_drafter(
     log_every = max(1, int(training.get("log_every", 10)))
     save_every = max(1, int(training.get("save_every", 100)))
     max_grad_norm = float(training.get("max_grad_norm", 1.0))
+    loss_type = str(training.get("loss_type", "cross_entropy"))
+    if loss_type not in {"cross_entropy", "greedy_margin_accepted_length"}:
+        raise ValueError("training.loss_type must be 'cross_entropy' or 'greedy_margin_accepted_length'")
+    margin_warmup_steps = max(0, int(training.get("margin_warmup_steps", 0)))
+    margin_ce_weight = float(training.get("margin_ce_weight", 0.05))
+    margin_temperature = float(training.get("margin_temperature", 1.0))
+    if margin_ce_weight < 0:
+        raise ValueError("training.margin_ce_weight must be nonnegative")
+    if margin_temperature <= 0:
+        raise ValueError("training.margin_temperature must be positive")
     loss_history: List[float] = []
     drafter.train()
     adapter.model.eval()
@@ -127,11 +181,21 @@ def train_drafter(
             output_head=adapter.output_head,
             block_size=block_size,
         )
-        loss = F.cross_entropy(
+        cross_entropy = F.cross_entropy(
             draft_logits.reshape(-1, draft_logits.shape[-1]).float(),
             labels.reshape(-1),
             ignore_index=-100,
         )
+        margin_loss = greedy_margin_accepted_length_loss(
+            draft_logits,
+            labels,
+            temperature=margin_temperature,
+        )
+        margin_active = loss_type == "greedy_margin_accepted_length" and completed_steps >= margin_warmup_steps
+        if margin_active:
+            loss = margin_loss + margin_ce_weight * cross_entropy
+        else:
+            loss = cross_entropy
         if not torch.isfinite(loss):
             raise FloatingPointError(f"Non-finite drafter loss at step {completed_steps + 1}")
         loss.backward()
@@ -148,6 +212,10 @@ def train_drafter(
                     {
                         "step": completed_steps,
                         "loss": loss_value,
+                        "loss_type": "greedy_margin_accepted_length" if margin_active else "cross_entropy",
+                        "cross_entropy": float(cross_entropy.detach().cpu()),
+                        "accepted_length_surrogate": float((-margin_loss).detach().cpu()),
+                        "margin_temperature": margin_temperature,
                         "learning_rate": optimizer.param_groups[0]["lr"],
                         "trace_id": row.get("id"),
                         "anchor": anchor,
@@ -177,7 +245,10 @@ def _save_checkpoint(drafter, optimizer, adapter, output_path: Path, step: int, 
             "optimizer_state": optimizer.state_dict(),
             "training_config": {
                 "block_size": int(config["speculation"]["block_size"]),
-                "loss": "cross_entropy_on_target_greedy_continuations",
+                "loss": str(config.get("training", {}).get("loss_type", "cross_entropy")),
+                "margin_warmup_steps": int(config.get("training", {}).get("margin_warmup_steps", 0)),
+                "margin_ce_weight": float(config.get("training", {}).get("margin_ce_weight", 0.05)),
+                "margin_temperature": float(config.get("training", {}).get("margin_temperature", 1.0)),
                 "trace_file": str(config.get("training", {}).get("trace_file", "")),
             },
         }

@@ -95,6 +95,7 @@ class GreedySpeculativeGenerator:
             "target_forwards": 0,
             "proposed_tokens": 0,
             "accepted_tokens": 0,
+            "ambiguity_fallbacks": 0,
             "source_tokens": source.valid_length,
             "draft_source_tokens": None,
             "generated_tokens": 0,
@@ -208,6 +209,18 @@ class GreedySpeculativeGenerator:
             proposals,
             state.generated_count,
         )
+        ambiguity_margin = float(self.config["speculation"].get("ambiguity_fallback_margin", 0.5))
+        if ambiguity_margin > 0:
+            top_two = torch.topk(processed_logits.float(), k=2, dim=-1).values
+            margins = top_two[:, 0] - top_two[:, 1]
+            if bool((margins <= ambiguity_margin).any().item()):
+                # A block kernel can perturb near-tied bf16 logits relative to
+                # one-token decoding. Roll back and take one serial target step
+                # whenever that numerical ambiguity could change greedy output.
+                transaction.abort()
+                stats["ambiguity_fallbacks"] += 1
+                self._target_only_step(state, timers, stats)
+                return
         expected = processed_logits.argmax(dim=-1)
         matches = expected[:-1] == proposals
         compact_summary = torch.cat([matches.to(torch.long), expected.to(torch.long)]).cpu().tolist()
@@ -232,14 +245,19 @@ class GreedySpeculativeGenerator:
                 break
 
         if mismatch:
-            keep_length = starting_cache_length + accepted + 1
-            transaction.commit_to(keep_length)
-            state.target_cache_length = cache.length
-            state.append_processed_features(hidden[:, : accepted + 1])
-            state.decoder_ids.extend(emitted)
-            state.generated_count += len(emitted)
-            state.finished = emitted[-1] in self.adapter.eos_token_ids or state.generated_count >= self.max_new_tokens
-        elif stopped_on_eos:
+            # A rejected block can leave a numerically different cache even
+            # after cropping. Rebuild the committed prefix with the same
+            # one-token path as native greedy decoding before continuing.
+            transaction.abort()
+            stats["target_forwards"] += 1
+            stats["cycles"] += 1
+            stats["proposed_tokens"] += block_size
+            stats["rejection_serial_fallbacks"] = stats.get("rejection_serial_fallbacks", 0) + 1
+            stats["discarded_accepted_tokens"] = stats.get("discarded_accepted_tokens", 0) + accepted
+            self._target_only_step(state, timers, stats)
+            return
+
+        if stopped_on_eos:
             transaction.commit_to(starting_cache_length + accepted)
             state.target_cache_length = cache.length
             state.append_processed_features(hidden[:, :accepted])

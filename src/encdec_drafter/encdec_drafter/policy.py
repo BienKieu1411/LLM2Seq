@@ -51,7 +51,11 @@ class GreedyPolicy:
             row_count,
             logits.device,
         )
-        scores = logits.clone()
+        # Transformers applies generation processors to float32 scores even when
+        # the model forward runs in bf16/fp16. Keep that precision here too:
+        # repetition penalties can otherwise round close candidates into a tie
+        # and change greedy token selection.
+        scores = logits.float().clone()
 
         if self.repetition_penalty != 1.0:
             token_counts = torch.zeros((row_count, vocab_size), dtype=torch.int32, device=logits.device)
