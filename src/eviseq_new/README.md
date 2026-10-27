@@ -772,6 +772,121 @@ encoder/decoder hidden size 1024, the main AFMR bridge contains 1,981,446
 parameters; this excludes both pretrained backbones and the copied decoder
 cross-attention. The count depends on the configured ranks and hidden sizes.
 
+## Serve SEAM with vLLM
+
+The repository includes a native OpenAI-compatible HTTP server for the SEAM
+checkpoint. The current adapter targets **vLLM 0.25.1, a Qwen3 causal decoder,
+and one GPU per server**; tensor and pipeline parallelism are fixed to one.
+Use the vLLM environment already installed on the GPU server. The source
+launcher bootstraps the local adapter, so it does not require installing a
+separate plugin:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash src/eviseq_new/scripts/serve_seam_vllm.sh \
+  --config src/eviseq_new/runs/afmr/train/resolved_config.yaml \
+  --checkpoint src/eviseq_new/runs/afmr/train/epoch_004.pt \
+  --served-model-name seam \
+  --host 0.0.0.0 --port 8012 \
+  --max-num-seqs 16 \
+  --gpu-memory-utilization 0.85 \
+  --encoder-max-batch-tokens 8192
+```
+
+The resolved config must point to the local encoder and decoder used for the
+checkpoint. Check the server from another terminal, then call the standard
+completions route:
+
+```bash
+curl http://127.0.0.1:8012/health
+curl http://127.0.0.1:8012/v1/models
+curl http://127.0.0.1:8012/v1/seam/info
+
+curl http://127.0.0.1:8012/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "seam",
+    "prompt": "Source document text goes here.",
+    "max_tokens": 512,
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": 0
+  }'
+```
+
+When supplied, `max_input_tokens` cannot exceed `data.max_source_length` in the
+resolved config; if omitted, the configured source limit is used. `max_tokens`
+is the decoder output budget. `max-num-seqs` controls
+concurrent requests; it is not a fixed batch size. For ROUGE evaluation, use
+[`src/evaluation/evaluate_rouge_vietnamese_vllm.py`](../evaluation/evaluate_rouge_vietnamese_vllm.py),
+which can start and stop a temporary host with `--start-server`. See
+[`SEAM_HTTP.md`](SEAM_HTTP.md) for SDK, streaming, authentication, prompt
+overrides, evaluation, and serving limits.
+
+## Build a Self-Improve training set
+
+The Self-Improve (SI) utility reads the training split, generates eight
+sampled summaries per source through the SEAM vLLM host, and selects the
+candidate with the highest **ROUGE-2 F1 from Perl ROUGE-1.5.5**. It writes a
+new canonical training file; it does not train or update model weights. It
+does not read validation or test data. From the repository root, a one-GPU
+run can start its own local host and then generate and select in one command:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash src/seam_si/scripts/run_si.sh \
+  --config src/eviseq_new/runs/afmr/train/resolved_config.yaml \
+  --checkpoint src/eviseq_new/runs/afmr/train/epoch_004.pt \
+  --train-file src/eviseq_new/datasets/grpo_rouge/train.jsonl \
+  --output-dir src/eviseq_new/datasets/si_rouge2 \
+  --start-server --server-port 8012 \
+  --temperature 1.0 --top-p 1.0 --top-k 0 \
+  --max-new-tokens 1024 \
+  --batch-size 8 --max-num-seqs 64 \
+  --gpu-memory-utilization 0.80 \
+  --attention-backend FLASH_ATTN \
+  --rouge-path /path/to/ROUGE-1.5.5
+```
+
+Each source produces eight candidates. `--batch-size` is the number of
+concurrent source requests, and `--max-num-seqs` is the vLLM scheduler limit.
+Use the Perl ROUGE installation and data directory available on the server;
+`--rouge-path` points to the folder containing `ROUGE-1.5.5.pl`. The local
+vLLM host is stopped before CPU scoring starts.
+
+To use all allocated GPUs, launch one independent vLLM host per GPU. The
+wrapper assigns consecutive ports beginning at `--server-port`, shards source
+rows, verifies and merges all shards, then runs ROUGE-2 selection:
+
+```bash
+GPU_IDS=0,1 bash src/seam_si/scripts/run_si_multi_gpu.sh \
+  --config src/eviseq_new/runs/afmr/train/resolved_config.yaml \
+  --checkpoint src/eviseq_new/runs/afmr/train/epoch_004.pt \
+  --train-file src/eviseq_new/datasets/grpo_rouge/train.jsonl \
+  --output-dir src/eviseq_new/datasets/si_rouge2_2gpu \
+  --server-port 8012 \
+  --temperature 1.0 --top-p 1.0 --top-k 0 \
+  --max-new-tokens 1024 \
+  --batch-size 8 --max-num-seqs 64 \
+  --gpu-memory-utilization 0.80 \
+  --attention-backend FLASH_ATTN \
+  --rouge-path /path/to/ROUGE-1.5.5
+```
+
+Set `GPU_IDS` to the GPUs allocated to this job; `CUDA_VISIBLE_DEVICES` is
+used if `GPU_IDS` is unset. Every host uses tensor-parallel size one, so each
+GPU must have enough memory for the full model. `--batch-size`,
+`--max-num-seqs`, and GPU memory utilization are per host/GPU. Keep the same
+GPU count, data, checkpoint, and sampling options when resuming an interrupted
+run; the pipeline validates a manifest and reuses completed candidates. Use a
+new output directory after changing these settings.
+
+The selected SFT data is `si_rouge2/train_si.jsonl` with canonical `id`/`text`/
+`summary` fields. `candidates.jsonl` keeps all eight generations,
+`selected.jsonl` records selection scores, and `summary.json` reports the
+selection statistics. If generation and shard merging are already complete,
+run only selection with `--stage select --output-dir ... --rouge-path ...`.
+For requirements, Perl modules, resuming, and output details, see the
+[Self-Improve README](../seam_si/README.md).
+
 ## Performance controls
 
 Training speed controls in the base recipe enable length bucketing, eight data
