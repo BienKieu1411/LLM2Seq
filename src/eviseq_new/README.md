@@ -610,10 +610,12 @@ Each invocation processes seeds 43 and 44 sequentially, and each seed uses
 both GPUs with DDP. The script evaluates the test split and computes ROUGE
 after each training run. The conditions are: `vanilla` (direct projection,
 copy disabled), `wo_copy` (AFMR bridge, copy disabled), and `wo_bridge`
-(direct projection, copy enabled). The default per-GPU batch size is 24 with
-gradient accumulation 2, preserving the effective global batch of 96 from the
-single-GPU full runs (batch size 48, accumulation 2). To run them in order,
-execute these as separate commands and wait for each to finish:
+(direct projection, copy enabled). The script leaves the training batch size
+and gradient accumulation unchanged from the configs. With the current PubMed
+config, that is batch size 48 per GPU and accumulation 2; on two GPUs the
+effective global batch is 192 examples per optimizer update. To run the
+conditions in order, execute these as separate commands and wait for each to
+finish:
 
 ```bash
 cd /workspace/storage-shared/nlp/dungdx4/bien_projects/LLM2Seq
@@ -623,10 +625,9 @@ PYTHON=python3 SEEDS="43 44" GPU_IDS=0,1 bash src/eviseq_new/scripts/run_pubmed_
 ```
 
 Preparation is skipped when the canonical PubMed files already exist. Set
-`GPU_IDS` to the two GPU IDs to use, `TRAIN_BATCH_SIZE_PER_GPU` and
-`GRADIENT_ACCUMULATION_STEPS` to override training batch settings, and
-`EVAL_BATCH_SIZE` to control per-GPU evaluation memory. Each invocation saves
-its config, checkpoint, predictions, and logs under a timestamped output root.
+`GPU_IDS` to the two GPU IDs to use and `EVAL_BATCH_SIZE` to control per-GPU
+evaluation memory. Each invocation saves its config, checkpoint, predictions,
+and logs under a timestamped output root.
 
 To run the same PubMed recipe with a local Nemotron embedding encoder, use the
 dedicated wrapper. It runs one process on one GPU or launches DDP when two

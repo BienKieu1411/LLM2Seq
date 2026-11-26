@@ -53,8 +53,6 @@ PPLX_ENCODER="${PPLX_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/pplx-em
 DECODER_MODEL="${DECODER_MODEL:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-0.6B}"
 SEEDS="${SEEDS:-43 44}"
 GPU_IDS="${GPU_IDS:-0,1}"
-TRAIN_BATCH_SIZE_PER_GPU="${TRAIN_BATCH_SIZE_PER_GPU:-24}"
-GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-2}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-32}"
 RUN_ROOT="${RUN_ROOT:-${ROOT}/runs/afmr/pubmed_${CONDITION}_seeds_$(date +%Y%m%d_%H%M%S)}"
 LOG_DIR="${LOG_DIR:-${RUN_ROOT}/logs}"
@@ -63,8 +61,6 @@ LOG_DIR="${LOG_DIR:-${RUN_ROOT}/logs}"
 [[ -d "${PUBMED_SOURCE_DIR}" ]] || die "PubMed source directory not found: ${PUBMED_SOURCE_DIR}"
 [[ -d "${PPLX_ENCODER}" ]] || die "PPLX encoder not found: ${PPLX_ENCODER}"
 [[ -d "${DECODER_MODEL}" ]] || die "Qwen decoder not found: ${DECODER_MODEL}"
-[[ "${TRAIN_BATCH_SIZE_PER_GPU}" =~ ^[1-9][0-9]*$ ]] || die "TRAIN_BATCH_SIZE_PER_GPU must be positive"
-[[ "${GRADIENT_ACCUMULATION_STEPS}" =~ ^[1-9][0-9]*$ ]] || die "GRADIENT_ACCUMULATION_STEPS must be positive"
 [[ "${EVAL_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || die "EVAL_BATCH_SIZE must be positive"
 
 IFS=',' read -r -a GPU_LIST <<< "${GPU_IDS}"
@@ -86,8 +82,7 @@ echo "=== PubMed ${CONDITION} runs; each seed uses two-GPU DDP ==="
 echo "=== Seeds, run sequentially: ${SEED_LIST[*]} ==="
 echo "=== GPUs: ${GPU_IDS} ==="
 echo "=== Bridge mode: ${BRIDGE_MODE}; grounded copy: ${GROUNDED_COPY} ==="
-echo "=== Per-GPU batch: ${TRAIN_BATCH_SIZE_PER_GPU}; accumulation: ${GRADIENT_ACCUMULATION_STEPS} ==="
-echo "=== Effective global batch: $((TRAIN_BATCH_SIZE_PER_GPU * 2 * GRADIENT_ACCUMULATION_STEPS)) examples per optimizer update ==="
+echo "=== Training batch size and accumulation use configs/afmr_pubmed.yaml and afmr_base.yaml unchanged ==="
 echo "=== Encoder: ${PPLX_ENCODER} ==="
 echo "=== Decoder: ${DECODER_MODEL} ==="
 echo "=== Output root: ${RUN_ROOT} ==="
@@ -124,7 +119,7 @@ make_config() {
   local config_path="${run_dir}/input_config.yaml"
 
   mkdir -p "${run_dir}"
-  "${PYTHON_BIN}" - "${ROOT}" "${config_path}" "${PPLX_ENCODER}" "${DECODER_MODEL}" "${run_dir}" "${PROCESSED_DATA_DIR}" "${CONDITION}" "${seed}" "${BRIDGE_MODE}" "${GROUNDED_COPY}" "${TRAIN_BATCH_SIZE_PER_GPU}" "${GRADIENT_ACCUMULATION_STEPS}" <<'PY'
+  "${PYTHON_BIN}" - "${ROOT}" "${config_path}" "${PPLX_ENCODER}" "${DECODER_MODEL}" "${run_dir}" "${PROCESSED_DATA_DIR}" "${CONDITION}" "${seed}" "${BRIDGE_MODE}" "${GROUNDED_COPY}" <<'PY'
 import sys
 from pathlib import Path
 
@@ -133,7 +128,7 @@ import yaml
 from eviseq_afmr.config import load_config, validate_config
 
 root, config_path, encoder, decoder, run_dir, data_dir = map(Path, sys.argv[1:7])
-condition, seed, bridge_mode, grounded_copy, batch_size, gradient_accumulation = sys.argv[7:]
+condition, seed, bridge_mode, grounded_copy = sys.argv[7:]
 config = load_config(root / "configs/afmr_pubmed.yaml")
 config.pop("_meta", None)
 config["experiment"]["name"] = f"pubmed_{condition}_seed{seed}"
@@ -143,8 +138,6 @@ config["decoder"]["grounded_copy"]["enabled"] = grounded_copy == "true"
 config["model"]["encoder_name"] = str(encoder)
 config["model"]["decoder_name"] = str(decoder)
 config["training"]["seed"] = int(seed)
-config["training"]["batch_size"] = int(batch_size)
-config["training"]["gradient_accumulation_steps"] = int(gradient_accumulation)
 for split in ("train", "validation", "test"):
     config["data"][f"{split}_file"] = str(data_dir / f"{split}.jsonl")
 validate_config(config)
