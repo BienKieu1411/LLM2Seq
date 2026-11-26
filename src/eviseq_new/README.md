@@ -605,31 +605,28 @@ The wrapper also accepts `EMBEDDINGGEMMA2_MODEL=/path/to/local/embeddinggemma-2`
 instead of `--encoder-model`. It uses offline loading and will not download a
 checkpoint. The server environment must provide `transformers>=5.19.0`.
 
-To compare full SEAM with vanilla cross-attention on PubMed for seeds 43 and
-44, run the jobs on two GPUs. Both full runs execute concurrently first; once
-they finish, both vanilla runs execute concurrently. Each training uses one
-GPU. Seed 42 is left as the existing single-seed result. The full condition
-uses the AFMR bridge and grounded copy; the vanilla condition uses direct
-projection without grounded copy. Both use the PPLX encoder and Qwen3 decoder,
-with the training batch size and learning rates unchanged from the PubMed
-config:
+After the full runs, use `run_pubmed_pair.sh` to run each ablation separately.
+Each invocation processes seeds 43 and 44 sequentially, and each seed uses
+both GPUs with DDP. The script evaluates the test split and computes ROUGE
+after each training run. The conditions are: `vanilla` (direct projection,
+copy disabled), `wo_copy` (AFMR bridge, copy disabled), and `wo_bridge`
+(direct projection, copy enabled). The default per-GPU batch size is 24 with
+gradient accumulation 2, preserving the effective global batch of 96 from the
+single-GPU full runs (batch size 48, accumulation 2). To run them in order,
+execute these as separate commands and wait for each to finish:
 
 ```bash
 cd /workspace/storage-shared/nlp/dungdx4/bien_projects/LLM2Seq
-PYTHON=python3 \
-SEEDS="43 44" GPU_0=0 GPU_1=1 \
-PPLX_ENCODER=/path/to/pplx-embed-v1-0.6b \
-DECODER_MODEL=/path/to/Qwen3-0.6B \
-PUBMED_SOURCE_DIR=/path/to/pubmed \
-bash src/eviseq_new/scripts/run_pubmed_pair.sh
+PYTHON=python3 SEEDS="43 44" GPU_IDS=0,1 bash src/eviseq_new/scripts/run_pubmed_pair.sh vanilla
+PYTHON=python3 SEEDS="43 44" GPU_IDS=0,1 bash src/eviseq_new/scripts/run_pubmed_pair.sh wo_copy
+PYTHON=python3 SEEDS="43 44" GPU_IDS=0,1 bash src/eviseq_new/scripts/run_pubmed_pair.sh wo_bridge
 ```
 
 Preparation is skipped when the canonical PubMed files already exist. Set
-`GPU_0` and `GPU_1` to the two GPU IDs to use, and `EVAL_BATCH_SIZE`
-to control evaluation memory. Set `SEEDS="42 43 44"` to rerun all three seeds.
-Each run saves its input/resolved config, checkpoint, test predictions, and
-logs under the timestamped output root. Set `ROUGE155_SCRIPT` to select a
-specific local ROUGE evaluator.
+`GPU_IDS` to the two GPU IDs to use, `TRAIN_BATCH_SIZE_PER_GPU` and
+`GRADIENT_ACCUMULATION_STEPS` to override training batch settings, and
+`EVAL_BATCH_SIZE` to control per-GPU evaluation memory. Each invocation saves
+its config, checkpoint, predictions, and logs under a timestamped output root.
 
 To run the same PubMed recipe with a local Nemotron embedding encoder, use the
 dedicated wrapper. It runs one process on one GPU or launches DDP when two

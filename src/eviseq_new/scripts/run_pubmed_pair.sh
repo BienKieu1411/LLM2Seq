@@ -5,6 +5,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_ROOT="$(cd "${ROOT}/../.." && pwd)"
 cd "${PROJECT_ROOT}"
 
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
 if [[ -n "${PYTHON:-}" ]]; then
   PYTHON_BIN="${PYTHON}"
 elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
@@ -13,7 +18,27 @@ else
   PYTHON_BIN="python3"
 fi
 
-export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+CONDITION="${1:-}"
+case "${CONDITION}" in
+  vanilla)
+    BRIDGE_MODE=direct_projection
+    GROUNDED_COPY=false
+    ;;
+  wo_copy)
+    BRIDGE_MODE=afmr
+    GROUNDED_COPY=false
+    ;;
+  wo_bridge)
+    BRIDGE_MODE=direct_projection
+    GROUNDED_COPY=true
+    ;;
+  *)
+    die "Usage: bash scripts/run_pubmed_pair.sh {vanilla|wo_copy|wo_bridge}"
+    ;;
+esac
+[[ "$#" -eq 1 ]] || die "Pass exactly one condition: vanilla, wo_copy, or wo_bridge"
+
+export PYTHONPATH="${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
 export HF_HUB_DISABLE_TELEMETRY=1
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
@@ -27,24 +52,25 @@ RAW_DATA_DIR="${ROOT}/datasets/raw/pubmed"
 PPLX_ENCODER="${PPLX_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/pplx-embed-v1-0.6b}"
 DECODER_MODEL="${DECODER_MODEL:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-0.6B}"
 SEEDS="${SEEDS:-43 44}"
-GPU_0="${GPU_0:-0}"
-GPU_1="${GPU_1:-1}"
-EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-64}"
-RUN_ROOT="${RUN_ROOT:-${ROOT}/runs/afmr/pubmed_full_vanilla_multiseed_$(date +%Y%m%d_%H%M%S)}"
+GPU_IDS="${GPU_IDS:-0,1}"
+TRAIN_BATCH_SIZE_PER_GPU="${TRAIN_BATCH_SIZE_PER_GPU:-24}"
+GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-2}"
+EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-32}"
+RUN_ROOT="${RUN_ROOT:-${ROOT}/runs/afmr/pubmed_${CONDITION}_seeds_$(date +%Y%m%d_%H%M%S)}"
 LOG_DIR="${LOG_DIR:-${RUN_ROOT}/logs}"
-
-die() {
-  echo "ERROR: $*" >&2
-  exit 1
-}
 
 [[ -x "${PYTHON_BIN}" || -n "$(command -v "${PYTHON_BIN}" 2>/dev/null || true)" ]] || die "Python not found: ${PYTHON_BIN}"
 [[ -d "${PUBMED_SOURCE_DIR}" ]] || die "PubMed source directory not found: ${PUBMED_SOURCE_DIR}"
 [[ -d "${PPLX_ENCODER}" ]] || die "PPLX encoder not found: ${PPLX_ENCODER}"
 [[ -d "${DECODER_MODEL}" ]] || die "Qwen decoder not found: ${DECODER_MODEL}"
-[[ "${GPU_0}" =~ ^[0-9]+$ && "${GPU_1}" =~ ^[0-9]+$ ]] || die "GPU_0 and GPU_1 must each be one GPU index"
-[[ "${GPU_0}" != "${GPU_1}" ]] || die "GPU_0 and GPU_1 must be different; each training uses one GPU"
-[[ "${EVAL_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || die "EVAL_BATCH_SIZE must be a positive integer"
+[[ "${TRAIN_BATCH_SIZE_PER_GPU}" =~ ^[1-9][0-9]*$ ]] || die "TRAIN_BATCH_SIZE_PER_GPU must be positive"
+[[ "${GRADIENT_ACCUMULATION_STEPS}" =~ ^[1-9][0-9]*$ ]] || die "GRADIENT_ACCUMULATION_STEPS must be positive"
+[[ "${EVAL_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || die "EVAL_BATCH_SIZE must be positive"
+
+IFS=',' read -r -a GPU_LIST <<< "${GPU_IDS}"
+[[ "${#GPU_LIST[@]}" -eq 2 ]] || die "GPU_IDS must contain exactly two comma-separated GPU indices, e.g. 0,1"
+[[ "${GPU_LIST[0]}" =~ ^[0-9]+$ && "${GPU_LIST[1]}" =~ ^[0-9]+$ ]] || die "GPU_IDS must contain numeric GPU indices"
+[[ "${GPU_LIST[0]}" != "${GPU_LIST[1]}" ]] || die "GPU_IDS must name two different GPUs"
 
 read -r -a SEED_LIST <<< "${SEEDS}"
 (( ${#SEED_LIST[@]} > 0 )) || die "SEEDS must contain at least one seed"
@@ -53,15 +79,17 @@ for seed in "${SEED_LIST[@]}"; do
 done
 
 mkdir -p "${LOG_DIR}" "${RUN_ROOT}"
-MAIN_LOG="${LOG_DIR}/run_pubmed_pair_$(date +%Y%m%d_%H%M%S).log"
+MAIN_LOG="${LOG_DIR}/run_pubmed_${CONDITION}_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "${MAIN_LOG}") 2>&1
 
-echo "=== PubMed full SEAM vs vanilla cross-attention multi-seed run ==="
-echo "=== Seeds: ${SEED_LIST[*]} ==="
-echo "=== GPUs: ${GPU_0}, ${GPU_1} (one GPU per training) ==="
+echo "=== PubMed ${CONDITION} runs; each seed uses two-GPU DDP ==="
+echo "=== Seeds, run sequentially: ${SEED_LIST[*]} ==="
+echo "=== GPUs: ${GPU_IDS} ==="
+echo "=== Bridge mode: ${BRIDGE_MODE}; grounded copy: ${GROUNDED_COPY} ==="
+echo "=== Per-GPU batch: ${TRAIN_BATCH_SIZE_PER_GPU}; accumulation: ${GRADIENT_ACCUMULATION_STEPS} ==="
+echo "=== Effective global batch: $((TRAIN_BATCH_SIZE_PER_GPU * 2 * GRADIENT_ACCUMULATION_STEPS)) examples per optimizer update ==="
 echo "=== Encoder: ${PPLX_ENCODER} ==="
 echo "=== Decoder: ${DECODER_MODEL} ==="
-echo "=== Training batch size and learning rates come from configs/afmr_pubmed.yaml and afmr_base.yaml ==="
 echo "=== Output root: ${RUN_ROOT} ==="
 echo "=== Main log: ${MAIN_LOG} ==="
 
@@ -91,16 +119,12 @@ fi
 [[ -f "${ROUGE_SCRIPT}" ]] || die "ROUGE evaluator not found under ${PROJECT_ROOT}/src; set ROUGE155_SCRIPT"
 
 make_config() {
-  local condition="$1"
-  local seed="$2"
-  local run_dir="$3"
+  local seed="$1"
+  local run_dir="$2"
   local config_path="${run_dir}/input_config.yaml"
-  local bridge_mode="afmr"
-  local use_copy=true
-  [[ "${condition}" == full ]] || { bridge_mode=direct_projection; use_copy=false; }
 
   mkdir -p "${run_dir}"
-  "${PYTHON_BIN}" - "${ROOT}" "${config_path}" "${PPLX_ENCODER}" "${DECODER_MODEL}" "${run_dir}" "${PROCESSED_DATA_DIR}" "${condition}" "${seed}" "${bridge_mode}" "${use_copy}" <<'PY'
+  "${PYTHON_BIN}" - "${ROOT}" "${config_path}" "${PPLX_ENCODER}" "${DECODER_MODEL}" "${run_dir}" "${PROCESSED_DATA_DIR}" "${CONDITION}" "${seed}" "${BRIDGE_MODE}" "${GROUNDED_COPY}" "${TRAIN_BATCH_SIZE_PER_GPU}" "${GRADIENT_ACCUMULATION_STEPS}" <<'PY'
 import sys
 from pathlib import Path
 
@@ -109,16 +133,18 @@ import yaml
 from eviseq_afmr.config import load_config, validate_config
 
 root, config_path, encoder, decoder, run_dir, data_dir = map(Path, sys.argv[1:7])
-condition, seed, bridge_mode, use_copy = sys.argv[7:]
+condition, seed, bridge_mode, grounded_copy, batch_size, gradient_accumulation = sys.argv[7:]
 config = load_config(root / "configs/afmr_pubmed.yaml")
 config.pop("_meta", None)
 config["experiment"]["name"] = f"pubmed_{condition}_seed{seed}"
 config["experiment"]["output_dir"] = str(run_dir)
 config["architecture"]["bridge_mode"] = bridge_mode
-config["decoder"]["grounded_copy"]["enabled"] = use_copy == "true"
+config["decoder"]["grounded_copy"]["enabled"] = grounded_copy == "true"
 config["model"]["encoder_name"] = str(encoder)
 config["model"]["decoder_name"] = str(decoder)
 config["training"]["seed"] = int(seed)
+config["training"]["batch_size"] = int(batch_size)
+config["training"]["gradient_accumulation_steps"] = int(gradient_accumulation)
 for split in ("train", "validation", "test"):
     config["data"][f"{split}_file"] = str(data_dir / f"{split}.jsonl")
 validate_config(config)
@@ -128,87 +154,59 @@ config_path.write_text(
 PY
 }
 
-run_condition() {
-  local condition="$1"
-  local seed="$2"
-  local gpu="$3"
-  local run_dir="${RUN_ROOT}/${condition}_seed${seed}"
-  local predictions="${run_dir}/last_test_predictions.jsonl"
+run_one_seed() {
+  local seed="$1"
+  local run_dir="${RUN_ROOT}/seed${seed}"
   local config_path="${run_dir}/input_config.yaml"
+  local predictions="${run_dir}/last_test_predictions.jsonl"
 
-  make_config "${condition}" "${seed}" "${run_dir}"
-  echo "=== Training ${condition}, seed ${seed}, GPU ${gpu} ==="
-  CUDA_VISIBLE_DEVICES="${gpu}" "${PYTHON_BIN}" "${ROOT}/run_afmr.py" train \
-    "${config_path}" --overwrite-output-dir
+  make_config "${seed}" "${run_dir}"
+  echo "=== Training ${CONDITION}, seed ${seed}, GPUs ${GPU_IDS} ==="
+  CUDA_VISIBLE_DEVICES="${GPU_IDS}" "${PYTHON_BIN}" -m torch.distributed.run \
+    --standalone --nproc_per_node=2 \
+    "${ROOT}/run_afmr.py" train "${config_path}" --overwrite-output-dir \
+    2>&1 | tee "${run_dir}/train.log"
 
   [[ -s "${run_dir}/resolved_config.yaml" && -s "${run_dir}/last.pt" ]] || \
     die "Training did not produce resolved_config.yaml and last.pt in ${run_dir}"
 
-  echo "=== Evaluating ${condition}, seed ${seed}, GPU ${gpu} ==="
-  CUDA_VISIBLE_DEVICES="${gpu}" "${PYTHON_BIN}" "${ROOT}/run_afmr.py" evaluate \
-    "${run_dir}/resolved_config.yaml" \
-    "${run_dir}/last.pt" \
-    "${predictions}" \
-    --split test \
-    --batch-size "${EVAL_BATCH_SIZE}"
+  echo "=== Evaluating ${CONDITION}, seed ${seed} across the two GPUs ==="
+  eval_failed=0
+  CUDA_VISIBLE_DEVICES="${GPU_LIST[0]}" "${PYTHON_BIN}" "${ROOT}/run_afmr.py" evaluate \
+    "${run_dir}/resolved_config.yaml" "${run_dir}/last.pt" "${run_dir}/shard0.jsonl" \
+    --split test --batch-size "${EVAL_BATCH_SIZE}" --shard-rank 0 --num-shards 2 \
+    >"${run_dir}/eval_shard0.log" 2>&1 &
+  pid0=$!
+  CUDA_VISIBLE_DEVICES="${GPU_LIST[1]}" "${PYTHON_BIN}" "${ROOT}/run_afmr.py" evaluate \
+    "${run_dir}/resolved_config.yaml" "${run_dir}/last.pt" "${run_dir}/shard1.jsonl" \
+    --split test --batch-size "${EVAL_BATCH_SIZE}" --shard-rank 1 --num-shards 2 \
+    >"${run_dir}/eval_shard1.log" 2>&1 &
+  pid1=$!
 
-  echo "=== ROUGE evaluation: ${condition}, seed ${seed} ==="
+  if wait "${pid0}"; then
+    echo "=== Evaluation shard 0 completed ==="
+  else
+    cat "${run_dir}/eval_shard0.log" >&2 || true
+    eval_failed=1
+  fi
+  if wait "${pid1}"; then
+    echo "=== Evaluation shard 1 completed ==="
+  else
+    cat "${run_dir}/eval_shard1.log" >&2 || true
+    eval_failed=1
+  fi
+  (( eval_failed == 0 )) || die "Evaluation failed for ${CONDITION}, seed ${seed}"
+
+  "${PYTHON_BIN}" "${ROOT}/scripts/merge_eval_shards.py" \
+    --output "${predictions}" "${run_dir}/shard0.jsonl" "${run_dir}/shard1.jsonl"
+  echo "=== ROUGE evaluation: ${CONDITION}, seed ${seed} ==="
   "${PYTHON_BIN}" "${ROUGE_SCRIPT}" "${predictions}"
+  echo "=== Completed ${CONDITION}, seed ${seed}; output: ${run_dir} ==="
 }
 
-run_condition_group() {
-  local condition="$1"
-  local seed_index=0
+for seed in "${SEED_LIST[@]}"; do
+  run_one_seed "${seed}"
+done
 
-  while (( seed_index < ${#SEED_LIST[@]} )); do
-    local -a pids=()
-    local -a run_seeds=()
-    local -a run_logs=()
-    local seed gpu log_file
-
-    seed="${SEED_LIST[seed_index]}"
-    gpu="${GPU_0}"
-    log_file="${LOG_DIR}/${condition}_seed${seed}.log"
-    echo "=== Starting ${condition} seed ${seed} on GPU ${gpu} ==="
-    run_condition "${condition}" "${seed}" "${gpu}" >"${log_file}" 2>&1 &
-    pids+=("$!")
-    run_seeds+=("${seed}")
-    run_logs+=("${log_file}")
-    seed_index=$((seed_index + 1))
-
-    if (( seed_index < ${#SEED_LIST[@]} )); then
-      seed="${SEED_LIST[seed_index]}"
-      gpu="${GPU_1}"
-      log_file="${LOG_DIR}/${condition}_seed${seed}.log"
-      echo "=== Starting ${condition} seed ${seed} on GPU ${gpu} ==="
-      run_condition "${condition}" "${seed}" "${gpu}" >"${log_file}" 2>&1 &
-      pids+=("$!")
-      run_seeds+=("${seed}")
-      run_logs+=("${log_file}")
-      seed_index=$((seed_index + 1))
-    fi
-
-    local run_failed=0
-    local run_index
-    for run_index in "${!pids[@]}"; do
-      if wait "${pids[run_index]}"; then
-        echo "=== ${condition} seed ${run_seeds[run_index]} completed; log: ${run_logs[run_index]} ==="
-      else
-        echo "=== ${condition} seed ${run_seeds[run_index]} failed; log: ${run_logs[run_index]} ===" >&2
-        tail -n 80 "${run_logs[run_index]}" >&2 || true
-        run_failed=1
-      fi
-    done
-    (( run_failed == 0 )) || die "At least one ${condition} run failed; see the logs above"
-  done
-}
-
-echo "=== Running all full SEAM seeds before starting vanilla ==="
-run_condition_group full
-echo "=== Full SEAM seeds completed; starting vanilla runs ==="
-run_condition_group vanilla
-
-echo "=== PubMed multi-seed runs completed ==="
+echo "=== Completed all ${CONDITION} seeds: ${SEED_LIST[*]} ==="
 echo "Runs and predictions: ${RUN_ROOT}"
-echo "Full condition: AFMR bridge + grounded copy"
-echo "Vanilla condition: direct projection + no grounded copy"
