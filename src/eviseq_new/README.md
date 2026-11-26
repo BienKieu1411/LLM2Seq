@@ -605,24 +605,30 @@ The wrapper also accepts `EMBEDDINGGEMMA2_MODEL=/path/to/local/embeddinggemma-2`
 instead of `--encoder-model`. It uses offline loading and will not download a
 checkpoint. The server environment must provide `transformers>=5.19.0`.
 
-For a one-GPU PubMed queue that prepares data, trains the PPLX
-encoder recipe, then trains a Qwen3-Embedding control and evaluates both
-`last.pt` checkpoints, run:
+To compare full SEAM with vanilla cross-attention on PubMed for seeds 43 and
+44, run the paired jobs on two GPUs. Each training uses one GPU; the two
+conditions for a seed run concurrently. Seed 42 is left as the existing
+single-seed result. The full condition uses the AFMR bridge and grounded copy;
+the vanilla condition uses direct projection without grounded copy. Both use
+the PPLX encoder and Qwen3 decoder, with the training batch size and learning
+rates unchanged from the PubMed config:
 
 ```bash
-cd src/eviseq_new
-PYTHON=/absolute/path/to/bienkieu_env/bin/python \
-CUDA_VISIBLE_DEVICES=0 \
+cd /workspace/storage-shared/nlp/dungdx4/bien_projects/LLM2Seq
+PYTHON=python3 \
+SEEDS="43 44" GPU_FULL=0 GPU_VANILLA=1 \
 PPLX_ENCODER=/path/to/pplx-embed-v1-0.6b \
-QWEN_ENCODER=/path/to/Qwen3-Embedding-0.6B \
 DECODER_MODEL=/path/to/Qwen3-0.6B \
 PUBMED_SOURCE_DIR=/path/to/pubmed \
-bash scripts/run_pubmed_pair.sh
+bash src/eviseq_new/scripts/run_pubmed_pair.sh
 ```
 
 Preparation is skipped when the canonical PubMed files already exist. Set
-`EVAL_BATCH_SIZE` to control evaluation memory. Set `ROUGE155_SCRIPT` to the
-local `evaluate_rouge.py` wrapper to append the Perl ROUGE-1.5.5 audit.
+`GPU_FULL` and `GPU_VANILLA` to the two GPU IDs to use, and `EVAL_BATCH_SIZE`
+to control evaluation memory. Set `SEEDS="42 43 44"` to rerun all three seeds.
+Each run saves its input/resolved config, checkpoint, test predictions, and
+logs under the timestamped output root. Set `ROUGE155_SCRIPT` to select a
+specific local ROUGE evaluator.
 
 To run the same PubMed recipe with a local Nemotron embedding encoder, use the
 dedicated wrapper. It runs one process on one GPU or launches DDP when two
