@@ -27,8 +27,8 @@ RAW_DATA_DIR="${ROOT}/datasets/raw/pubmed"
 PPLX_ENCODER="${PPLX_ENCODER:-/workspace/storage-shared/nlp/dungdx4/BERT/pplx-embed-v1-0.6b}"
 DECODER_MODEL="${DECODER_MODEL:-/workspace/storage-shared/nlp/dungdx4/BERT/Qwen3-0.6B}"
 SEEDS="${SEEDS:-43 44}"
-GPU_FULL="${GPU_FULL:-0}"
-GPU_VANILLA="${GPU_VANILLA:-1}"
+GPU_0="${GPU_0:-0}"
+GPU_1="${GPU_1:-1}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-64}"
 RUN_ROOT="${RUN_ROOT:-${ROOT}/runs/afmr/pubmed_full_vanilla_multiseed_$(date +%Y%m%d_%H%M%S)}"
 LOG_DIR="${LOG_DIR:-${RUN_ROOT}/logs}"
@@ -42,8 +42,8 @@ die() {
 [[ -d "${PUBMED_SOURCE_DIR}" ]] || die "PubMed source directory not found: ${PUBMED_SOURCE_DIR}"
 [[ -d "${PPLX_ENCODER}" ]] || die "PPLX encoder not found: ${PPLX_ENCODER}"
 [[ -d "${DECODER_MODEL}" ]] || die "Qwen decoder not found: ${DECODER_MODEL}"
-[[ "${GPU_FULL}" =~ ^[0-9]+$ && "${GPU_VANILLA}" =~ ^[0-9]+$ ]] || die "GPU_FULL and GPU_VANILLA must each be one GPU index"
-[[ "${GPU_FULL}" != "${GPU_VANILLA}" ]] || die "GPU_FULL and GPU_VANILLA must be different; each training uses one GPU"
+[[ "${GPU_0}" =~ ^[0-9]+$ && "${GPU_1}" =~ ^[0-9]+$ ]] || die "GPU_0 and GPU_1 must each be one GPU index"
+[[ "${GPU_0}" != "${GPU_1}" ]] || die "GPU_0 and GPU_1 must be different; each training uses one GPU"
 [[ "${EVAL_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || die "EVAL_BATCH_SIZE must be a positive integer"
 
 read -r -a SEED_LIST <<< "${SEEDS}"
@@ -58,7 +58,7 @@ exec > >(tee -a "${MAIN_LOG}") 2>&1
 
 echo "=== PubMed full SEAM vs vanilla cross-attention multi-seed run ==="
 echo "=== Seeds: ${SEED_LIST[*]} ==="
-echo "=== Full GPU: ${GPU_FULL}; vanilla GPU: ${GPU_VANILLA} (one GPU per training) ==="
+echo "=== GPUs: ${GPU_0}, ${GPU_1} (one GPU per training) ==="
 echo "=== Encoder: ${PPLX_ENCODER} ==="
 echo "=== Decoder: ${DECODER_MODEL} ==="
 echo "=== Training batch size and learning rates come from configs/afmr_pubmed.yaml and afmr_base.yaml ==="
@@ -156,32 +156,57 @@ run_condition() {
   "${PYTHON_BIN}" "${ROUGE_SCRIPT}" "${predictions}"
 }
 
-for seed in "${SEED_LIST[@]}"; do
-  full_log="${LOG_DIR}/full_seed${seed}.log"
-  vanilla_log="${LOG_DIR}/vanilla_seed${seed}.log"
-  echo "=== Starting paired runs for seed ${seed} ==="
-  run_condition full "${seed}" "${GPU_FULL}" >"${full_log}" 2>&1 &
-  full_pid=$!
-  run_condition vanilla "${seed}" "${GPU_VANILLA}" >"${vanilla_log}" 2>&1 &
-  vanilla_pid=$!
+run_condition_group() {
+  local condition="$1"
+  local seed_index=0
 
-  run_failed=0
-  if wait "${full_pid}"; then
-    echo "=== Full seed ${seed} completed; log: ${full_log} ==="
-  else
-    echo "=== Full seed ${seed} failed; log: ${full_log} ===" >&2
-    tail -n 80 "${full_log}" >&2 || true
-    run_failed=1
-  fi
-  if wait "${vanilla_pid}"; then
-    echo "=== Vanilla seed ${seed} completed; log: ${vanilla_log} ==="
-  else
-    echo "=== Vanilla seed ${seed} failed; log: ${vanilla_log} ===" >&2
-    tail -n 80 "${vanilla_log}" >&2 || true
-    run_failed=1
-  fi
-  (( run_failed == 0 )) || die "At least one run failed for seed ${seed}; see the logs above"
-done
+  while (( seed_index < ${#SEED_LIST[@]} )); do
+    local -a pids=()
+    local -a run_seeds=()
+    local -a run_logs=()
+    local seed gpu log_file
+
+    seed="${SEED_LIST[seed_index]}"
+    gpu="${GPU_0}"
+    log_file="${LOG_DIR}/${condition}_seed${seed}.log"
+    echo "=== Starting ${condition} seed ${seed} on GPU ${gpu} ==="
+    run_condition "${condition}" "${seed}" "${gpu}" >"${log_file}" 2>&1 &
+    pids+=("$!")
+    run_seeds+=("${seed}")
+    run_logs+=("${log_file}")
+    seed_index=$((seed_index + 1))
+
+    if (( seed_index < ${#SEED_LIST[@]} )); then
+      seed="${SEED_LIST[seed_index]}"
+      gpu="${GPU_1}"
+      log_file="${LOG_DIR}/${condition}_seed${seed}.log"
+      echo "=== Starting ${condition} seed ${seed} on GPU ${gpu} ==="
+      run_condition "${condition}" "${seed}" "${gpu}" >"${log_file}" 2>&1 &
+      pids+=("$!")
+      run_seeds+=("${seed}")
+      run_logs+=("${log_file}")
+      seed_index=$((seed_index + 1))
+    fi
+
+    local run_failed=0
+    local run_index
+    for run_index in "${!pids[@]}"; do
+      if wait "${pids[run_index]}"; then
+        echo "=== ${condition} seed ${run_seeds[run_index]} completed; log: ${run_logs[run_index]} ==="
+      else
+        echo "=== ${condition} seed ${run_seeds[run_index]} failed; log: ${run_logs[run_index]} ===" >&2
+        tail -n 80 "${run_logs[run_index]}" >&2 || true
+        run_failed=1
+      fi
+    done
+    (( run_failed == 0 )) || die "At least one ${condition} run failed; see the logs above"
+  done
+}
+
+echo "=== Running all full SEAM seeds before starting vanilla ==="
+run_condition_group full
+echo "=== Full SEAM seeds completed; starting vanilla runs ==="
+run_condition_group vanilla
 
 echo "=== PubMed multi-seed runs completed ==="
 echo "Runs and predictions: ${RUN_ROOT}"
