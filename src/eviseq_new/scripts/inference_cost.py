@@ -401,14 +401,22 @@ def run(
             detail = ""
             if row["status"] == "ok":
                 series = " ".join(f"{seconds:.2f}" for seconds in row["total_runs_s"])
+                average, spread = _mean_and_spread(row, "end_to_end_runs_s")
                 detail = (
                     f" | total per run (s): {series} | median after {warmup_runs} warmup: {row['total_s']:.2f}"
-                    f" | end to end median: {row['end_to_end_s']:.2f}"
+                    f" | end to end avg: {average:.2f} +- {spread:.2f}"
                 )
             print(f"[cost] {name} source={length} batch={size} -> {row['status']}{detail}", flush=True)
         system = None
         _release_memory()
     return failures
+
+
+def _mean_and_spread(row: dict[str, Any], name: str) -> tuple[float, float] | None:
+    runs = row.get(name, [])[row.get("warmup_runs", 0) :]
+    if not runs:
+        return None
+    return statistics.mean(runs), statistics.stdev(runs) if len(runs) > 1 else 0.0
 
 
 def markdown_table(rows: Sequence[dict[str, Any]]) -> str:
@@ -420,7 +428,8 @@ def markdown_table(rows: Sequence[dict[str, Any]]) -> str:
         "batch",
         "first token (s)",
         "total (s)",
-        "end to end (s)",
+        "e2e first token avg (s)",
+        "e2e avg +- std (s)",
         "output tok/s",
         "peak (GiB)",
     )
@@ -428,16 +437,18 @@ def markdown_table(rows: Sequence[dict[str, Any]]) -> str:
     for row in rows:
         if row["status"] == "ok":
             peak = row.get("peak_allocated_gib")
-            end_to_end = row.get("end_to_end_s")
+            first = _mean_and_spread(row, "end_to_end_first_token_runs_s")
+            whole = _mean_and_spread(row, "end_to_end_runs_s")
             measured = [
                 f"{row['first_token_s']:.2f}",
                 f"{row['total_s']:.2f}",
-                "-" if end_to_end is None else f"{end_to_end:.2f}",
+                "-" if first is None else f"{first[0]:.2f}",
+                "-" if whole is None else f"{whole[0]:.2f} +- {whole[1]:.2f}",
                 f"{row['output_tokens_per_s']:.1f}",
                 "-" if peak is None else f"{peak:.2f}",
             ]
         else:
-            measured = ["OOM"] * 5
+            measured = ["OOM"] * 6
         cells = [
             row["system"],
             f"{row['parameters']['total'] / 1e9:.3f}",
