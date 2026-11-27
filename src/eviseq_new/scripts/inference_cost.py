@@ -158,8 +158,21 @@ class SeamSystem:
         return _weights_gib(self.model)
 
 
+class _RepositoryPenalties:
+    def __init__(self, start: int):
+        self.start = start
+
+    def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
+        from eviseq_afmr.evaluation import generate
+
+        history = input_ids[:, self.start :]
+        generate._apply_repetition_penalty(scores, history, REPETITION_PENALTY)
+        generate._apply_no_repeat_ngram(scores, history, NO_REPEAT_NGRAM_SIZE)
+        return scores
+
+
 class DecoderOnlySystem:
-    PREFIX = "Summarize the following document concisely.\nDocument:\n"
+    PREFIX ="Summarize the following document concisely.\nDocument:\n"
     SUFFIX = "\nSummary:\n"
 
     def __init__(self, model: torch.nn.Module, tokenizer: Any, device: torch.device):
@@ -183,6 +196,9 @@ class DecoderOnlySystem:
 
     @torch.inference_mode()
     def generate(self, batch: dict[str, torch.Tensor], new_tokens: int) -> int:
+        from transformers import LogitsProcessorList
+
+        start = self._history_start(batch)
         output = self.model.generate(
             input_ids=batch["input_ids"],
             attention_mask=batch["attention_mask"],
@@ -190,18 +206,19 @@ class DecoderOnlySystem:
             min_new_tokens=new_tokens,
             num_beams=1,
             do_sample=False,
-            repetition_penalty=REPETITION_PENALTY,
-            no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
+            repetition_penalty=1.0,
+            no_repeat_ngram_size=0,
+            logits_processor=LogitsProcessorList([_RepositoryPenalties(start)]),
             pad_token_id=int(self.tokenizer.pad_token_id),
             eos_token_id=self.tokenizer.eos_token_id,
             use_cache=True,
         )
-        count = self._new_token_count(batch, output)
-        self.tokenizer.batch_decode(output[:, output.shape[1] - count :], skip_special_tokens=True)
+        count = int(output.shape[1] - start)
+        self.tokenizer.batch_decode(output[:, start:], skip_special_tokens=True)
         return count
 
-    def _new_token_count(self, batch: dict[str, torch.Tensor], output: torch.Tensor) -> int:
-        return int(output.shape[1] - batch["input_ids"].shape[1])
+    def _history_start(self, batch: dict[str, torch.Tensor]) -> int:
+        return int(batch["input_ids"].shape[1])
 
     def parameter_counts(self) -> dict[str, int]:
         return {"total": _count(self.model.parameters())}
@@ -222,8 +239,8 @@ class Seq2SeqSystem(DecoderOnlySystem):
         input_ids = torch.tensor(rows, device=self.device)
         return {"input_ids": input_ids, "attention_mask": torch.ones_like(input_ids)}
 
-    def _new_token_count(self, batch: dict[str, torch.Tensor], output: torch.Tensor) -> int:
-        return int(output.shape[1] - 1)
+    def _history_start(self, batch: dict[str, torch.Tensor]) -> int:
+        return 1
 
     def parameter_counts(self) -> dict[str, int]:
         vision = {
@@ -306,7 +323,8 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
 
 
 def _workload_key(row: dict[str, Any]) -> tuple:
-    return tuple(row.get(name) for name in ("system", "source_tokens", "batch_size", "new_tokens", "gpu", "dtype"))
+    names = ("system", "source_tokens", "batch_size", "new_tokens", "gpu", "dtype", "torch", "transformers")
+    return tuple(row.get(name) for name in names)
 
 
 def run(
