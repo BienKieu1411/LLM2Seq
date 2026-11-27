@@ -150,3 +150,16 @@ The eight model IDs in the bundled matrix are `Qwen/Qwen3-0.6B`, `Qwen/Qwen3-1.7
 `nvidia/Nemotron-Labs-Diffusion-3B`. If a local directory uses another
 name, set the corresponding `*_PATH` variable; the suite records both the
 canonical model ID and the resolved local path.
+
+### CNN/DM single-GPU control
+
+After preparing `train.jsonl`, `validation.jsonl` and `test.jsonl` under
+`../eviseq_new/datasets/cnndm/`, run the Qwen3-0.6B control with:
+
+```bash
+GPU_ID=0 bash scripts/run_cnndm_qwen.sh
+```
+
+The runner uses a 4,096-token source cap, a 256-token target cap, 3 epochs,
+seed 42 and effective batch 96. It evaluates validation loss each epoch and
+exports the best-validation checkpoint for test prediction.

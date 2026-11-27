@@ -65,6 +65,26 @@ full AFMR checkpoint. The ArXiv and PubMed runners expose the same control via
 `AFMR_BRIDGE_MODE=direct_projection`; use `AFMR_GROUNDED_COPY=false` for the
 independent no-copy condition.
 
+The three isolated bridge ablations run sequentially on one GPU by default.
+Each invocation uses seed 42 and preserves the batch size and accumulation
+from `afmr_pubmed.yaml`:
+
+```bash
+bash scripts/run_pubmed_bridge_ablation.sh no_multi_depth
+bash scripts/run_pubmed_bridge_ablation.sh no_adaptive_residuals
+bash scripts/run_pubmed_bridge_ablation.sh no_source_bias
+```
+
+For the CNN/DM comparison, prepare canonical files under `datasets/cnndm/`
+first. The launchers use one GPU, seed 42, a 4,096-token source cap, a
+256-token target cap, 3 epochs, and effective training batch 96. SEAM and
+vanilla share prompts; vanilla disables the bridge and copy.
+
+```bash
+bash scripts/run_cnndm_afmr.sh seam
+bash scripts/run_cnndm_afmr.sh vanilla
+```
+
 ## Offline smoke test
 
 The offline smoke uses the actual AFMR/copy graph with tiny randomly initialized Qwen backbones and no model downloads. It enables grounded copy explicitly and checks CE gradients, warm-up/full optimizer updates, dense/chunked CE parity, checkpoint round-trip, greedy evaluation and prediction resume. The legacy `afmr_smoke.yaml` fixture disables copy for backward-compatibility tests; the smoke command enables it:

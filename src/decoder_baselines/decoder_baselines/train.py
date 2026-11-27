@@ -227,8 +227,12 @@ def _training_arguments(config: dict[str, Any], output_dir: Path) -> Any:
         "gradient_checkpointing": bool(training.get("gradient_checkpointing", True)),
         "logging_steps": int(training.get("logging_steps", 10)),
         "logging_strategy": "steps",
-        "save_strategy": "no",
-        "eval_strategy": "no",
+        "save_strategy": str(training.get("save_strategy", "no")),
+        "eval_strategy": str(training.get("eval_strategy", "no")),
+        "load_best_model_at_end": bool(training.get("load_best_model_at_end", False)),
+        "metric_for_best_model": str(training.get("metric_for_best_model", "eval_loss")),
+        "greater_is_better": training.get("greater_is_better"),
+        "save_total_limit": training.get("save_total_limit"),
         "report_to": [],
         "remove_unused_columns": False,
         "dataloader_num_workers": int(training.get("dataloader_num_workers", 4)),
@@ -247,7 +251,7 @@ def _training_arguments(config: dict[str, Any], output_dir: Path) -> Any:
     parameters = __import__("inspect").signature(TrainingArguments.__init__).parameters
     values = {key: value for key, value in values.items() if key in parameters}
     if "eval_strategy" not in parameters and "evaluation_strategy" in parameters:
-        values["evaluation_strategy"] = "no"
+        values["evaluation_strategy"] = str(training.get("eval_strategy", "no"))
     return TrainingArguments(**values)
 
 
@@ -335,6 +339,18 @@ def train(config_path: str | Path, *, overwrite_output_dir: bool = False) -> Pat
             max_examples=int(train_cfg.get("max_train_examples", 0)),
             model_context_length=context_length,
         )
+        validation_dataset = None
+        if str(training.get("eval_strategy", "no")) != "no":
+            validation_file = Path(config["data"]["validation_file"])
+            if not validation_file.is_file():
+                raise FileNotFoundError(f"Validation data required by eval_strategy: {validation_file}")
+            validation_dataset = CausalSummarizationDataset(
+                validation_file,
+                tokenizer,
+                config["data"],
+                max_examples=int(train_cfg.get("max_validation_examples", 0)),
+                model_context_length=context_length,
+            )
         collator = CausalCollator(tokenizer.pad_token_id)
         trainer_kwargs: dict[str, Any] = {
             "model": model,
@@ -342,6 +358,8 @@ def train(config_path: str | Path, *, overwrite_output_dir: bool = False) -> Pat
             "train_dataset": dataset,
             "data_collator": collator,
         }
+        if validation_dataset is not None:
+            trainer_kwargs["eval_dataset"] = validation_dataset
         from transformers import Trainer
 
         trainer_class = Trainer

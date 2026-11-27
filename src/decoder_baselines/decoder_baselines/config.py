@@ -148,6 +148,12 @@ def validate_config(config: dict[str, Any]) -> None:
             "length_bucketing",
             "logging_steps",
             "seed",
+            "eval_strategy",
+            "save_strategy",
+            "load_best_model_at_end",
+            "metric_for_best_model",
+            "greater_is_better",
+            "save_total_limit",
         },
         "training",
     )
@@ -166,6 +172,17 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("training.dataloader_num_workers must be non-negative")
     if int(training.get("dataloader_prefetch_factor", 2)) <= 0:
         raise ValueError("training.dataloader_prefetch_factor must be positive")
+    eval_strategy = str(training.get("eval_strategy", "no"))
+    save_strategy = str(training.get("save_strategy", "no"))
+    if eval_strategy not in {"no", "steps", "epoch"}:
+        raise ValueError("training.eval_strategy must be no, steps, or epoch")
+    if save_strategy not in {"no", "steps", "epoch"}:
+        raise ValueError("training.save_strategy must be no, steps, or epoch")
+    if bool(training.get("load_best_model_at_end", False)):
+        if eval_strategy == "no" or save_strategy != eval_strategy:
+            raise ValueError("Loading the best model requires matching non-no eval_strategy and save_strategy")
+    if "save_total_limit" in training and int(training["save_total_limit"]) <= 0:
+        raise ValueError("training.save_total_limit must be positive")
 
     generation = config["generation"]
     _check_keys(

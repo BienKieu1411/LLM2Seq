@@ -78,6 +78,17 @@ models:
       # Keep the effective batch at 32 while leaving headroom for long inputs.
       per_device_train_batch_size: 4
       gradient_accumulation_steps: 8
+    training_by_dataset:
+      cnndm:
+        num_train_epochs: 3
+        per_device_train_batch_size: 8
+        gradient_accumulation_steps: 12
+        eval_strategy: epoch
+        save_strategy: epoch
+        load_best_model_at_end: true
+        metric_for_best_model: eval_loss
+        greater_is_better: false
+        save_total_limit: 1
     generation:
       batch_size: 8
   qwen3_1_7b:
@@ -224,3 +235,14 @@ datasets:
         llama3_3b: 1
         nemotron_diffusion_8b: 1
         nemotron_diffusion_3b: 1
+  cnndm:
+    data_dir: cnndm
+    source_prefix: "Summarize the following news article concisely. Preserve the important facts and do not add information.\nArticle:\n"
+    max_source_length: 4096
+    max_target_length: 256
+    max_sequence_length: 4608
+    generation:
+      max_new_tokens: 256
+      min_new_tokens: 8
+      batch_size_by_model:
+        qwen3_0_6b: 8

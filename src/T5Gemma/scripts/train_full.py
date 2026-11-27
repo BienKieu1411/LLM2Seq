@@ -236,7 +236,11 @@ def make_training_arguments(cfg: Dict[str, Any], output_dir: Path) -> Seq2SeqTra
         "gradient_checkpointing": bool(train_cfg.get("gradient_checkpointing", True)),
         "logging_steps": int(train_cfg.get("logging_steps", 10)),
         "logging_strategy": "steps",
-        "save_strategy": "no",
+        "save_strategy": str(train_cfg.get("save_strategy", "no")),
+        "load_best_model_at_end": bool(train_cfg.get("load_best_model_at_end", False)),
+        "metric_for_best_model": str(train_cfg.get("metric_for_best_model", "eval_loss")),
+        "greater_is_better": train_cfg.get("greater_is_better"),
+        "save_total_limit": train_cfg.get("save_total_limit"),
         "save_safetensors": True,
         "report_to": [],
         "predict_with_generate": False,
@@ -264,8 +268,6 @@ def make_training_arguments(cfg: Dict[str, Any], output_dir: Path) -> Seq2SeqTra
             # unused-parameter discovery, unlike the legacy reentrant mode.
             checkpointing_kwargs = train_cfg.get("gradient_checkpointing_kwargs", {"use_reentrant": False})
             valid_kwargs["gradient_checkpointing_kwargs"] = dict(checkpointing_kwargs)
-    # Full checkpoints are large. Evaluation is performed once from final_model
-    # by the pipeline, not implicitly at every training epoch.
     eval_strat = str(train_cfg.get("eval_strategy", "no"))
     if "eval_strategy" in params:
         valid_kwargs["eval_strategy"] = eval_strat
