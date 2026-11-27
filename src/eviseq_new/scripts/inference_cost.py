@@ -264,15 +264,24 @@ def _release_memory() -> None:
         torch.cuda.empty_cache()
 
 
-def _timed(action: Callable[[], Any], device: torch.device, repeats: int) -> tuple[list[float], Any]:
-    seconds, result = [], None
+def _timed_runs(
+    system: Any, documents: Sequence[str], source_tokens: int, new_tokens: int, repeats: int
+) -> tuple[list[float], list[float], list[float], int]:
+    device = system.device
+    preparation, generation, end_to_end, generated = [], [], [], 0
     for _ in range(repeats):
         _synchronize(device)
         started = time.perf_counter()
-        result = action()
+        batch = system.prepare(documents, source_tokens)
         _synchronize(device)
-        seconds.append(time.perf_counter() - started)
-    return seconds, result
+        prepared = time.perf_counter()
+        generated = system.generate(batch, new_tokens)
+        _synchronize(device)
+        finished = time.perf_counter()
+        preparation.append(prepared - started)
+        generation.append(finished - prepared)
+        end_to_end.append(finished - started)
+    return preparation, generation, end_to_end, generated
 
 
 def measure(
@@ -288,17 +297,21 @@ def measure(
     device = system.device
     documents = [synthetic_document(source_tokens + 64, seed=index) for index in range(batch_size)]
     try:
-        preprocess_runs, batch = _timed(lambda: system.prepare(documents, source_tokens), device, repeats)
+        batch = system.prepare(documents, source_tokens)
         row["source_tokens"] = system.source_length(batch)
         system.generate(batch, min(4, new_tokens))
-        first_token_runs, _ = _timed(lambda: system.generate(batch, 1), device, repeats)
+        batch = None
+        _, first_token_runs, first_end_to_end_runs, _ = _timed_runs(system, documents, source_tokens, 1, repeats)
         if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(device)
-        total_runs, generated = _timed(lambda: system.generate(batch, new_tokens), device, repeats)
+        preprocess_runs, total_runs, end_to_end_runs, generated = _timed_runs(
+            system, documents, source_tokens, new_tokens, repeats
+        )
         if generated != new_tokens:
             raise RuntimeError(f"Expected {new_tokens} new tokens, the system produced {generated}")
-        preprocess, first_token, total = (
-            statistics.median(runs[warmup_runs:]) for runs in (preprocess_runs, first_token_runs, total_runs)
+        preprocess, first_token, total, first_end_to_end, end_to_end = (
+            statistics.median(runs[warmup_runs:])
+            for runs in (preprocess_runs, first_token_runs, total_runs, first_end_to_end_runs, end_to_end_runs)
         )
         on_gpu = device.type == "cuda"
         row.update(
@@ -306,8 +319,13 @@ def measure(
             preprocess_s_per_example=preprocess / batch_size,
             first_token_s=first_token,
             total_s=total,
+            end_to_end_first_token_s=first_end_to_end,
+            end_to_end_s=end_to_end,
+            preprocess_runs_s=preprocess_runs,
             first_token_runs_s=first_token_runs,
             total_runs_s=total_runs,
+            end_to_end_first_token_runs_s=first_end_to_end_runs,
+            end_to_end_runs_s=end_to_end_runs,
             latency_s_per_example=total / batch_size,
             output_tokens_per_s=batch_size * new_tokens / total,
             decode_tokens_per_s=batch_size * (new_tokens - 1) / (total - first_token) if total > first_token else None,
@@ -383,7 +401,10 @@ def run(
             detail = ""
             if row["status"] == "ok":
                 series = " ".join(f"{seconds:.2f}" for seconds in row["total_runs_s"])
-                detail = f" | total per run (s): {series} | median after {warmup_runs} warmup: {row['total_s']:.2f}"
+                detail = (
+                    f" | total per run (s): {series} | median after {warmup_runs} warmup: {row['total_s']:.2f}"
+                    f" | end to end median: {row['end_to_end_s']:.2f}"
+                )
             print(f"[cost] {name} source={length} batch={size} -> {row['status']}{detail}", flush=True)
         system = None
         _release_memory()
@@ -399,6 +420,7 @@ def markdown_table(rows: Sequence[dict[str, Any]]) -> str:
         "batch",
         "first token (s)",
         "total (s)",
+        "end to end (s)",
         "output tok/s",
         "peak (GiB)",
     )
@@ -406,14 +428,16 @@ def markdown_table(rows: Sequence[dict[str, Any]]) -> str:
     for row in rows:
         if row["status"] == "ok":
             peak = row.get("peak_allocated_gib")
+            end_to_end = row.get("end_to_end_s")
             measured = [
                 f"{row['first_token_s']:.2f}",
                 f"{row['total_s']:.2f}",
+                "-" if end_to_end is None else f"{end_to_end:.2f}",
                 f"{row['output_tokens_per_s']:.1f}",
                 "-" if peak is None else f"{peak:.2f}",
             ]
         else:
-            measured = ["OOM"] * 4
+            measured = ["OOM"] * 5
         cells = [
             row["system"],
             f"{row['parameters']['total'] / 1e9:.3f}",
