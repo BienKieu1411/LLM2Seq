@@ -4,6 +4,7 @@ import argparse
 import copy
 import gc
 import json
+import os
 import random
 import statistics
 import sys
@@ -28,6 +29,19 @@ DECODER_ONLY_MODELS = {
 SEQ2SEQ_MODELS = {"t5gemma2_1b": "google/t5gemma-2-1b-1b"}
 BASELINE_MODELS = {**DECODER_ONLY_MODELS, **SEQ2SEQ_MODELS}
 ALL_SYSTEMS = (*SEAM_SYSTEMS, *BASELINE_MODELS)
+DEFAULT_SYSTEMS = (*SEAM_SYSTEMS, *DECODER_ONLY_MODELS)
+LOCAL_MODEL_FOLDERS = {
+    "qwen3_0_6b": "/workspace/storage-shared/nlp/users/dungdx4/BERT/Qwen3-0.6B",
+    "qwen3_1_7b": "/workspace/storage-shared/models/Qwen3-1.7B",
+    "qwen3_4b": "/workspace/storage-shared/nlp/users/dungdx4/BERT/Qwen3-4B",
+    "t5gemma2_1b": "/workspace/storage-shared/nlp/users/dungdx4/BERT/t5gemma-2-1b-1b",
+}
+DEFAULT_CONFIG = (
+    PACKAGE_ROOT / "runs/afmr/pubmed_full_vanilla_multiseed_20261126_013950/full_seed43/resolved_config.yaml"
+)
+DEFAULT_OUTPUT = PACKAGE_ROOT / "runs/inference_cost/real_documents.jsonl"
+DATASET_BY_LENGTH = {4096: "pubmed", 8192: "arxiv", 12288: "govreport"}
+LENGTH_MARGIN = 8
 SEAM_BATCH_KEYS = (
     "input_ids",
     "attention_mask",
@@ -70,6 +84,35 @@ def baseline_models(overrides: Sequence[str]) -> dict[str, str]:
             raise ValueError(f"--model expects NAME=PATH with NAME in {sorted(models)}, got {value!r}")
         models[name] = path
     return models
+
+
+def local_model_overrides() -> list[str]:
+    return [f"{name}={folder}" for name, folder in LOCAL_MODEL_FOLDERS.items() if Path(folder).is_dir()]
+
+
+def document_paths(overrides: Sequence[str]) -> dict[int, Path]:
+    paths = {length: PACKAGE_ROOT / "datasets" / name / "test.jsonl" for length, name in DATASET_BY_LENGTH.items()}
+    for value in overrides:
+        length, separator, path = value.partition("=")
+        if not separator or not length.isdigit() or not path:
+            raise ValueError(f"--documents expects LENGTH=PATH, got {value!r}")
+        paths[int(length)] = Path(path)
+    return paths
+
+
+def select_documents(path: Path, count: int, source_tokens: int, tokenizers: Sequence[Any]) -> list[str]:
+    from eviseq_afmr.data.schema import iter_jsonl
+
+    selected: list[str] = []
+    for record in iter_jsonl(str(path)):
+        if all(
+            len(tokenizer(record.source, add_special_tokens=False)["input_ids"]) >= source_tokens + LENGTH_MARGIN
+            for tokenizer in tokenizers
+        ):
+            selected.append(record.source)
+            if len(selected) == count:
+                return selected
+    raise ValueError(f"{path} has only {len(selected)} documents of at least {source_tokens} tokens; {count} needed")
 
 
 def _count(parameters) -> int:
@@ -265,50 +308,69 @@ def _release_memory() -> None:
 
 
 def _timed_runs(
-    system: Any, documents: Sequence[str], source_tokens: int, new_tokens: int, repeats: int
-) -> tuple[list[float], list[float], list[float], int]:
+    system: Any, batches: Sequence[Sequence[str]], source_tokens: int, new_tokens: int
+) -> tuple[list[float], list[float], list[float], list[int]]:
     device = system.device
-    preparation, generation, end_to_end, generated = [], [], [], 0
-    for _ in range(repeats):
+    preparation, generation, end_to_end, generated = [], [], [], []
+    for index, documents in enumerate(batches, start=1):
         _synchronize(device)
         started = time.perf_counter()
         batch = system.prepare(documents, source_tokens)
         _synchronize(device)
         prepared = time.perf_counter()
-        generated = system.generate(batch, new_tokens)
+        generated.append(system.generate(batch, new_tokens))
         _synchronize(device)
         finished = time.perf_counter()
         preparation.append(prepared - started)
         generation.append(finished - prepared)
         end_to_end.append(finished - started)
+        if len(batches) > 25 and index % 25 == 0:
+            print(f"[cost]   {index}/{len(batches)} runs with {new_tokens} new tokens", flush=True)
     return preparation, generation, end_to_end, generated
 
 
 def measure(
-    system: Any, *, source_tokens: int, batch_size: int, new_tokens: int, repeats: int, warmup_runs: int = 0
+    system: Any,
+    *,
+    source_tokens: int,
+    batch_size: int,
+    new_tokens: int,
+    repeats: int,
+    warmup_runs: int = 0,
+    documents: Sequence[str] | None = None,
 ) -> dict[str, Any]:
+    if documents is None:
+        texts = [synthetic_document(source_tokens + 64, seed=index) for index in range(batch_size)]
+        batches = [texts] * repeats
+    else:
+        batches = [
+            [documents[(start + offset) % len(documents)] for offset in range(batch_size)]
+            for start in range(0, len(documents), batch_size)
+        ]
+    if not 0 <= warmup_runs < len(batches):
+        raise ValueError(f"warmup_runs must leave at least one of the {len(batches)} runs")
     row: dict[str, Any] = {
         "source_tokens": source_tokens,
         "batch_size": batch_size,
         "new_tokens": new_tokens,
-        "repeats": repeats,
+        "repeats": len(batches),
         "warmup_runs": warmup_runs,
+        "documents": 0 if documents is None else len(documents),
     }
     device = system.device
-    documents = [synthetic_document(source_tokens + 64, seed=index) for index in range(batch_size)]
     try:
-        batch = system.prepare(documents, source_tokens)
+        batch = system.prepare(batches[0], source_tokens)
         row["source_tokens"] = system.source_length(batch)
         system.generate(batch, min(4, new_tokens))
         batch = None
-        _, first_token_runs, first_end_to_end_runs, _ = _timed_runs(system, documents, source_tokens, 1, repeats)
+        _, first_token_runs, first_end_to_end_runs, _ = _timed_runs(system, batches, source_tokens, 1)
         if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(device)
         preprocess_runs, total_runs, end_to_end_runs, generated = _timed_runs(
-            system, documents, source_tokens, new_tokens, repeats
+            system, batches, source_tokens, new_tokens
         )
-        if generated != new_tokens:
-            raise RuntimeError(f"Expected {new_tokens} new tokens, the system produced {generated}")
+        if any(count != new_tokens for count in generated):
+            raise RuntimeError(f"Expected {new_tokens} new tokens, the system produced {sorted(set(generated))}")
         preprocess, first_token, total, first_end_to_end, end_to_end = (
             statistics.median(runs[warmup_runs:])
             for runs in (preprocess_runs, first_token_runs, total_runs, first_end_to_end_runs, end_to_end_runs)
@@ -347,7 +409,7 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
 
 
 def _workload_key(row: dict[str, Any]) -> tuple:
-    names = ("system", "source_tokens", "batch_size", "new_tokens", "gpu", "dtype", "torch", "transformers")
+    names = ("system", "source_tokens", "batch_size", "new_tokens", "gpu", "dtype", "torch", "transformers", "data")
     return tuple(row.get(name) for name in names)
 
 
@@ -362,7 +424,11 @@ def run(
     output: Path,
     builder: Callable[[str], Any],
     environment: dict[str, Any] | None = None,
+    documents: dict[int, Sequence[str]] | None = None,
+    data_labels: dict[int, str] | None = None,
 ) -> dict[str, str]:
+    documents = documents or {}
+    data_labels = data_labels or {}
     output = Path(output)
     environment = dict(environment or {})
     finished = {_workload_key(row) for row in read_rows(output)}
@@ -373,7 +439,10 @@ def run(
             (length, size)
             for length in source_lengths
             for size in batch_sizes
-            if _workload_key({**base, "source_tokens": length, "batch_size": size}) not in finished
+            if _workload_key(
+                {**base, "source_tokens": length, "batch_size": size, "data": data_labels.get(length, "synthetic")}
+            )
+            not in finished
         ]
         if not pending:
             continue
@@ -393,14 +462,20 @@ def run(
                 new_tokens=new_tokens,
                 repeats=repeats,
                 warmup_runs=warmup_runs,
+                documents=documents.get(length),
             )
-            row = {**static, **measured}
+            row = {**static, "data": data_labels.get(length, "synthetic"), **measured}
             output.parent.mkdir(parents=True, exist_ok=True)
             with output.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row) + "\n")
             detail = ""
             if row["status"] == "ok":
-                series = " ".join(f"{seconds:.2f}" for seconds in row["total_runs_s"])
+                runs = row["total_runs_s"]
+                series = (
+                    " ".join(f"{seconds:.2f}" for seconds in runs)
+                    if len(runs) <= 25
+                    else f"{len(runs)} runs from {min(runs):.2f} to {max(runs):.2f}"
+                )
                 average, spread = _mean_and_spread(row, "end_to_end_runs_s")
                 detail = (
                     f" | total per run (s): {series} | median after {warmup_runs} warmup: {row['total_s']:.2f}"
@@ -492,9 +567,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Inference latency, throughput and peak memory: full model, vanilla arm and baselines."
     )
-    parser.add_argument("--config", type=Path, required=True, help="resolved_config.yaml of a trained run")
-    parser.add_argument("--output", type=Path, required=True, help="JSONL file; finished workloads are skipped")
-    parser.add_argument("--systems", nargs="+", choices=ALL_SYSTEMS, default=list(ALL_SYSTEMS))
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="resolved_config.yaml of a trained run")
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="JSONL file; finished workloads are skipped")
+    parser.add_argument("--systems", nargs="+", choices=ALL_SYSTEMS, default=list(DEFAULT_SYSTEMS))
+    parser.add_argument(
+        "--samples", type=int, default=100, help="test documents per source length; 0 uses synthetic documents"
+    )
+    parser.add_argument(
+        "--documents", action="append", default=[], help="LENGTH=PATH of a test JSONL file; repeatable"
+    )
     parser.add_argument("--model", action="append", default=[], help="NAME=PATH for a local baseline; repeatable")
     parser.add_argument("--source-lengths", nargs="+", type=int, default=[4096, 8192, 12288])
     parser.add_argument("--batch-sizes", nargs="+", type=int, default=[1, 8])
@@ -509,14 +590,37 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    if not 0 <= args.warmup_runs < args.repeats:
-        raise SystemExit("--warmup-runs must be at least 0 and smaller than --repeats")
-    models = baseline_models(args.model)
+    runs = args.repeats if args.samples == 0 else -(-args.samples // max(args.batch_sizes))
+    if not 0 <= args.warmup_runs < runs:
+        raise SystemExit(f"--warmup-runs must be at least 0 and smaller than the {runs} runs of a workload")
+    models = baseline_models([*local_model_overrides(), *args.model])
     if not args.config.is_file():
         raise SystemExit(f"Config not found: {args.config}")
     if not torch.cuda.is_available():
         raise SystemExit("No GPU is visible; CPU timings would not answer the deployment-cost question")
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     import transformers
+
+    documents: dict[int, list[str]] = {}
+    data_labels: dict[int, str] = {}
+    if args.samples:
+        from eviseq_afmr.config import load_config
+        from eviseq_afmr.runtime import _tokenizers
+
+        paths = document_paths(args.documents)
+        absent = [str(paths.get(length, length)) for length in args.source_lengths
+                  if length not in paths or not paths[length].is_file()]
+        if absent:
+            raise SystemExit(f"Test file not found: {', '.join(absent)}; give it with --documents LENGTH=PATH")
+        tokenizers = _tokenizers(load_config(args.config))
+        for length in args.source_lengths:
+            documents[length] = select_documents(paths[length], args.samples, length, tokenizers)
+            data_labels[length] = f"{paths[length].parent.name}/{paths[length].name}:{args.samples}"
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            (args.output.parent / f"documents_{length}.jsonl").write_text(
+                "".join(json.dumps({"text": text}) + "\n" for text in documents[length]), encoding="utf-8"
+            )
+            print(f"[cost] data {length}: {data_labels[length]}", flush=True)
 
     device = torch.device("cuda")
     environment = {
@@ -536,6 +640,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         output=args.output,
         builder=_builder(args.config, models, device, args.dtype),
         environment=environment,
+        documents=documents,
+        data_labels=data_labels,
     )
     rows = read_rows(args.output)
     print(markdown_table(rows))
