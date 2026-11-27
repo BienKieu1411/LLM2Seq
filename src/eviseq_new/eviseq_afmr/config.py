@@ -121,6 +121,9 @@ def validate_config(config: dict[str, Any], *, train_only: bool = False) -> None
             "bridge_mode",
             "controller_dim",
             "depth_taps",
+            "multi_depth_retrieval_enabled",
+            "adaptive_residuals_enabled",
+            "learned_source_bias_enabled",
             "depth_rank",
             "depth_gate_init",
             "depth_gate_max",
@@ -142,6 +145,13 @@ def validate_config(config: dict[str, Any], *, train_only: bool = False) -> None
         raise ValueError("architecture.name must be afmr_v1 or afmr_value_anchor")
     if architecture.get("bridge_mode", "afmr") not in {"afmr", "direct_projection"}:
         raise ValueError("architecture.bridge_mode must be afmr or direct_projection")
+    for key in (
+        "multi_depth_retrieval_enabled",
+        "adaptive_residuals_enabled",
+        "learned_source_bias_enabled",
+    ):
+        if key in architecture and not isinstance(architecture[key], bool):
+            raise ValueError(f"architecture.{key} must be a boolean")
     taps = int(architecture.get("depth_taps", 0))
     if taps < 0:
         raise ValueError("architecture.depth_taps must be non-negative")

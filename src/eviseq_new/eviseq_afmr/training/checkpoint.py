@@ -46,6 +46,13 @@ def architecture_spec(config: dict[str, Any]) -> dict[str, Any]:
     # projection checkpoint cannot be loaded as a full AFMR bridge.
     if "bridge_mode" in arch:
         spec["bridge_mode"] = str(arch["bridge_mode"])
+    for key in (
+        "multi_depth_retrieval_enabled",
+        "adaptive_residuals_enabled",
+        "learned_source_bias_enabled",
+    ):
+        if key in arch:
+            spec[key] = bool(arch[key])
     copy_config = decoder.get("grounded_copy", {})
     if copy_config.get("enabled", False):
         spec["grounded_copy"] = {"alignment": "char_overlap_v1", "key_dim": int(copy_config.get("key_dim", 128))}

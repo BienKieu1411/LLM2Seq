@@ -26,6 +26,9 @@ class AdaptiveFullMemoryResidualBridge(nn.Module):
         self.decoder_hidden = int(decoder_hidden)
         self.controller_dim = int(config.get("controller_dim", 256))
         self.depth_taps = int(config.get("depth_taps", 4))
+        self.multi_depth_retrieval_enabled = bool(config.get("multi_depth_retrieval_enabled", True))
+        self.adaptive_residuals_enabled = bool(config.get("adaptive_residuals_enabled", True))
+        self.learned_source_bias_enabled = bool(config.get("learned_source_bias_enabled", True))
         self.depth_rank = int(config.get("depth_rank", 128))
         self.feature_rank = int(config.get("feature_rank", 256))
         self.focus_hidden = int(config.get("focus_hidden", 256))
@@ -249,19 +252,32 @@ class AdaptiveFullMemoryResidualBridge(nn.Module):
             return BridgeState(memory, memory_mask, content, source_bias, controller, None)
 
         controller = self.controller(final, content, prompt_embeddings, prompt_mask.bool(), output_budget)
-        refined = final.float()
-
-        if self.depth_taps > 1:
+        depth_mixture = None
+        normalized_taps = None
+        if self.multi_depth_retrieval_enabled and self.depth_taps > 1:
             normalized_taps = [norm(state.float()) for norm, state in zip(self.depth_norms, encoder_state.taps)]
             depth_weights = self._depth_weights(normalized_taps, controller)
-            mixed = sum(depth_weights[..., index, None] * state for index, state in enumerate(normalized_taps))
-            depth_delta = self.depth_out(F.silu(self.depth_down(mixed - normalized_taps[-1])))
-            depth_gate = _bounded_gate(self.depth_gate_raw(controller.float()).squeeze(-1), self.depth_gate_max)
-            refined = refined + depth_gate[:, None, None] * depth_delta
-        feature_delta = self.feature_up(F.silu(self.feature_down(self.feature_norm(refined))))
-        feature_gate = _bounded_gate(self.feature_gate_raw(controller.float()), self.feature_gate_max)
-        memory = self.base_projection(refined) + feature_gate[:, None, :] * feature_delta
-        source_bias = self._focus_prior(memory, content, controller)
+            depth_mixture = sum(depth_weights[..., index, None] * state for index, state in enumerate(normalized_taps))
+
+        if self.adaptive_residuals_enabled:
+            refined = final.float()
+            if depth_mixture is not None:
+                depth_delta = self.depth_out(F.silu(self.depth_down(depth_mixture - normalized_taps[-1])))
+                depth_gate = _bounded_gate(self.depth_gate_raw(controller.float()).squeeze(-1), self.depth_gate_max)
+                refined = refined + depth_gate[:, None, None] * depth_delta
+            feature_delta = self.feature_up(F.silu(self.feature_down(self.feature_norm(refined))))
+            feature_gate = _bounded_gate(self.feature_gate_raw(controller.float()), self.feature_gate_max)
+            memory = self.base_projection(refined) + feature_gate[:, None, :] * feature_delta
+        else:
+            # Keep multi-depth retrieval active as the key representation, but
+            # remove both learned residual adapters in this component ablation.
+            memory_source = final.float() if depth_mixture is None else depth_mixture
+            memory = self.base_projection(memory_source)
+
+        if self.learned_source_bias_enabled:
+            source_bias = self._focus_prior(memory, content, controller)
+        else:
+            source_bias = torch.zeros(final.shape[:2], device=final.device, dtype=torch.float32)
         memory = memory.masked_fill(~encoder_state.attention_mask.bool().unsqueeze(-1), 0)
         source_bias = source_bias.masked_fill(~content, 0.0)
         value_memory = None
