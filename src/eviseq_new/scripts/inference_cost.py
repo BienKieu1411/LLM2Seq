@@ -264,7 +264,7 @@ def _release_memory() -> None:
         torch.cuda.empty_cache()
 
 
-def _timed(action: Callable[[], Any], device: torch.device, repeats: int) -> tuple[float, Any]:
+def _timed(action: Callable[[], Any], device: torch.device, repeats: int) -> tuple[list[float], Any]:
     seconds, result = [], None
     for _ in range(repeats):
         _synchronize(device)
@@ -272,36 +272,42 @@ def _timed(action: Callable[[], Any], device: torch.device, repeats: int) -> tup
         result = action()
         _synchronize(device)
         seconds.append(time.perf_counter() - started)
-    return statistics.median(seconds), result
+    return seconds, result
 
 
 def measure(
-    system: Any, *, source_tokens: int, batch_size: int, new_tokens: int, repeats: int
+    system: Any, *, source_tokens: int, batch_size: int, new_tokens: int, repeats: int, warmup_runs: int = 0
 ) -> dict[str, Any]:
     row: dict[str, Any] = {
         "source_tokens": source_tokens,
         "batch_size": batch_size,
         "new_tokens": new_tokens,
         "repeats": repeats,
+        "warmup_runs": warmup_runs,
     }
     device = system.device
     documents = [synthetic_document(source_tokens + 64, seed=index) for index in range(batch_size)]
     try:
-        preprocess, batch = _timed(lambda: system.prepare(documents, source_tokens), device, repeats)
+        preprocess_runs, batch = _timed(lambda: system.prepare(documents, source_tokens), device, repeats)
         row["source_tokens"] = system.source_length(batch)
         system.generate(batch, min(4, new_tokens))
-        first_token, _ = _timed(lambda: system.generate(batch, 1), device, repeats)
+        first_token_runs, _ = _timed(lambda: system.generate(batch, 1), device, repeats)
         if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(device)
-        total, generated = _timed(lambda: system.generate(batch, new_tokens), device, repeats)
+        total_runs, generated = _timed(lambda: system.generate(batch, new_tokens), device, repeats)
         if generated != new_tokens:
             raise RuntimeError(f"Expected {new_tokens} new tokens, the system produced {generated}")
+        preprocess, first_token, total = (
+            statistics.median(runs[warmup_runs:]) for runs in (preprocess_runs, first_token_runs, total_runs)
+        )
         on_gpu = device.type == "cuda"
         row.update(
             status="ok",
             preprocess_s_per_example=preprocess / batch_size,
             first_token_s=first_token,
             total_s=total,
+            first_token_runs_s=first_token_runs,
+            total_runs_s=total_runs,
             latency_s_per_example=total / batch_size,
             output_tokens_per_s=batch_size * new_tokens / total,
             decode_tokens_per_s=batch_size * (new_tokens - 1) / (total - first_token) if total > first_token else None,
@@ -334,6 +340,7 @@ def run(
     batch_sizes: Sequence[int],
     new_tokens: int,
     repeats: int,
+    warmup_runs: int = 0,
     output: Path,
     builder: Callable[[str], Any],
     environment: dict[str, Any] | None = None,
@@ -361,14 +368,23 @@ def run(
             continue
         static = {**base, "parameters": system.parameter_counts(), "weights_gib": system.weights_gib()}
         for length, size in pending:
-            row = {
-                **static,
-                **measure(system, source_tokens=length, batch_size=size, new_tokens=new_tokens, repeats=repeats),
-            }
+            measured = measure(
+                system,
+                source_tokens=length,
+                batch_size=size,
+                new_tokens=new_tokens,
+                repeats=repeats,
+                warmup_runs=warmup_runs,
+            )
+            row = {**static, **measured}
             output.parent.mkdir(parents=True, exist_ok=True)
             with output.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row) + "\n")
-            print(f"[cost] {name} source={length} batch={size} -> {row['status']}", flush=True)
+            detail = ""
+            if row["status"] == "ok":
+                series = " ".join(f"{seconds:.2f}" for seconds in row["total_runs_s"])
+                detail = f" | total per run (s): {series} | median after {warmup_runs} warmup: {row['total_s']:.2f}"
+            print(f"[cost] {name} source={length} batch={size} -> {row['status']}{detail}", flush=True)
         system = None
         _release_memory()
     return failures
@@ -449,12 +465,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-sizes", nargs="+", type=int, default=[1, 8])
     parser.add_argument("--new-tokens", type=int, default=256)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--warmup-runs", type=int, default=0, help="leading timed runs left out of the reported median"
+    )
     parser.add_argument("--dtype", choices=("bfloat16", "float16", "float32"), default="bfloat16")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if not 0 <= args.warmup_runs < args.repeats:
+        raise SystemExit("--warmup-runs must be at least 0 and smaller than --repeats")
     models = baseline_models(args.model)
     if not args.config.is_file():
         raise SystemExit(f"Config not found: {args.config}")
@@ -476,6 +497,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         batch_sizes=args.batch_sizes,
         new_tokens=args.new_tokens,
         repeats=args.repeats,
+        warmup_runs=args.warmup_runs,
         output=args.output,
         builder=_builder(args.config, models, device, args.dtype),
         environment=environment,
