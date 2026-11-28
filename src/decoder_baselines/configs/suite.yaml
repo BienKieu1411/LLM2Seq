@@ -107,6 +107,16 @@ models:
         num_train_epochs: 4
         per_device_train_batch_size: 2
         gradient_accumulation_steps: 16
+      cnndm:
+        num_train_epochs: 3
+        per_device_train_batch_size: 2
+        gradient_accumulation_steps: 24
+        eval_strategy: epoch
+        save_strategy: epoch
+        load_best_model_at_end: true
+        metric_for_best_model: eval_loss
+        greater_is_better: false
+        save_total_limit: 1
     generation:
       batch_size: 4
   qwen3_8b:
@@ -246,3 +256,4 @@ datasets:
       min_new_tokens: 8
       batch_size_by_model:
         qwen3_0_6b: 8
+        qwen3_1_7b: 2

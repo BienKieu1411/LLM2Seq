@@ -153,17 +153,20 @@ The eight model IDs in the bundled matrix are `Qwen/Qwen3-0.6B`, `Qwen/Qwen3-1.7
 name, set the corresponding `*_PATH` variable; the suite records both the
 canonical model ID and the resolved local path.
 
-### CNN/DM single-GPU control
+### CNN/DM Qwen controls
 
 The launcher prepares `train.jsonl`, `validation.jsonl` and `test.jsonl` under
-`../eviseq_new/datasets/cnndm/` from the raw CNN/DM files on its first run.
-Set `CNNDM_SOURCE_DIR` if the raw files are elsewhere. Run the Qwen3-0.6B
-control with:
+`../eviseq_new/datasets/cnndm/` from the raw CNN/DM files on its first run. It
+allows cross-split duplicate source text and records that in the preparation
+report. Set `CNNDM_SOURCE_DIR` if the raw files are elsewhere. Run either
+Qwen control with:
 
 ```bash
 GPU_ID=0 bash scripts/run_cnndm_qwen.sh
+GPU_ID=0,1 bash scripts/run_cnndm_qwen.sh qwen3_1_7b
 ```
 
-The runner uses a 4,096-token source cap, a 256-token target cap, 3 epochs,
-seed 42 and effective batch 96. It evaluates validation loss each epoch and
-exports the best-validation checkpoint for test prediction.
+The 0.6B run uses one GPU; the 1.7B run uses DDP over the listed GPUs. Both use
+a 4,096-token source cap, a 256-token target cap, 3 epochs, seed 42 and
+effective batch 96. They evaluate validation loss each epoch and export the
+best-validation checkpoint for test prediction.

@@ -25,7 +25,10 @@ DATA_DIR="${DATA_PARENT}/$(basename "${DATA_DIR}")"
 LOCK_DIR="${DATA_DIR}.prepare.lock"
 
 is_prepared() {
-  [[ -s "${DATA_DIR}/train.jsonl" && -s "${DATA_DIR}/validation.jsonl" && -s "${DATA_DIR}/test.jsonl" ]]
+  [[ -s "${DATA_DIR}/train.jsonl" \
+    && -s "${DATA_DIR}/validation.jsonl" \
+    && -s "${DATA_DIR}/test.jsonl" \
+    && -s "${DATA_DIR}/preparation_report.json" ]]
 }
 
 if is_prepared; then
@@ -56,7 +59,8 @@ PYTHON="${PYTHON_BIN}" bash "${EV_ROOT}/scripts/prepare_afmr.sh" \
   --dataset cnndm \
   --input-dir "${SOURCE_DIR}" \
   --output-dir "${DATA_DIR}" \
-  --raw-copy-dir "${SOURCE_DIR}"
+  --raw-copy-dir "${SOURCE_DIR}" \
+  --allow-cross-split-content
 
-is_prepared || die "Preparation did not create train.jsonl, validation.jsonl and test.jsonl in ${DATA_DIR}"
+is_prepared || die "Preparation did not create all canonical splits and preparation_report.json in ${DATA_DIR}"
 echo "CNN/DM data ready: ${DATA_DIR}"
