@@ -305,14 +305,17 @@ def run_gate(args: argparse.Namespace) -> None:
 
 
 def run_examples(args: argparse.Namespace) -> None:
-    matched = matched_documents(args.source, {"candidate": args.candidate, "baseline": args.baseline})
+    label, separator, other = args.baseline.partition("=")
+    if not separator or not label or not Path(other).is_file():
+        raise SystemExit(f"--baseline expects LABEL=PATH of an existing file, got {args.baseline!r}")
+    matched = matched_documents(args.source, {"candidate": args.candidate, "baseline": Path(other)})
     if not matched:
         raise SystemExit("No test document has a prediction from both systems")
     documents = {document["id"]: document for document, _ in matched}
     candidate = {document["id"]: summaries["candidate"] for document, summaries in matched}
     baseline = {document["id"]: summaries["baseline"] for document, summaries in matched}
     frequency = document_frequency([document["source"] for document in source_documents(args.source)])
-    lines = [f"Documents: {len(matched)}", "", "| word kind | SEAM not in source | vanilla not in source |",
+    lines = [f"Documents: {len(matched)}", "", f"| word kind | SEAM not in source | {label} not in source |",
              "|---|---|---|"]
     ours = unsupported_rates(candidate, documents, frequency)
     theirs = unsupported_rates(baseline, documents, frequency)
@@ -321,13 +324,13 @@ def run_examples(args: argparse.Namespace) -> None:
         lines.append(f"| {kind} | {cells[0]} | {cells[1]} |")
     reverse = candidate_examples(baseline, candidate, documents, frequency)
     examples = candidate_examples(candidate, baseline, documents, frequency)
-    lines += ["", f"Vanilla miswrites a source word that SEAM keeps: {len(examples)} cases. "
+    lines += ["", f"{label} miswrites a source word that SEAM keeps: {len(examples)} cases. "
               f"The other way round: {len(reverse)} cases.", ""]
     for row in examples[: args.top]:
-        lines += [f"## {row['id']} | {row['category']} | vanilla: {row['baseline_wrote']} | source: {row['source_has']}"
+        lines += [f"## {row['id']} | {row['category']} | {label}: {row['baseline_wrote']} | source: {row['source_has']}"
                   f" | in reference: {row['in_reference']}",
                   f"- source: {row['source_sentence']}", f"- reference: {row['reference_sentence']}",
-                  f"- SEAM: {row['candidate_sentence']}", f"- vanilla: {row['baseline_sentence']}", ""]
+                  f"- SEAM: {row['candidate_sentence']}", f"- {label}: {row['baseline_sentence']}", ""]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines[:9]))
@@ -345,7 +348,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     gate.add_argument("--output-dir", type=Path, default=PACKAGE_ROOT / "runs/rebuttal/copy_gate")
     examples = commands.add_parser("examples", help="unsupported words and side-by-side cases from prediction files")
     examples.add_argument("--candidate", type=Path, required=True, help="SEAM predictions")
-    examples.add_argument("--baseline", type=Path, required=True, help="vanilla cross-attention predictions")
+    examples.add_argument("--baseline", required=True, metavar="LABEL=PREDICTIONS.jsonl",
+                          help="the system to compare SEAM against")
     examples.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     examples.add_argument("--top", type=int, default=30)
     examples.add_argument("--output", type=Path, default=PACKAGE_ROOT / "runs/rebuttal/copy_examples.md")
