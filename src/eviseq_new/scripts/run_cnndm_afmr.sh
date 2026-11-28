@@ -46,6 +46,7 @@ export TOKENIZERS_PARALLELISM=false
 export PYROUGE_HOME_DIR="${PYROUGE_HOME_DIR:-/workspace/storage-shared/nlp/users/dungdx4/textsum_platform_eval/pyrouge-master/tools/ROUGE-1.5.5}"
 
 DATA_DIR="${CNNDM_DATA_DIR:-${ROOT}/datasets/cnndm}"
+CNNDM_SOURCE_DIR="${CNNDM_SOURCE_DIR:-/workspace/storage-shared/nlp/users/dungdx4/datasets/cnndm}"
 ENCODER_MODEL="${ENCODER_MODEL:-${PPLX_ENCODER:-/workspace/storage-shared/nlp/users/dungdx4/BERT/pplx-embed-v1-0.6b}}"
 DECODER_MODEL="${DECODER_MODEL:-/workspace/storage-shared/nlp/users/dungdx4/BERT/Qwen3-0.6B}"
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-8}"
@@ -55,9 +56,8 @@ RUN_DIR="${RUN_DIR:-${ROOT}/runs/afmr/cnndm_${VARIANT}_seed42_$(date +%Y%m%d_%H%
 
 [[ -d "${ENCODER_MODEL}" ]] || die "Encoder not found: ${ENCODER_MODEL}"
 [[ -d "${DECODER_MODEL}" ]] || die "Decoder not found: ${DECODER_MODEL}"
-for split in train validation test; do
-  [[ -s "${DATA_DIR}/${split}.jsonl" ]] || die "Missing ${DATA_DIR}/${split}.jsonl"
-done
+CNNDM_DATA_DIR="${DATA_DIR}" CNNDM_SOURCE_DIR="${CNNDM_SOURCE_DIR}" PYTHON="${PYTHON_BIN}" \
+  bash "${ROOT}/scripts/ensure_cnndm_prepared.sh"
 for value in "${TRAIN_BATCH_SIZE}" "${GRADIENT_ACCUMULATION_STEPS}" "${EVAL_BATCH_SIZE}"; do
   [[ "${value}" =~ ^[1-9][0-9]*$ ]] || die "Batch sizes and accumulation must be positive integers"
 done

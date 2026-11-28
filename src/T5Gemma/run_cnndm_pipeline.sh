@@ -28,6 +28,7 @@ export PYROUGE_HOME_DIR="${PYROUGE_HOME_DIR:-/workspace/storage-shared/nlp/users
 
 CONFIG_TEMPLATE="${T5GEMMA_CNNDM_CONFIG:-${T5GEMMA_ROOT}/configs/cnndm_full_1b_1b_4096.yaml}"
 CNNDM_DATA_DIR="${CNNDM_DATA_DIR:-${PROJECT_ROOT}/eviseq_new/datasets/cnndm}"
+CNNDM_SOURCE_DIR="${CNNDM_SOURCE_DIR:-/workspace/storage-shared/nlp/users/dungdx4/datasets/cnndm}"
 MODEL_PATH="${T5GEMMA_MODEL_PATH:-}"
 RUN_DIR="${T5GEMMA_CNNDM_RUN_DIR:-runs/t5gemma2_1b_1b_full_cnndm_4096}"
 EVAL_DIR="${T5GEMMA_CNNDM_EVAL_DIR:-T5Gemma/eval_outputs/cnndm/1b_1b}"
@@ -44,9 +45,8 @@ die() {
 
 [[ -f "${CONFIG_TEMPLATE}" ]] || die "T5Gemma config not found: ${CONFIG_TEMPLATE}"
 [[ -n "${MODEL_PATH}" && -d "${MODEL_PATH}" ]] || die "Set T5GEMMA_MODEL_PATH to the local T5Gemma-2-1B-1B checkpoint directory"
-for split in train validation test; do
-  [[ -s "${CNNDM_DATA_DIR}/${split}.jsonl" ]] || die "Missing ${CNNDM_DATA_DIR}/${split}.jsonl"
-done
+CNNDM_DATA_DIR="${CNNDM_DATA_DIR}" CNNDM_SOURCE_DIR="${CNNDM_SOURCE_DIR}" PYTHON="${PYTHON_BIN}" \
+  bash "${PROJECT_ROOT}/eviseq_new/scripts/ensure_cnndm_prepared.sh"
 for value in "${TRAIN_BATCH_SIZE}" "${GRADIENT_ACCUMULATION_STEPS}" "${EVAL_BATCH_SIZE}" "${NUM_TRAIN_EPOCHS}"; do
   [[ "${value}" =~ ^[1-9][0-9]*$ ]] || die "Epoch and batch settings must be positive integers"
 done

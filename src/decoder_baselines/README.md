@@ -46,10 +46,12 @@ manifests only from rank zero.
 The model paths are mandatory local directories.  The runner sets
 `HF_HUB_OFFLINE=1` and never downloads or resolves a Hugging Face repository
 ID.  Set each `*_PATH` variable (or set `MODEL_ROOT` once when its child
-directory names match `local_dir`) before starting.  Add `cnndm`, `wikilingua`
-or `lrsum` to `--datasets`
-after their three prepared files exist under `src/eviseq_new/datasets/`, or
-override `data_root` in a copied suite YAML.  Use `--dry-run` to materialize
+directory names match `local_dir`) before starting. Add `wikilingua` or `lrsum`
+to `--datasets` after their three prepared files exist under
+`src/eviseq_new/datasets/`, or override `data_root` in a copied suite YAML.
+The CNN/DM launcher prepares its canonical files from `CNNDM_SOURCE_DIR`
+(default: `/workspace/storage-shared/nlp/users/dungdx4/datasets/cnndm/`) before
+starting. Use `--dry-run` to materialize
 and inspect all commands without loading a model.  Use `--continue-on-error`
 only when a failed run should not stop the matrix.
 
@@ -153,8 +155,10 @@ canonical model ID and the resolved local path.
 
 ### CNN/DM single-GPU control
 
-After preparing `train.jsonl`, `validation.jsonl` and `test.jsonl` under
-`../eviseq_new/datasets/cnndm/`, run the Qwen3-0.6B control with:
+The launcher prepares `train.jsonl`, `validation.jsonl` and `test.jsonl` under
+`../eviseq_new/datasets/cnndm/` from the raw CNN/DM files on its first run.
+Set `CNNDM_SOURCE_DIR` if the raw files are elsewhere. Run the Qwen3-0.6B
+control with:
 
 ```bash
 GPU_ID=0 bash scripts/run_cnndm_qwen.sh

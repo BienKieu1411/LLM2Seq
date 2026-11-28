@@ -151,7 +151,12 @@ def build_run_config(
     defaults = suite.get("defaults", {})
     output_root = _resolve(suite.get("output_root", "../../../runs/decoder_baselines"), suite_path.parent)
     data_root = _resolve(suite.get("data_root", "../../eviseq_new/datasets"), suite_path.parent)
-    data_dir = _resolve(dataset_spec.get("data_dir", dataset_name), data_root)
+    cnndm_data_dir = os.environ.get("CNNDM_DATA_DIR", "").strip() if dataset_name == "cnndm" else ""
+    data_dir = (
+        Path(cnndm_data_dir).expanduser().resolve()
+        if cnndm_data_dir
+        else _resolve(dataset_spec.get("data_dir", dataset_name), data_root)
+    )
     run_name = f"{model_name}__{dataset_name}"
     model_config = _merge(defaults.get("model", {}), model_spec.get("model", {}))
     model_config.update(

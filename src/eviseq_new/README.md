@@ -75,10 +75,13 @@ bash scripts/run_pubmed_bridge_ablation.sh no_adaptive_residuals
 bash scripts/run_pubmed_bridge_ablation.sh no_source_bias
 ```
 
-For the CNN/DM comparison, prepare canonical files under `datasets/cnndm/`
-first. The launchers use one GPU, seed 42, a 4,096-token source cap, a
-256-token target cap, 3 epochs, and effective training batch 96. SEAM and
-vanilla share prompts; vanilla disables the bridge and copy.
+For the CNN/DM comparison, the launcher prepares canonical files under
+`datasets/cnndm/` from the raw files in
+`/workspace/storage-shared/nlp/users/dungdx4/datasets/cnndm/` on its first run.
+Set `CNNDM_SOURCE_DIR` if the raw files are elsewhere. The launchers use one
+GPU, seed 42, a 4,096-token source cap, a 256-token target cap, 3 epochs, and
+effective training batch 96. SEAM and vanilla share prompts; vanilla disables
+the bridge and copy.
 
 ```bash
 bash scripts/run_cnndm_afmr.sh seam
