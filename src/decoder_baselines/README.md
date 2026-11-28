@@ -164,9 +164,11 @@ Qwen control with:
 ```bash
 GPU_ID=0 bash scripts/run_cnndm_qwen.sh
 GPU_ID=0,1 bash scripts/run_cnndm_qwen.sh qwen3_1_7b
+GPU_ID=0,1 bash scripts/run_cnndm_qwen.sh qwen3_4b
 ```
 
-The 0.6B run uses one GPU; the 1.7B run uses DDP over the listed GPUs. Both use
-a 4,096-token source cap, a 256-token target cap, 3 epochs, seed 42 and
-effective batch 96. They evaluate validation loss each epoch and export the
-best-validation checkpoint for test prediction.
+The 0.6B run uses one GPU; the 1.7B and 4B runs use DDP over the listed GPUs.
+All three use a 4,096-token source cap, a 256-token target cap, 3 epochs,
+seed 42 and effective batch 96. They evaluate validation loss each epoch and
+export the best-validation checkpoint for test prediction. Test evaluation
+uses vLLM.

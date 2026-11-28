@@ -6,7 +6,7 @@ BASELINE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 EV_ROOT="$(cd "${BASELINE_ROOT}/../eviseq_new" && pwd)"
 MODEL="${1:-qwen3_0_6b}"
 if [[ "$#" -gt 1 ]]; then
-  echo "Usage: GPU_ID=0 bash scripts/run_cnndm_qwen.sh [qwen3_0_6b|qwen3_1_7b]" >&2
+  echo "Usage: GPU_ID=0 bash scripts/run_cnndm_qwen.sh [qwen3_0_6b|qwen3_1_7b|qwen3_4b]" >&2
   exit 2
 fi
 case "${MODEL}" in
@@ -16,8 +16,11 @@ case "${MODEL}" in
   qwen3_1_7b)
     export QWEN3_1_7B_PATH="${QWEN3_1_7B_PATH:-/workspace/storage-shared/nlp/users/dungdx4/BERT/Qwen3-1.7B}"
     ;;
+  qwen3_4b)
+    export QWEN3_4B_PATH="${QWEN3_4B_PATH:-/workspace/storage-shared/nlp/users/dungdx4/BERT/Qwen3-4B}"
+    ;;
   *)
-    echo "Unknown model '${MODEL}'. Choose qwen3_0_6b or qwen3_1_7b." >&2
+    echo "Unknown model '${MODEL}'. Choose qwen3_0_6b, qwen3_1_7b or qwen3_4b." >&2
     exit 2
     ;;
 esac
